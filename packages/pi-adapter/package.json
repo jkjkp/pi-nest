@@ -1,0 +1,25 @@
+{
+  "name": "@pi-nest/pi-adapter",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "spike:list": "pnpm run build && node dist/scripts/list-sessions.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.86.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "~6.0.2"
+  }
+}
