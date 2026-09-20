@@ -16,7 +16,9 @@
     "spike:list": "pnpm run build && node dist/scripts/list-sessions.js",
     "spike:open": "pnpm run build && node dist/scripts/open-session.js",
     "spike:restore": "pnpm run build && node dist/scripts/restore-session.js",
-    "spike:restore-persistent": "pnpm run build && node dist/scripts/restore-persistent-session.js"
+    "spike:restore-persistent": "pnpm run build && node dist/scripts/restore-persistent-session.js",
+    "spike:conversation": "pnpm run build && node dist/scripts/conversation.js",
+    "spike:cli-sdk-cli": "pnpm run build && node dist/scripts/cli-sdk-cli.js"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.86.0"
