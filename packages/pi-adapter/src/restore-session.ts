@@ -16,6 +16,29 @@ export type PiSessionRestoreSummary = {
   modelRestoreWarning: string | undefined
 }
 
+async function createRestrictedAgentSession(sessionManager: SessionManager, cwd: string) {
+  const agentDir = getAgentDir()
+  const settingsManager = SettingsManager.create(cwd, agentDir)
+  const resourceLoader = new DefaultResourceLoader({
+    cwd,
+    agentDir,
+    settingsManager,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+  })
+  await resourceLoader.reload()
+
+  return createAgentSession({
+    sessionManager,
+    settingsManager,
+    resourceLoader,
+    noTools: 'all',
+  })
+}
+
 export async function restorePiSession(sessionFile: string): Promise<PiSessionRestoreSummary> {
   try {
     const nativeSession = SessionManager.open(sessionFile)
@@ -27,30 +50,15 @@ export async function restorePiSession(sessionFile: string): Promise<PiSessionRe
     }
 
     const cwd = header.cwd || undefined
-    const settingsManager = SettingsManager.create(cwd ?? nativeSession.getCwd(), getAgentDir())
-    const resourceLoader = new DefaultResourceLoader({
-      cwd: cwd ?? nativeSession.getCwd(),
-      agentDir: getAgentDir(),
-      settingsManager,
-      noExtensions: true,
-      noSkills: true,
-      noPromptTemplates: true,
-      noThemes: true,
-      noContextFiles: true,
-    })
-    await resourceLoader.reload()
-
     const sessionManager = SessionManager.inMemory(
       cwd ?? nativeSession.getCwd(),
       undefined,
       [header, ...nativeSession.getEntries()],
     )
-    const { session, modelFallbackMessage } = await createAgentSession({
+    const { session, modelFallbackMessage } = await createRestrictedAgentSession(
       sessionManager,
-      settingsManager,
-      resourceLoader,
-      noTools: 'all',
-    })
+      cwd ?? nativeSession.getCwd(),
+    )
 
     try {
       return {
@@ -67,5 +75,40 @@ export async function restorePiSession(sessionFile: string): Promise<PiSessionRe
     }
   } catch (cause) {
     throw new Error(`Failed to restore Pi session: ${sessionFile}`, { cause })
+  }
+}
+
+export async function restorePersistentPiSession(sessionFile: string): Promise<PiSessionRestoreSummary> {
+  try {
+    const sessionManager = SessionManager.open(sessionFile)
+    const header = sessionManager.getHeader()
+    const openedSessionFile = sessionManager.getSessionFile()
+
+    if (!header || !openedSessionFile) {
+      throw new Error('Pi SDK did not return session metadata after opening it')
+    }
+
+    const cwd = header.cwd || sessionManager.getCwd()
+    const { session, modelFallbackMessage } = await createRestrictedAgentSession(sessionManager, cwd)
+
+    try {
+      if (session.sessionId !== sessionManager.getSessionId() || session.sessionFile !== openedSessionFile) {
+        throw new Error('Pi SDK did not keep the AgentSession bound to the requested native session')
+      }
+
+      return {
+        id: session.sessionId,
+        sessionFile: session.sessionFile,
+        cwd: header.cwd || undefined,
+        restoredMessageCount: session.messages.length,
+        model: session.model && { provider: session.model.provider, id: session.model.id },
+        thinkingLevel: session.thinkingLevel,
+        modelRestoreWarning: modelFallbackMessage,
+      }
+    } finally {
+      session.dispose()
+    }
+  } catch (cause) {
+    throw new Error(`Failed to restore persistent Pi session: ${sessionFile}`, { cause })
   }
 }

@@ -31,6 +31,7 @@ describe('restorePiSession', () => {
     const entry = await import('./index.js')
 
     expect(entry.restorePiSession).toBeTypeOf('function')
+    expect(entry.restorePersistentPiSession).toBeTypeOf('function')
   })
 
   it('restores into an in-memory session with resources and tools disabled', async () => {
@@ -107,5 +108,50 @@ describe('restorePiSession', () => {
       message: 'Failed to restore Pi session: /pi/sessions/session-1.jsonl',
       cause,
     })
+  })
+
+  it('keeps the restored AgentSession bound to the native session', async () => {
+    const header = { id: 'session-1', cwd: '/project' }
+    const nativeSession = {
+      getCwd: () => '/project',
+      getHeader: () => header,
+      getSessionFile: () => '/pi/sessions/session-1.jsonl',
+      getSessionId: () => 'session-1',
+    }
+    const settingsManager = {}
+    const resourceLoader = { reload }
+    const dispose = vi.fn()
+
+    open.mockReturnValue(nativeSession)
+    getAgentDir.mockReturnValue('/pi/agent')
+    SettingsManagerCreate.mockReturnValue(settingsManager)
+    DefaultResourceLoader.mockImplementation(function () {
+      return resourceLoader
+    })
+    createAgentSession.mockResolvedValue({
+      session: {
+        dispose,
+        messages: [{ role: 'user' }],
+        model: { provider: 'provider', id: 'model' },
+        sessionFile: '/pi/sessions/session-1.jsonl',
+        sessionId: 'session-1',
+        thinkingLevel: 'high',
+      },
+    })
+    const { restorePersistentPiSession } = await import('./index.js')
+
+    await expect(restorePersistentPiSession('/pi/sessions/session-1.jsonl')).resolves.toMatchObject({
+      id: 'session-1',
+      sessionFile: '/pi/sessions/session-1.jsonl',
+      restoredMessageCount: 1,
+    })
+    expect(inMemory).not.toHaveBeenCalled()
+    expect(createAgentSession).toHaveBeenCalledWith({
+      sessionManager: nativeSession,
+      settingsManager,
+      resourceLoader,
+      noTools: 'all',
+    })
+    expect(dispose).toHaveBeenCalledOnce()
   })
 })
