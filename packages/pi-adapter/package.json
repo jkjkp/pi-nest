@@ -14,7 +14,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "spike:list": "pnpm run build && node dist/scripts/list-sessions.js",
-    "spike:open": "pnpm run build && node dist/scripts/open-session.js"
+    "spike:open": "pnpm run build && node dist/scripts/open-session.js",
+    "spike:restore": "pnpm run build && node dist/scripts/restore-session.js"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.86.0"
