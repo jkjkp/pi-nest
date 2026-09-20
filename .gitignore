@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output and tooling caches
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Local environment and runtime state
+.env
+.env.*
+!.env.example
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Local agent configuration
+.claude/
+.pi/
