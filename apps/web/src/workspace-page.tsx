@@ -1,4 +1,4 @@
-import { type CSSProperties, type FormEvent, useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, type FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { type UseQueryResult, useQuery, useQueryClient } from '@tanstack/react-query'
 import { CircleCheck, CircleX, Menu, PanelRight, RefreshCw, Send, Square } from 'lucide-react'
 import { useSearchParams } from 'react-router'
@@ -39,6 +39,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const setNavigationOrder = useWorkspaceStore((state) => state.setNavigationOrder)
   const setProjectCollapsed = useWorkspaceStore((state) => state.setProjectCollapsed)
   const [mutatingSessionId, setMutatingSessionId] = useState<string>()
+  const messageScrollAreaRef = useRef<HTMLDivElement>(null)
   const health = useQuery({
     queryKey: ['health'],
     queryFn: fetchHealth,
@@ -72,6 +73,15 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     const reconciled = reconcileNavigationOrder(navigationOrder, sourceProjects)
     if (!navigationOrdersEqual(navigationOrder, reconciled)) setNavigationOrder(reconciled)
   }, [navigationOrder, setNavigationOrder, sourceProjects])
+
+  useLayoutEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const viewport = messageScrollAreaRef.current?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')
+      if (viewport) viewport.scrollTop = viewport.scrollHeight
+    })
+
+    return () => cancelAnimationFrame(frame)
+  }, [currentRun?.error, currentRun?.responseText, historyQuery.data, selectedSessionId])
 
   function selectSession(sessionId: string) {
     setSearchParams({ session: sessionId })
@@ -139,7 +149,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const inspector = <SessionInspector run={currentRun} session={selectedSession} />
 
   return (
-    <main className="min-h-svh bg-background text-foreground">
+    <main className="h-svh overflow-hidden bg-background text-foreground">
       <header className="flex min-h-14 items-center gap-3 border-b bg-card px-3 sm:px-4 md:hidden">
         <div className="flex min-w-0 items-center gap-2">
           <Sheet open={navigationOpen} onOpenChange={setNavigationOpen}>
@@ -158,7 +168,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       </header>
 
       <div
-        className="workspace-grid grid min-h-[calc(100svh-3.5rem)] md:min-h-svh"
+        className="workspace-grid grid h-[calc(100svh-3.5rem)] md:h-svh"
         style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px` } as CSSProperties}
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
@@ -199,38 +209,41 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </div>
           </header>
 
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="mx-auto flex w-full max-w-[920px] flex-col gap-4 px-4 py-6 sm:px-6">
-              <SessionTimeline error={historyQuery.isError} history={historyQuery.data} isLoading={historyQuery.isPending} onRetry={() => void historyQuery.refetch()} />
-              <section className="border-b pb-6">
-                {isActive && currentRun?.responseText && <pre aria-live="polite" className="mt-4 whitespace-pre-wrap break-words text-sm leading-6">{currentRun.responseText}</pre>}
-                {currentRun?.error && (
-                  <p className="mt-4 flex items-center gap-2 text-sm text-destructive" role="alert">
-                    <CircleX aria-hidden="true" className="size-4" />
-                    {currentRun.error}
-                  </p>
-                )}
-              </section>
-
-              <form className="grid gap-3" onSubmit={(event) => void submitPrompt(event)}>
-                <label className="text-sm font-semibold" htmlFor="prompt">输入提示词</label>
-                <Textarea
-                  disabled={!selectedSession || isActive}
-                  id="prompt"
-                  maxLength={20_000}
-                  onChange={(event) => selectedSessionId && setDraft(selectedSessionId, event.target.value)}
-                  placeholder="向当前原生 Pi 会话发送提示词"
-                  rows={5}
-                  value={prompt}
-                />
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button disabled={!selectedSession || prompt.trim().length === 0 || isActive} type="submit"><Send aria-hidden="true" data-icon="inline-start" />发送</Button>
-                  {status === 'running' && <Button onClick={() => void abortPrompt()} type="button" variant="destructive"><Square aria-hidden="true" data-icon="inline-start" />停止生成</Button>}
-                  {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
-                </div>
-              </form>
-            </div>
-          </ScrollArea>
+          <div className="min-h-0 flex-1" ref={messageScrollAreaRef}>
+            <ScrollArea className="h-full">
+              <div className="mx-auto flex w-full max-w-[920px] flex-col gap-4 px-4 py-6 sm:px-6">
+                <SessionTimeline error={historyQuery.isError} history={historyQuery.data} isLoading={historyQuery.isPending} onRetry={() => void historyQuery.refetch()} />
+                <section className="border-b pb-6">
+                  {isActive && currentRun?.responseText && <pre aria-live="polite" className="mt-4 whitespace-pre-wrap break-words text-sm leading-6">{currentRun.responseText}</pre>}
+                  {currentRun?.error && (
+                    <p className="mt-4 flex items-center gap-2 text-sm text-destructive" role="alert">
+                      <CircleX aria-hidden="true" className="size-4" />
+                      {currentRun.error}
+                    </p>
+                  )}
+                </section>
+              </div>
+            </ScrollArea>
+          </div>
+          <div className="shrink-0 border-t bg-background px-4 py-4 sm:px-6">
+            <form className="mx-auto grid w-full max-w-[920px] gap-3" onSubmit={(event) => void submitPrompt(event)}>
+              <label className="text-sm font-semibold" htmlFor="prompt">输入提示词</label>
+              <Textarea
+                disabled={!selectedSession || isActive}
+                id="prompt"
+                maxLength={20_000}
+                onChange={(event) => selectedSessionId && setDraft(selectedSessionId, event.target.value)}
+                placeholder="向当前原生 Pi 会话发送提示词"
+                rows={5}
+                value={prompt}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button disabled={!selectedSession || prompt.trim().length === 0 || isActive} type="submit"><Send aria-hidden="true" data-icon="inline-start" />发送</Button>
+                {status === 'running' && <Button onClick={() => void abortPrompt()} type="button" variant="destructive"><Square aria-hidden="true" data-icon="inline-start" />停止生成</Button>}
+                {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
+              </div>
+            </form>
+          </div>
         </section>
         <aside className="hidden min-h-0 border-l bg-card/60 xl:block">{inspector}</aside>
       </div>
