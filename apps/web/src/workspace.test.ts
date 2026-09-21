@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { projectName, sessionStatusLabel, shortSessionId } from './workspace.js'
+import { projectName, runInspectorFields, sessionStatusLabel, shortSessionId } from './workspace.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
 describe('workspace presentation helpers', () => {
@@ -33,6 +33,30 @@ describe('workspace presentation helpers', () => {
     expect(useWorkspaceStore.getState().runs).toMatchObject({
       first: { responseText: 'AC', textDeltaCount: 2 },
       second: { responseText: 'B', textDeltaCount: 1 },
+    })
+  })
+
+  it('only exposes run details that this browser has observed', () => {
+    expect(runInspectorFields(undefined)).toEqual({
+      error: undefined,
+      model: '当前不可用',
+      stopReason: '当前不可用',
+      textDeltaCount: '当前不可用',
+    })
+    expect(
+      runInspectorFields({
+        error: 'safe failure',
+        model: 'provider/model',
+        responseText: 'text',
+        status: 'aborted',
+        stopReason: 'aborted',
+        textDeltaCount: 3,
+      }),
+    ).toEqual({
+      error: 'safe failure',
+      model: 'provider/model',
+      stopReason: 'aborted',
+      textDeltaCount: '3',
     })
   })
 })

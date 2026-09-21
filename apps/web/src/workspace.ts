@@ -1,4 +1,4 @@
-import type { PromptStatus } from './workspace-store.js'
+import type { PromptStatus, SessionRunSummary } from './workspace-store.js'
 
 export type PiSessionSummary = {
   cwd?: string
@@ -33,4 +33,13 @@ export function sessionStatusLabel(status: PromptStatus = 'idle') {
 
 export function shortSessionId(sessionId: string) {
   return sessionId.slice(0, 8)
+}
+
+export function runInspectorFields(run: SessionRunSummary | undefined) {
+  return {
+    error: run?.error,
+    model: run?.model ?? '当前不可用',
+    stopReason: run?.stopReason ?? '当前不可用',
+    textDeltaCount: run?.textDeltaCount === undefined ? '当前不可用' : String(run.textDeltaCount),
+  }
 }
