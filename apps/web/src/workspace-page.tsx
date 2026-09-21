@@ -1,6 +1,6 @@
 import { type CSSProperties, type FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CircleX, Menu, PanelRight, Send, Square } from 'lucide-react'
+import { CircleX, Menu, PanelRight, Send, ShieldAlert, Square } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 
 import { Button } from '@/components/ui/button'
@@ -201,20 +201,23 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </ScrollArea>
           </div>
           <div className="shrink-0 bg-gradient-to-t from-background via-background to-transparent px-4 pb-4 pt-8 sm:px-6">
-            <form className="mx-auto grid w-full max-w-[920px] gap-2 rounded-[18px] border bg-card p-3 shadow-sm" onSubmit={(event) => void submitPrompt(event)}>
+            <form className="mx-auto flex h-[100px] w-full max-w-[920px] flex-col gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:px-6" onSubmit={(event) => void submitPrompt(event)}>
               <label className="sr-only" htmlFor="prompt">向当前 Pi 会话发送提示词</label>
               <Textarea
-                className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-[15px] leading-6 shadow-none focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
+                className="min-h-0! flex-1 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
                 disabled={!selectedSession || isActive}
                 id="prompt"
                 maxLength={20_000}
                 onChange={(event) => selectedSessionId && setDraft(selectedSessionId, event.target.value)}
-                placeholder="向当前 Pi 会话发送提示词"
+                placeholder="随心输入"
                 rows={3}
                 value={prompt}
               />
-              <div className="flex min-h-8 flex-wrap items-center gap-2 border-t pt-2">
-                <span className="text-xs text-muted-foreground">工具：已禁用</span>
+              <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 text-sm text-warning">
+                  <ShieldAlert aria-hidden="true" className="size-4" />
+                  工具：已禁用
+                </span>
                 <div className="ml-auto flex items-center gap-2">
                   <Sheet open={inspectorOpen} onOpenChange={setInspectorOpen}>
                     <SheetTrigger asChild>
