@@ -1,4 +1,9 @@
-import { listPiSessions, promptPiSession } from '@pi-nest/pi-adapter'
+import {
+  listPiSessions,
+  PiSessionHistorySourceChangedError,
+  promptPiSession,
+  readPiSessionHistory,
+} from '@pi-nest/pi-adapter'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { z } from 'zod'
@@ -25,6 +30,37 @@ export const app = new Hono()
       })
     } catch {
       return context.json({ error: 'Failed to list Pi sessions' }, 500)
+    }
+  })
+  .get('/api/sessions/:sessionId/history', async (context) => {
+    const sessionId = context.req.param('sessionId')
+    if (activePrompts.has(sessionId)) return context.json({ error: 'Pi session is running' }, 409)
+
+    let nativeSession
+    try {
+      nativeSession = (await listPiSessions()).find((session) => session.id === sessionId)
+    } catch {
+      return context.json({ error: 'Failed to resolve Pi session' }, 500)
+    }
+
+    if (!nativeSession) return context.json({ error: 'Pi session not found' }, 404)
+
+    try {
+      const history = readPiSessionHistory({
+        expectedCwd: nativeSession.cwd,
+        expectedSessionId: nativeSession.id,
+        sessionFile: nativeSession.sessionFile,
+      })
+      context.header('Cache-Control', 'no-store')
+      return context.json({
+        ...history,
+        session: { id: nativeSession.id, cwd: nativeSession.cwd, updatedAt: nativeSession.updatedAt },
+      })
+    } catch (cause) {
+      if (cause instanceof PiSessionHistorySourceChangedError) {
+        return context.json({ error: 'Pi session changed while reading history' }, 409)
+      }
+      return context.json({ error: 'Failed to read Pi session history' }, 500)
     }
   })
   .post('/api/sessions/:sessionId/abort', (context) => {

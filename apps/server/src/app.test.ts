@@ -2,8 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const listPiSessions = vi.fn()
 const promptPiSession = vi.fn()
+const readPiSessionHistory = vi.fn()
 
-vi.mock('@pi-nest/pi-adapter', () => ({ listPiSessions, promptPiSession }))
+class PiSessionHistorySourceChangedError extends Error {}
+
+vi.mock('@pi-nest/pi-adapter', () => ({
+  listPiSessions,
+  PiSessionHistorySourceChangedError,
+  promptPiSession,
+  readPiSessionHistory,
+}))
 
 const nativeSession = {
   cwd: '/working',
@@ -27,7 +35,21 @@ describe('Pi Nest API', () => {
   beforeEach(() => {
     listPiSessions.mockReset()
     promptPiSession.mockReset()
+    readPiSessionHistory.mockReset()
     listPiSessions.mockResolvedValue([nativeSession])
+    readPiSessionHistory.mockReturnValue({
+      entries: [
+        {
+          id: 'entry-1',
+          kind: 'message',
+          role: 'assistant',
+          stopReason: 'stop',
+          text: 'safe history',
+          timestamp: '2026-09-21T00:00:01.000Z',
+        },
+      ],
+      hasEarlier: false,
+    })
     promptPiSession.mockImplementation(async ({ onTextDelta }) => {
       onTextDelta?.('OK')
       return completed
@@ -58,6 +80,59 @@ describe('Pi Nest API', () => {
       ],
     })
     expect(JSON.stringify(body)).not.toContain('sessionFile')
+  })
+
+  it('returns safe session history without native file paths', async () => {
+    const { app } = await import('./app.js')
+    const response = await app.request('/api/sessions/session-1/history')
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    const body = await response.json()
+    expect(body).toEqual({
+      entries: [
+        {
+          id: 'entry-1',
+          kind: 'message',
+          role: 'assistant',
+          stopReason: 'stop',
+          text: 'safe history',
+          timestamp: '2026-09-21T00:00:01.000Z',
+        },
+      ],
+      hasEarlier: false,
+      session: { cwd: '/working', id: 'session-1', updatedAt: '2026-09-21T00:00:00.000Z' },
+    })
+    expect(JSON.stringify(body)).not.toContain('sessionFile')
+    expect(readPiSessionHistory).toHaveBeenCalledWith({
+      expectedCwd: '/working',
+      expectedSessionId: 'session-1',
+      sessionFile: '/pi/session.jsonl',
+    })
+  })
+
+  it('returns safe errors for missing, changing, and unreadable histories', async () => {
+    const { app } = await import('./app.js')
+
+    listPiSessions.mockResolvedValueOnce([])
+    const missing = await app.request('/api/sessions/missing/history')
+    expect(missing.status).toBe(404)
+
+    readPiSessionHistory.mockImplementationOnce(() => {
+      throw new PiSessionHistorySourceChangedError()
+    })
+    const changed = await app.request('/api/sessions/session-1/history')
+    expect(changed.status).toBe(409)
+    await expect(changed.json()).resolves.toEqual({ error: 'Pi session changed while reading history' })
+
+    readPiSessionHistory.mockImplementationOnce(() => {
+      throw new Error('/secret/session.jsonl failed')
+    })
+    const failed = await app.request('/api/sessions/session-1/history')
+    expect(failed.status).toBe(500)
+    const body = await failed.text()
+    expect(body).toContain('Failed to read Pi session history')
+    expect(body).not.toContain('/secret')
   })
 
   it('validates prompt requests and missing sessions', async () => {
@@ -129,6 +204,29 @@ describe('Pi Nest API', () => {
     const after = await app.request('/api/sessions/session-1/prompts', request)
     expect(after.status).toBe(200)
     await after.text()
+  })
+
+  it('does not read history while the same session is running', async () => {
+    let release: ((value: typeof completed) => void) | undefined
+    promptPiSession.mockImplementation(
+      () => new Promise<typeof completed>((resolve) => (release = resolve)),
+    )
+    const { app } = await import('./app.js')
+    const request = {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: 'prompt' }),
+    }
+    const active = await app.request('/api/sessions/session-1/prompts', request)
+    await vi.waitFor(() => expect(promptPiSession).toHaveBeenCalledOnce())
+
+    const history = await app.request('/api/sessions/session-1/history')
+    expect(history.status).toBe(409)
+    await expect(history.json()).resolves.toEqual({ error: 'Pi session is running' })
+    expect(readPiSessionHistory).not.toHaveBeenCalled()
+
+    release?.(completed)
+    await active.text()
   })
 
   it('aborts an active prompt and releases it for a later request', async () => {
