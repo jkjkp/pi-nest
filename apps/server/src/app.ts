@@ -1,8 +1,10 @@
 import {
+  deletePiSession,
   listPiSessions,
   PiSessionHistorySourceChangedError,
   promptPiSession,
   readPiSessionHistory,
+  renamePiSession,
 } from '@pi-nest/pi-adapter'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
@@ -17,7 +19,12 @@ const promptSchema = z
   })
   .strict()
 
+const sessionNameSchema = z
+  .object({ name: z.string().trim().min(1).max(120) })
+  .strict()
+
 const activePrompts = new Map<string, AbortController>()
+const mutatingSessions = new Set<string>()
 
 export const app = new Hono()
   .get('/api/health', (context) => context.json({ status: 'ok' }))
@@ -26,7 +33,7 @@ export const app = new Hono()
       const sessions = await listPiSessions()
 
       return context.json({
-        sessions: sessions.map(({ id, cwd, updatedAt }) => ({ id, cwd, updatedAt })),
+        sessions: sessions.map(({ id, cwd, name, firstMessage, updatedAt }) => ({ id, cwd, name, firstMessage, updatedAt })),
       })
     } catch {
       return context.json({ error: 'Failed to list Pi sessions' }, 500)
@@ -71,6 +78,66 @@ export const app = new Hono()
     controller.abort()
     return context.json({ status: 'aborting' }, 202)
   })
+  .patch('/api/sessions/:sessionId', async (context) => {
+    const parsed = sessionNameSchema.safeParse(await context.req.json().catch(() => undefined))
+    if (!parsed.success) return context.json({ error: 'Invalid session name' }, 400)
+
+    const sessionId = context.req.param('sessionId')
+    let nativeSession
+    try {
+      nativeSession = (await listPiSessions()).find((session) => session.id === sessionId)
+    } catch {
+      return context.json({ error: 'Failed to resolve Pi session' }, 500)
+    }
+
+    if (!nativeSession) return context.json({ error: 'Pi session not found' }, 404)
+    if (activePrompts.has(sessionId) || mutatingSessions.has(sessionId)) {
+      return context.json({ error: 'Pi session is busy' }, 409)
+    }
+
+    mutatingSessions.add(sessionId)
+    try {
+      renamePiSession({
+        expectedCwd: nativeSession.cwd,
+        expectedSessionId: nativeSession.id,
+        name: parsed.data.name,
+        sessionFile: nativeSession.sessionFile,
+      })
+      return context.json({ session: { id: nativeSession.id, name: parsed.data.name } })
+    } catch {
+      return context.json({ error: 'Failed to rename Pi session' }, 500)
+    } finally {
+      mutatingSessions.delete(sessionId)
+    }
+  })
+  .delete('/api/sessions/:sessionId', async (context) => {
+    const sessionId = context.req.param('sessionId')
+    let nativeSession
+    try {
+      nativeSession = (await listPiSessions()).find((session) => session.id === sessionId)
+    } catch {
+      return context.json({ error: 'Failed to resolve Pi session' }, 500)
+    }
+
+    if (!nativeSession) return context.json({ error: 'Pi session not found' }, 404)
+    if (activePrompts.has(sessionId) || mutatingSessions.has(sessionId)) {
+      return context.json({ error: 'Pi session is busy' }, 409)
+    }
+
+    mutatingSessions.add(sessionId)
+    try {
+      await deletePiSession({
+        expectedCwd: nativeSession.cwd,
+        expectedSessionId: nativeSession.id,
+        sessionFile: nativeSession.sessionFile,
+      })
+      return context.body(null, 204)
+    } catch {
+      return context.json({ error: 'Failed to delete Pi session' }, 500)
+    } finally {
+      mutatingSessions.delete(sessionId)
+    }
+  })
   .post('/api/sessions/:sessionId/prompts', async (context) => {
     const body = await context.req.json().catch(() => undefined)
     const parsed = promptSchema.safeParse(body)
@@ -88,7 +155,7 @@ export const app = new Hono()
 
     if (!nativeSession) return context.json({ error: 'Pi session not found' }, 404)
     if (!nativeSession.cwd) return context.json({ error: 'Pi session cwd is unavailable' }, 422)
-    if (activePrompts.has(sessionId)) {
+    if (activePrompts.has(sessionId) || mutatingSessions.has(sessionId)) {
       return context.json({ error: 'Pi session is already running' }, 409)
     }
 

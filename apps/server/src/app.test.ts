@@ -1,21 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const listPiSessions = vi.fn()
+const deletePiSession = vi.fn()
 const promptPiSession = vi.fn()
 const readPiSessionHistory = vi.fn()
+const renamePiSession = vi.fn()
 
 class PiSessionHistorySourceChangedError extends Error {}
 
 vi.mock('@pi-nest/pi-adapter', () => ({
   listPiSessions,
+  deletePiSession,
   PiSessionHistorySourceChangedError,
   promptPiSession,
   readPiSessionHistory,
+  renamePiSession,
 }))
 
 const nativeSession = {
   cwd: '/working',
+  firstMessage: 'Original question',
   id: 'session-1',
+  name: 'Existing session',
   sessionFile: '/pi/session.jsonl',
   updatedAt: '2026-09-21T00:00:00.000Z',
 }
@@ -34,8 +40,10 @@ const completed = {
 describe('Pi Nest API', () => {
   beforeEach(() => {
     listPiSessions.mockReset()
+    deletePiSession.mockReset()
     promptPiSession.mockReset()
     readPiSessionHistory.mockReset()
+    renamePiSession.mockReset()
     listPiSessions.mockResolvedValue([nativeSession])
     readPiSessionHistory.mockReturnValue({
       entries: [
@@ -74,7 +82,9 @@ describe('Pi Nest API', () => {
       sessions: [
         {
           cwd: '/working',
+          firstMessage: 'Original question',
           id: 'session-1',
+          name: 'Existing session',
           updatedAt: '2026-09-21T00:00:00.000Z',
         },
       ],
@@ -151,6 +161,67 @@ describe('Pi Nest API', () => {
       body: JSON.stringify({ prompt: 'prompt' }),
     })
     expect(missing.status).toBe(404)
+  })
+
+  it('renames a resolved session without exposing its native file path', async () => {
+    const { app } = await import('./app.js')
+    const invalid = await app.request('/api/sessions/session-1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '   ', extra: true }),
+    })
+    expect(invalid.status).toBe(400)
+
+    const response = await app.request('/api/sessions/session-1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '  Renamed session  ' }),
+    })
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ session: { id: 'session-1', name: 'Renamed session' } })
+    expect(renamePiSession).toHaveBeenCalledWith({
+      expectedCwd: '/working',
+      expectedSessionId: 'session-1',
+      name: 'Renamed session',
+      sessionFile: '/pi/session.jsonl',
+    })
+  })
+
+  it('deletes only resolved idle sessions and keeps errors safe', async () => {
+    const { app } = await import('./app.js')
+    const response = await app.request('/api/sessions/session-1', { method: 'DELETE' })
+    expect(response.status).toBe(204)
+    expect(deletePiSession).toHaveBeenCalledWith({
+      expectedCwd: '/working',
+      expectedSessionId: 'session-1',
+      sessionFile: '/pi/session.jsonl',
+    })
+
+    listPiSessions.mockResolvedValueOnce([])
+    expect((await app.request('/api/sessions/missing', { method: 'DELETE' })).status).toBe(404)
+
+    deletePiSession.mockRejectedValueOnce(new Error('/secret/session.jsonl failed'))
+    const failure = await app.request('/api/sessions/session-1', { method: 'DELETE' })
+    expect(failure.status).toBe(500)
+    expect(await failure.text()).not.toContain('/secret')
+  })
+
+  it('rejects a competing mutation while deletion is active', async () => {
+    let release: (() => void) | undefined
+    deletePiSession.mockImplementation(() => new Promise<void>((resolve) => (release = resolve)))
+    const { app } = await import('./app.js')
+    const deleting = app.request('/api/sessions/session-1', { method: 'DELETE' })
+    await vi.waitFor(() => expect(deletePiSession).toHaveBeenCalledOnce())
+
+    const rename = await app.request('/api/sessions/session-1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Blocked' }),
+    })
+    expect(rename.status).toBe(409)
+
+    release?.()
+    expect((await deleting).status).toBe(204)
   })
 
   it('streams ordered text and completion events', async () => {
