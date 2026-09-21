@@ -1,5 +1,5 @@
-import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useRef } from 'react'
-import { type UseQueryResult, useQuery, useQueryClient } from '@tanstack/react-query'
+import { type CSSProperties, type FormEvent, type ReactNode, useEffect } from 'react'
+import { type UseQueryResult, useQuery } from '@tanstack/react-query'
 import {
   ChevronRight,
   CircleAlert,
@@ -21,12 +21,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
-import { readSse } from './read-sse.js'
 import {
   sessionHistoryQueryKey,
   type PiSessionHistoryMessage,
   type PiSessionHistoryResponse,
 } from './history.js'
+import type { SessionRunController } from './session-run-controller.js'
 import { type PromptStatus, type SessionRunSummary, useWorkspaceStore } from './workspace-store.js'
 import {
   formatUpdatedAt,
@@ -45,20 +45,18 @@ async function fetchJson<T>(url: string) {
   return (await response.json()) as T
 }
 
-function App() {
+function App({ sessionRuns }: { sessionRuns: SessionRunController }) {
   return (
     <TooltipProvider>
       <Routes>
-        <Route path="/" element={<Workspace />} />
+        <Route path="/" element={<Workspace sessionRuns={sessionRuns} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </TooltipProvider>
   )
 }
 
-function Workspace() {
-  const requestController = useRef<AbortController | undefined>(undefined)
-  const queryClient = useQueryClient()
+function Workspace({ sessionRuns }: { sessionRuns: SessionRunController }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedSessionId = searchParams.get('session') ?? ''
   const drafts = useWorkspaceStore((state) => state.drafts)
@@ -70,8 +68,6 @@ function Workspace() {
   const setDraft = useWorkspaceStore((state) => state.setDraft)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
-  const setRun = useWorkspaceStore((state) => state.setRun)
-  const updateRun = useWorkspaceStore((state) => state.updateRun)
   const health = useQuery({
     queryKey: ['health'],
     queryFn: () => fetchJson<HealthResponse>('/api/health'),
@@ -89,18 +85,15 @@ function Workspace() {
   })
   const sessions = sessionsQuery.data ?? emptySessions
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
+  const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
+  const status = currentRun?.status ?? 'idle'
+  const isActive = status === 'running' || status === 'aborting'
   const historyQuery = useQuery({
-    enabled: Boolean(selectedSession),
+    enabled: Boolean(selectedSession) && !isActive,
     queryKey: sessionHistoryQueryKey(selectedSessionId),
     queryFn: () => fetchJson<PiSessionHistoryResponse>(`/api/sessions/${encodeURIComponent(selectedSessionId)}/history`),
     retry: false,
   })
-  const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
-  const status = currentRun?.status ?? 'idle'
-  const isActive = status === 'running' || status === 'aborting'
-  const isAnySessionActive = Object.values(runs).some(
-    (run) => run.status === 'running' || run.status === 'aborting',
-  )
   const prompt = drafts[selectedSessionId] ?? ''
 
   useEffect(() => {
@@ -109,10 +102,7 @@ function Workspace() {
     setSearchParams({ session: sessions[0].id }, { replace: true })
   }, [selectedSessionId, sessions, setSearchParams])
 
-  useEffect(() => () => requestController.current?.abort(), [])
-
   function selectSession(sessionId: string) {
-    if (isAnySessionActive) return
     setSearchParams({ session: sessionId })
     setNavigationOpen(false)
   }
@@ -121,83 +111,19 @@ function Workspace() {
     await Promise.all([health.refetch(), sessionsQuery.refetch()])
   }
 
-  async function submitPrompt(event: FormEvent) {
+  function submitPrompt(event: FormEvent) {
     event.preventDefault()
     if (!selectedSessionId || isActive || prompt.trim().length === 0) return
-
-    const controller = new AbortController()
-    requestController.current = controller
-    setRun(selectedSessionId, { responseText: '', status: 'running' })
-    let terminalEvent = false
-
-    try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(selectedSessionId)}/prompts`, {
-        body: JSON.stringify({ prompt }),
-        headers: { 'content-type': 'application/json' },
-        method: 'POST',
-        signal: controller.signal,
-      })
-
-      await readSse(response, ({ data, event: eventName }) => {
-        const payload = JSON.parse(data) as {
-          delta?: string
-          message?: string
-          model?: { provider: string; id: string }
-          stopReason?: string
-        }
-
-        if (eventName === 'text_delta' && typeof payload.delta === 'string') {
-          updateRun(selectedSessionId, {
-            responseText: (useWorkspaceStore.getState().runs[selectedSessionId]?.responseText ?? '') + payload.delta,
-          })
-        }
-        if (eventName === 'complete') {
-          terminalEvent = true
-          updateRun(selectedSessionId, {
-            model: payload.model && `${payload.model.provider}/${payload.model.id}`,
-            status: payload.stopReason === 'aborted' ? 'aborted' : 'complete',
-          })
-        }
-        if (eventName === 'error') {
-          terminalEvent = true
-          throw new Error(payload.message ?? 'Pi session prompt failed')
-        }
-      })
-
-      if (!terminalEvent) throw new Error('Pi session stream ended without a result')
-    } catch (cause) {
-      if (!(cause instanceof DOMException && cause.name === 'AbortError')) {
-        updateRun(selectedSessionId, {
-          error: cause instanceof Error ? cause.message : 'Pi session prompt failed',
-          status: 'error',
-        })
-      }
-    } finally {
-      if (requestController.current === controller) requestController.current = undefined
-      void queryClient.invalidateQueries({ queryKey: sessionHistoryQueryKey(selectedSessionId) })
-    }
+    sessionRuns.start({ prompt, sessionId: selectedSessionId })
   }
 
-  async function abortPrompt() {
+  function abortPrompt() {
     if (!selectedSessionId || status !== 'running') return
-
-    updateRun(selectedSessionId, { error: undefined, status: 'aborting' })
-    try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(selectedSessionId)}/abort`, {
-        method: 'POST',
-      })
-      if (response.status !== 202) throw new Error('Pi session could not be stopped')
-    } catch (cause) {
-      updateRun(selectedSessionId, {
-        error: cause instanceof Error ? cause.message : 'Pi session could not be stopped',
-        status: 'running',
-      })
-    }
+    void sessionRuns.stop(selectedSessionId)
   }
 
   const navigation = (
     <SessionNavigation
-      disabled={isAnySessionActive}
       error={sessionsQuery.error}
       isLoading={sessionsQuery.isPending}
       onSelect={selectSession}
@@ -449,7 +375,6 @@ function ConnectionStatus({ health }: { health: UseQueryResult<HealthResponse, E
 }
 
 function SessionNavigation({
-  disabled,
   error,
   isLoading,
   onSelect,
@@ -457,7 +382,6 @@ function SessionNavigation({
   selectedSessionId,
   sessions,
 }: {
-  disabled: boolean
   error: Error | null
   isLoading: boolean
   onSelect: (sessionId: string) => void
@@ -485,7 +409,6 @@ function SessionNavigation({
               <Button
                 aria-current={selected ? 'page' : undefined}
                 className="h-auto w-full justify-start px-3 py-2 text-left"
-                disabled={disabled}
                 key={session.id}
                 onClick={() => onSelect(session.id)}
                 variant={selected ? 'secondary' : 'ghost'}
@@ -505,7 +428,6 @@ function SessionNavigation({
           })}
         </div>
       </ScrollArea>
-      {disabled && <p className="border-t px-4 py-3 text-xs text-muted-foreground">生成期间暂不能切换会话</p>}
     </div>
   )
 }

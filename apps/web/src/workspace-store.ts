@@ -7,6 +7,8 @@ export type SessionRunSummary = {
   model?: string
   responseText: string
   status: PromptStatus
+  stopReason?: string
+  textDeltaCount?: number
 }
 
 type WorkspaceState = {
@@ -15,6 +17,7 @@ type WorkspaceState = {
   inspectorWidth: number
   navigationOpen: boolean
   navigationWidth: number
+  appendRunDelta: (sessionId: string, delta: string) => void
   runs: Record<string, SessionRunSummary>
   setDraft: (sessionId: string, draft: string) => void
   setInspectorOpen: (open: boolean) => void
@@ -30,6 +33,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   navigationOpen: false,
   navigationWidth: 272,
   runs: {},
+  appendRunDelta: (sessionId, delta) =>
+    set((state) => {
+      const run = state.runs[sessionId]
+      if (!run) return state
+
+      return {
+        runs: {
+          ...state.runs,
+          [sessionId]: {
+            ...run,
+            responseText: run.responseText + delta,
+            textDeltaCount: (run.textDeltaCount ?? 0) + 1,
+          },
+        },
+      }
+    }),
   setDraft: (sessionId, draft) => set((state) => ({ drafts: { ...state.drafts, [sessionId]: draft } })),
   setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
   setNavigationOpen: (navigationOpen) => set({ navigationOpen }),
