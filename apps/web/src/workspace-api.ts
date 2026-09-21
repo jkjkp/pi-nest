@@ -1,8 +1,6 @@
 import type { PiSessionHistoryResponse } from './history.js'
 import type { PiSessionSummary } from './workspace.js'
 
-export type HealthResponse = { status?: string }
-
 async function fetchJson<T>(url: string) {
   const response = await fetch(url)
   if (!response.ok) throw new Error(`Request failed with status ${response.status}`)
@@ -11,10 +9,6 @@ async function fetchJson<T>(url: string) {
 
 function sessionUrl(sessionId: string) {
   return `/api/sessions/${encodeURIComponent(sessionId)}`
-}
-
-export function fetchHealth() {
-  return fetchJson<HealthResponse>('/api/health')
 }
 
 export function fetchSessionHistory(sessionId: string) {

@@ -110,10 +110,6 @@ export function sessionStatusLabel(status: PromptStatus = 'idle') {
   return sessionStatusLabels[status]
 }
 
-export function shortSessionId(sessionId: string) {
-  return sessionId.slice(0, 8)
-}
-
 export function runInspectorFields(run: SessionRunSummary | undefined) {
   return {
     error: run?.error,

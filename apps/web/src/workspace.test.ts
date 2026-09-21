@@ -8,7 +8,6 @@ import {
   runInspectorFields,
   sessionDisplayName,
   sessionStatusLabel,
-  shortSessionId,
 } from './workspace.js'
 import { applyNavigationOrder, reconcileNavigationOrder } from './navigation-order.js'
 import { useWorkspaceStore } from './workspace-store.js'
@@ -23,7 +22,6 @@ describe('workspace presentation helpers', () => {
 
   it('derives compact navigation labels from safe session fields', () => {
     expect(projectName('/Users/example/AIWorking')).toBe('AIWorking')
-    expect(shortSessionId('01a0bf7e-efc7-75e2-a447-0f78a9a7530a')).toBe('01a0bf7e')
   })
 
   it('groups sessions by full cwd without merging same-named projects', () => {
