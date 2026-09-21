@@ -1,6 +1,6 @@
 import { type CSSProperties, type FormEvent, useEffect, useMemo, useState } from 'react'
 import { type UseQueryResult, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CircleCheck, CircleX, Menu, PanelRight, RefreshCw, Send, Settings2, Square } from 'lucide-react'
+import { CircleCheck, CircleX, Menu, PanelRight, RefreshCw, Send, Square } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 
 import { Button } from '@/components/ui/button'
@@ -139,8 +139,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const inspector = <SessionInspector run={currentRun} session={selectedSession} />
 
   return (
-    <main className="grid min-h-svh grid-rows-[auto_minmax(0,1fr)] bg-background text-foreground">
-      <header className="flex min-h-14 items-center gap-3 border-b bg-card px-3 sm:px-4">
+    <main className="min-h-svh bg-background text-foreground">
+      <header className="flex min-h-14 items-center gap-3 border-b bg-card px-3 sm:px-4 md:hidden">
         <div className="flex min-w-0 items-center gap-2">
           <Sheet open={navigationOpen} onOpenChange={setNavigationOpen}>
             <SheetTrigger asChild>
@@ -155,51 +155,48 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">PN</span>
           <span className="truncate text-sm font-semibold tracking-tight">Pi Nest</span>
         </div>
-
-        <div aria-live="polite" className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
-          <ConnectionStatus health={health} />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button aria-label="刷新会话列表" disabled={sessionsQuery.isFetching} onClick={() => void refreshWorkspace()} size="icon-sm" variant="ghost">
-                <RefreshCw aria-hidden="true" className={sessionsQuery.isFetching ? 'animate-spin' : ''} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>刷新会话列表</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span><Button aria-label="设置暂不可用" disabled size="icon-sm" variant="ghost"><Settings2 aria-hidden="true" /></Button></span>
-            </TooltipTrigger>
-            <TooltipContent>设置将在后续版本提供</TooltipContent>
-          </Tooltip>
-          <Sheet open={inspectorOpen} onOpenChange={setInspectorOpen}>
-            <SheetTrigger asChild>
-              <Button aria-label="打开会话检查器" className="xl:hidden" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
-            </SheetTrigger>
-            <SheetContent className="p-0" side="right">
-              <SheetTitle className="sr-only">会话检查器</SheetTitle>
-              <SheetDescription className="sr-only">当前会话的运行摘要与元信息。</SheetDescription>
-              {inspector}
-            </SheetContent>
-          </Sheet>
-        </div>
       </header>
 
       <div
-        className="workspace-grid grid min-h-0"
+        className="workspace-grid grid min-h-[calc(100svh-3.5rem)] md:min-h-svh"
         style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px` } as CSSProperties}
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
         <section className="flex min-h-0 min-w-0 flex-col">
           <header className="border-b px-4 py-4 sm:px-6">
-            <p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">当前会话</p>
-            {selectedSession ? (
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-                <h1 className="font-mono text-base font-semibold">{shortSessionId(selectedSession.id)}</h1>
-                <StatusBadge status={status} />
-                <span className="font-mono text-xs text-muted-foreground">{selectedSession.cwd ?? 'cwd 不可用'}</span>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium tracking-[0.12em] text-muted-foreground uppercase">当前会话</p>
+                {selectedSession ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <h1 className="font-mono text-base font-semibold">{shortSessionId(selectedSession.id)}</h1>
+                    <StatusBadge status={status} />
+                    <span className="font-mono text-xs text-muted-foreground">{selectedSession.cwd ?? 'cwd 不可用'}</span>
+                  </div>
+                ) : <h1 className="mt-2 text-lg font-semibold">选择一个会话</h1>}
               </div>
-            ) : <h1 className="mt-2 text-lg font-semibold">选择一个会话</h1>}
+              <div aria-live="polite" className="flex items-center gap-2 text-xs text-muted-foreground">
+                <ConnectionStatus health={health} />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button aria-label="刷新会话列表" disabled={sessionsQuery.isFetching} onClick={() => void refreshWorkspace()} size="icon-sm" variant="ghost">
+                      <RefreshCw aria-hidden="true" className={sessionsQuery.isFetching ? 'animate-spin' : ''} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>刷新会话列表</TooltipContent>
+                </Tooltip>
+                <Sheet open={inspectorOpen} onOpenChange={setInspectorOpen}>
+                  <SheetTrigger asChild>
+                    <Button aria-label="打开会话检查器" className="xl:hidden" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
+                  </SheetTrigger>
+                  <SheetContent className="p-0" side="right">
+                    <SheetTitle className="sr-only">会话检查器</SheetTitle>
+                    <SheetDescription className="sr-only">当前会话的运行摘要与元信息。</SheetDescription>
+                    {inspector}
+                  </SheetContent>
+                </Sheet>
+              </div>
+            </div>
           </header>
 
           <ScrollArea className="min-h-0 flex-1">

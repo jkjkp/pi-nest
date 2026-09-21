@@ -112,7 +112,13 @@ export function SessionNavigation({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b px-4 py-4">
-        <h2 className="text-sm font-semibold">会话</h2>
+        <div className="flex items-center gap-2">
+          <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">PN</span>
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-muted-foreground">Pi Nest</p>
+            <h2 className="text-sm font-semibold">会话</h2>
+          </div>
+        </div>
         <p className="mt-1 text-xs text-muted-foreground">本机原生 Pi 会话</p>
       </div>
       <ScrollArea className="min-h-0 flex-1">
