@@ -1,9 +1,13 @@
 :root {
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   color: #e5e7eb;
-  background: #111827;
+  background: #0b1120;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
 }
 
 body {
@@ -12,28 +16,136 @@ body {
   min-height: 100vh;
 }
 
+button,
+select,
+textarea {
+  font: inherit;
+}
+
 main {
-  display: grid;
   min-height: 100vh;
-  place-content: center;
+  padding: 4rem 1.5rem;
+}
+
+.workspace {
+  width: min(760px, 100%);
+  margin: 0 auto;
+}
+
+header,
+form,
+.result {
+  padding: 1.5rem;
+  border: 1px solid #24324a;
+  border-radius: 1rem;
+  background: #111a2d;
+}
+
+form,
+.result {
+  margin-top: 1rem;
+}
+
+form {
+  display: grid;
   gap: 0.75rem;
-  padding: 2rem;
-  text-align: center;
 }
 
 h1,
+h2,
 p {
   margin: 0;
 }
 
 h1 {
-  font-size: clamp(2rem, 6vw, 4rem);
+  margin-top: 0.25rem;
+  font-size: clamp(2rem, 6vw, 3.5rem);
   letter-spacing: -0.04em;
 }
 
-.eyebrow {
+h2 {
+  font-size: 1rem;
+}
+
+.eyebrow,
+label {
   color: #60a5fa;
   font-weight: 700;
+}
+
+.eyebrow {
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+.subtitle,
+.session-meta,
+.model {
+  color: #9ca3af;
+}
+
+.subtitle {
+  margin-top: 0.75rem;
+}
+
+select,
+textarea {
+  width: 100%;
+  border: 1px solid #334155;
+  border-radius: 0.6rem;
+  padding: 0.75rem;
+  color: #e5e7eb;
+  background: #0b1120;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button {
+  justify-self: start;
+  border: 0;
+  border-radius: 0.6rem;
+  padding: 0.7rem 1rem;
+  color: #07111f;
+  background: #60a5fa;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.result-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+[data-status] {
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  color: #93c5fd;
+  background: #172554;
+  font-size: 0.8rem;
+}
+
+pre {
+  min-height: 5rem;
+  margin: 1rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.model,
+.error,
+.session-meta {
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.error {
+  color: #fca5a5;
 }
