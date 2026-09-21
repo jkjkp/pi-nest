@@ -12,21 +12,25 @@ export type SessionRunSummary = {
 }
 
 type WorkspaceState = {
+  collapsedProjectKeys: Record<string, boolean>
   drafts: Record<string, string>
   inspectorOpen: boolean
   inspectorWidth: number
   navigationOpen: boolean
   navigationWidth: number
   appendRunDelta: (sessionId: string, delta: string) => void
+  expandProject: (projectKey: string) => void
   runs: Record<string, SessionRunSummary>
   setDraft: (sessionId: string, draft: string) => void
   setInspectorOpen: (open: boolean) => void
   setNavigationOpen: (open: boolean) => void
   setRun: (sessionId: string, run: SessionRunSummary) => void
+  toggleProjectCollapsed: (projectKey: string) => void
   updateRun: (sessionId: string, update: Partial<SessionRunSummary>) => void
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
+  collapsedProjectKeys: {},
   drafts: {},
   inspectorOpen: false,
   inspectorWidth: 288,
@@ -49,10 +53,22 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
         },
       }
     }),
+  expandProject: (projectKey) =>
+    set((state) => {
+      if (!state.collapsedProjectKeys[projectKey]) return state
+      return { collapsedProjectKeys: { ...state.collapsedProjectKeys, [projectKey]: false } }
+    }),
   setDraft: (sessionId, draft) => set((state) => ({ drafts: { ...state.drafts, [sessionId]: draft } })),
   setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
   setNavigationOpen: (navigationOpen) => set({ navigationOpen }),
   setRun: (sessionId, run) => set((state) => ({ runs: { ...state.runs, [sessionId]: run } })),
+  toggleProjectCollapsed: (projectKey) =>
+    set((state) => ({
+      collapsedProjectKeys: {
+        ...state.collapsedProjectKeys,
+        [projectKey]: !state.collapsedProjectKeys[projectKey],
+      },
+    })),
   updateRun: (sessionId, update) =>
     set((state) => ({
       runs: {

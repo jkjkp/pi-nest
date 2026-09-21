@@ -6,6 +6,13 @@ export type PiSessionSummary = {
   updatedAt?: string
 }
 
+export type ProjectSessionGroup = {
+  cwd?: string
+  key: string
+  name: string
+  sessions: PiSessionSummary[]
+}
+
 const sessionStatusLabels: Record<PromptStatus, string> = {
   aborted: '— 已中止',
   aborting: '● 正在停止',
@@ -25,6 +32,60 @@ export function formatUpdatedAt(updatedAt?: string) {
 export function projectName(cwd?: string) {
   const segments = cwd?.split(/[\\/]/).filter(Boolean)
   return segments?.at(-1) ?? '未知项目'
+}
+
+export function projectSessionGroupKey(cwd?: string) {
+  return cwd ? `cwd:${cwd}` : 'cwd:unavailable'
+}
+
+function updatedAtValue(updatedAt?: string) {
+  const value = updatedAt ? Date.parse(updatedAt) : Number.NaN
+  return Number.isNaN(value) ? undefined : value
+}
+
+function sortByUpdatedAt(sessions: PiSessionSummary[]) {
+  return sessions
+    .map((session, index) => ({ index, session, updatedAt: updatedAtValue(session.updatedAt) }))
+    .sort((left, right) => {
+      if (left.updatedAt === undefined) return right.updatedAt === undefined ? left.index - right.index : 1
+      if (right.updatedAt === undefined) return -1
+      return right.updatedAt - left.updatedAt || left.index - right.index
+    })
+}
+
+export function groupSessionsByProject(sessions: PiSessionSummary[]): ProjectSessionGroup[] {
+  const groups = new Map<string, { firstIndex: number; group: ProjectSessionGroup }>()
+
+  sessions.forEach((session, index) => {
+    const key = projectSessionGroupKey(session.cwd)
+    const existing = groups.get(key)
+    if (existing) {
+      existing.group.sessions.push(session)
+      return
+    }
+
+    groups.set(key, {
+      firstIndex: index,
+      group: {
+        cwd: session.cwd,
+        key,
+        name: session.cwd ? projectName(session.cwd) : '工作目录不可用',
+        sessions: [session],
+      },
+    })
+  })
+
+  return [...groups.values()]
+    .map(({ firstIndex, group }) => {
+      const sorted = sortByUpdatedAt(group.sessions)
+      return { firstIndex, group: { ...group, sessions: sorted.map(({ session }) => session) }, latest: sorted[0]?.updatedAt }
+    })
+    .sort((left, right) => {
+      if (left.latest === undefined) return right.latest === undefined ? left.firstIndex - right.firstIndex : 1
+      if (right.latest === undefined) return -1
+      return right.latest - left.latest || left.firstIndex - right.firstIndex
+    })
+    .map(({ group }) => group)
 }
 
 export function sessionStatusLabel(status: PromptStatus = 'idle') {

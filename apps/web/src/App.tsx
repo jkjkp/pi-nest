@@ -30,8 +30,9 @@ import type { SessionRunController } from './session-run-controller.js'
 import { type PromptStatus, type SessionRunSummary, useWorkspaceStore } from './workspace-store.js'
 import {
   formatUpdatedAt,
+  groupSessionsByProject,
   type PiSessionSummary,
-  projectName,
+  projectSessionGroupKey,
   runInspectorFields,
   sessionStatusLabel,
   shortSessionId,
@@ -61,14 +62,17 @@ function Workspace({ sessionRuns }: { sessionRuns: SessionRunController }) {
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedSessionId = searchParams.get('session') ?? ''
   const drafts = useWorkspaceStore((state) => state.drafts)
+  const collapsedProjectKeys = useWorkspaceStore((state) => state.collapsedProjectKeys)
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
   const inspectorWidth = useWorkspaceStore((state) => state.inspectorWidth)
   const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
   const runs = useWorkspaceStore((state) => state.runs)
   const setDraft = useWorkspaceStore((state) => state.setDraft)
+  const expandProject = useWorkspaceStore((state) => state.expandProject)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
+  const toggleProjectCollapsed = useWorkspaceStore((state) => state.toggleProjectCollapsed)
   const health = useQuery({
     queryKey: ['health'],
     queryFn: () => fetchJson<HealthResponse>('/api/health'),
@@ -86,6 +90,7 @@ function Workspace({ sessionRuns }: { sessionRuns: SessionRunController }) {
   })
   const sessions = sessionsQuery.data ?? emptySessions
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
+  const selectedProjectKey = selectedSession ? projectSessionGroupKey(selectedSession.cwd) : undefined
   const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
   const status = currentRun?.status ?? 'idle'
   const isActive = status === 'running' || status === 'aborting'
@@ -102,6 +107,10 @@ function Workspace({ sessionRuns }: { sessionRuns: SessionRunController }) {
 
     setSearchParams({ session: sessions[0].id }, { replace: true })
   }, [selectedSessionId, sessions, setSearchParams])
+
+  useEffect(() => {
+    if (selectedProjectKey) expandProject(selectedProjectKey)
+  }, [expandProject, selectedProjectKey])
 
   function selectSession(sessionId: string) {
     setSearchParams({ session: sessionId })
@@ -125,9 +134,11 @@ function Workspace({ sessionRuns }: { sessionRuns: SessionRunController }) {
 
   const navigation = (
     <SessionNavigation
+      collapsedProjectKeys={collapsedProjectKeys}
       error={sessionsQuery.error}
       isLoading={sessionsQuery.isPending}
       onSelect={selectSession}
+      onToggleProject={toggleProjectCollapsed}
       runs={runs}
       selectedSessionId={selectedSessionId}
       sessions={sessions}
@@ -376,20 +387,26 @@ function ConnectionStatus({ health }: { health: UseQueryResult<HealthResponse, E
 }
 
 function SessionNavigation({
+  collapsedProjectKeys,
   error,
   isLoading,
   onSelect,
+  onToggleProject,
   runs,
   selectedSessionId,
   sessions,
 }: {
+  collapsedProjectKeys: Record<string, boolean>
   error: Error | null
   isLoading: boolean
   onSelect: (sessionId: string) => void
+  onToggleProject: (projectKey: string) => void
   runs: Record<string, SessionRunSummary>
   selectedSessionId: string
   sessions: PiSessionSummary[]
 }) {
+  const projects = groupSessionsByProject(sessions)
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b px-4 py-4">
@@ -403,28 +420,56 @@ function SessionNavigation({
           {!isLoading && !error && sessions.length === 0 && (
             <p className="p-3 text-sm text-muted-foreground">未发现本机 Pi 会话</p>
           )}
-          {sessions.map((session) => {
-            const status = runs[session.id]?.status ?? 'idle'
-            const selected = session.id === selectedSessionId
+          {projects.map((project, index) => {
+            const expanded = !collapsedProjectKeys[project.key]
+            const sessionListId = `project-sessions-${index}`
+            const projectDescription = project.cwd ?? '工作目录不可用'
+
             return (
-              <Button
-                aria-current={selected ? 'page' : undefined}
-                className="h-auto w-full justify-start px-3 py-2 text-left"
-                key={session.id}
-                onClick={() => onSelect(session.id)}
-                variant={selected ? 'secondary' : 'ghost'}
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-medium">{projectName(session.cwd)}</span>
-                    <ChevronRight aria-hidden="true" className="size-3.5 text-muted-foreground" />
+              <section className="space-y-1" key={project.key}>
+                <button
+                  aria-controls={sessionListId}
+                  aria-expanded={expanded}
+                  aria-label={`项目 ${project.name}，目录 ${projectDescription}，${project.sessions.length} 个会话，${expanded ? '已展开' : '已折叠'}`}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-semibold outline-none transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 motion-reduce:transition-none"
+                  onClick={() => onToggleProject(project.key)}
+                  title={project.cwd}
+                  type="button"
+                >
+                  <ChevronRight
+                    aria-hidden="true"
+                    className={`size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{project.name}</span>
+                  <span className="shrink-0 font-mono text-xs font-normal tabular-nums text-muted-foreground">
+                    {project.sessions.length}
                   </span>
-                  <span className="mt-1 block truncate font-mono text-xs text-muted-foreground">
-                    {shortSessionId(session.id)} · {formatUpdatedAt(session.updatedAt)}
-                  </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">{sessionStatusLabel(status)}</span>
-                </span>
-              </Button>
+                </button>
+                {expanded && (
+                  <div className="space-y-1 border-l pl-2" id={sessionListId}>
+                    {project.sessions.map((session) => {
+                      const status = runs[session.id]?.status ?? 'idle'
+                      const selected = session.id === selectedSessionId
+                      return (
+                        <Button
+                          aria-current={selected ? 'page' : undefined}
+                          className="h-auto w-full justify-start px-3 py-2 text-left"
+                          key={session.id}
+                          onClick={() => onSelect(session.id)}
+                          variant={selected ? 'secondary' : 'ghost'}
+                        >
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-mono text-xs text-muted-foreground">
+                              {shortSessionId(session.id)} · {formatUpdatedAt(session.updatedAt)}
+                            </span>
+                            <span className="mt-1 block text-xs text-muted-foreground">{sessionStatusLabel(status)}</span>
+                          </span>
+                        </Button>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
             )
           })}
         </div>
