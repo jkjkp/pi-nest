@@ -102,6 +102,59 @@ describe('promptPiSession', () => {
     expect(createRestrictedAgentSession).not.toHaveBeenCalled()
   })
 
+  it('does not open or write a session when its signal is already aborted', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const { promptPiSession } = await import('./prompt-session.js')
+
+    await expect(
+      promptPiSession({
+        expectedCwd: '/working',
+        expectedSessionId: 'session-1',
+        prompt: 'prompt',
+        sessionFile: '/pi/session.jsonl',
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: 'Pi session prompt was aborted before startup' }),
+    })
+    expect(open).not.toHaveBeenCalled()
+    expect(createRestrictedAgentSession).not.toHaveBeenCalled()
+  })
+
+  it('aborts and cleans up when its signal is cancelled during session startup', async () => {
+    const { session, unsubscribe } = createSession()
+    const controller = new AbortController()
+    let resolveSession: ((value: { session: typeof session }) => void) | undefined
+    open.mockReturnValue({
+      getHeader: () => ({ cwd: '/working' }),
+      getSessionFile: () => '/pi/session.jsonl',
+      getSessionId: () => 'session-1',
+    })
+    createRestrictedAgentSession.mockImplementation(
+      () => new Promise((resolve) => (resolveSession = resolve)),
+    )
+    const { promptPiSession } = await import('./prompt-session.js')
+    const pending = promptPiSession({
+      expectedCwd: '/working',
+      expectedSessionId: 'session-1',
+      prompt: 'prompt',
+      sessionFile: '/pi/session.jsonl',
+      signal: controller.signal,
+    })
+
+    controller.abort()
+    resolveSession?.({ session })
+
+    await expect(pending).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: 'Pi session prompt was aborted before it started' }),
+    })
+    expect(session.abort).toHaveBeenCalledOnce()
+    expect(session.prompt).not.toHaveBeenCalled()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    expect(session.dispose).toHaveBeenCalledOnce()
+  })
+
   it('aborts once and cleans up when its signal is cancelled', async () => {
     const { session, unsubscribe } = createSession()
     const controller = new AbortController()

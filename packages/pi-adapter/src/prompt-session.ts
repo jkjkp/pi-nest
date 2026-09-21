@@ -37,6 +37,8 @@ export async function promptPiSession({
   signal,
 }: PiPromptSessionOptions): Promise<PiPromptSessionResult> {
   try {
+    if (signal?.aborted) throw new Error('Pi session prompt was aborted before startup')
+
     const sessionManager = SessionManager.open(sessionFile)
     const header = sessionManager.getHeader()
 
@@ -74,15 +76,16 @@ export async function promptPiSession({
       }
     })
     signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) abort()
 
     try {
-      if (
-        session.sessionId !== expectedSessionId ||
-        session.sessionFile !== sessionFile ||
-        signal?.aborted
-      ) {
-        if (signal?.aborted) abort()
+      if (session.sessionId !== expectedSessionId || session.sessionFile !== sessionFile) {
         throw new Error('Pi AgentSession did not keep the requested native session binding')
+      }
+      if (signal?.aborted) {
+        await abortPromise
+        if (abortError) throw abortError
+        throw new Error('Pi session prompt was aborted before it started')
       }
 
       const messageCountBefore = session.messages.length
