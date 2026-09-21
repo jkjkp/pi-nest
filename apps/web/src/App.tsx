@@ -16,9 +16,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleX,
-  GripVertical,
   Menu,
-  MoreHorizontal,
   PanelRight,
   Pencil,
   RefreshCw,
@@ -641,7 +639,7 @@ function SortableProject({
   runs: Record<string, SessionRunSummary>
   selectedSessionId: string
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
     data: { kind: 'project', projectKey: project.key },
     id: `project:${project.key}`,
   })
@@ -655,30 +653,22 @@ function SortableProject({
       ref={setNodeRef}
       style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}
     >
-      <div className="flex items-center gap-1">
-        <button
-          aria-label={`拖动排序项目 ${project.name}`}
-          className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50"
-          type="button"
-          {...attributes}
-          {...listeners}
-        >
-          <GripVertical aria-hidden="true" className="size-3.5" />
-        </button>
-        <button
-          aria-controls={sessionListId}
-          aria-expanded={expanded}
-          aria-label={`项目 ${project.name}，目录 ${projectDescription}，${project.sessions.length} 个会话，${expanded ? '已展开' : '已折叠'}`}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-semibold outline-none transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 motion-reduce:transition-none"
-          onClick={() => onToggle(project.key)}
-          title={project.cwd}
-          type="button"
-        >
-          <ChevronRight aria-hidden="true" className={`size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`} />
-          <span className="min-w-0 flex-1 truncate">{project.name}</span>
-          <span className="shrink-0 font-mono text-xs font-normal tabular-nums text-muted-foreground">{project.sessions.length}</span>
-        </button>
-      </div>
+      <button
+        aria-controls={sessionListId}
+        aria-expanded={expanded}
+        aria-label={`项目 ${project.name}，目录 ${projectDescription}，${project.sessions.length} 个会话，${expanded ? '已展开' : '已折叠'}`}
+        className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-semibold outline-none transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 motion-reduce:transition-none"
+        onClick={() => onToggle(project.key)}
+        ref={setActivatorNodeRef}
+        title={project.cwd}
+        type="button"
+        {...attributes}
+        {...listeners}
+      >
+        <ChevronRight aria-hidden="true" className={`size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`} />
+        <span className="min-w-0 flex-1 truncate">{project.name}</span>
+        <span className="shrink-0 font-mono text-xs font-normal tabular-nums text-muted-foreground">{project.sessions.length}</span>
+      </button>
       {expanded && (
         <div className="space-y-1 border-l pl-2" id={sessionListId}>
           <SortableContext items={project.sessions.map((session) => `session:${session.id}`)} strategy={verticalListSortingStrategy}>
@@ -721,7 +711,7 @@ function SortableSession({
   selected: boolean
   session: PiSessionSummary
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
     data: { kind: 'session', projectKey },
     id: `session:${session.id}`,
   })
@@ -736,23 +726,16 @@ function SortableSession({
           ref={setNodeRef}
           style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}
         >
-          <button
-            aria-label={`拖动排序会话 ${sessionDisplayName(session)}`}
-            className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50"
-            type="button"
+          <Button
+            aria-current={selected ? 'page' : undefined}
+            className={`h-auto min-w-0 flex-1 justify-start border-0 px-3 py-2 text-left ${selected ? 'bg-muted/80 hover:bg-muted/80' : 'bg-transparent hover:bg-muted/50'}`}
+            onClick={() => onSelect(session.id)}
+            ref={setActivatorNodeRef}
+            variant="ghost"
             {...attributes}
             {...listeners}
           >
-            <GripVertical aria-hidden="true" className="size-3.5" />
-          </button>
-          <Button
-            aria-current={selected ? 'page' : undefined}
-            className="h-auto min-w-0 flex-1 justify-start px-3 py-2 text-left"
-            onClick={() => onSelect(session.id)}
-            variant={selected ? 'secondary' : 'ghost'}
-          >
             <span className="min-w-0 flex-1 truncate text-sm font-medium">{sessionDisplayName(session)}</span>
-            <MoreHorizontal aria-hidden="true" className="size-3.5 text-muted-foreground" />
           </Button>
         </div>
       </ContextMenuTrigger>
