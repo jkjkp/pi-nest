@@ -131,6 +131,51 @@ describe('Pi Nest API', () => {
     await after.text()
   })
 
+  it('aborts an active prompt and releases it for a later request', async () => {
+    let signal: AbortSignal | undefined
+    promptPiSession.mockImplementation(
+      ({ signal: nextSignal }) =>
+        new Promise<typeof completed>((resolve) => {
+          signal = nextSignal
+          nextSignal.addEventListener(
+            'abort',
+            () => resolve({ ...completed, stopReason: 'aborted', textDeltaCount: 0 }),
+            { once: true },
+          )
+        }),
+    )
+    const { app } = await import('./app.js')
+    const request = {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: 'prompt' }),
+    }
+    const active = await app.request('/api/sessions/session-1/prompts', request)
+    await vi.waitFor(() => expect(signal).toBeDefined())
+
+    const aborted = await app.request('/api/sessions/session-1/abort', { method: 'POST' })
+    expect(aborted.status).toBe(202)
+    await expect(aborted.json()).resolves.toEqual({ status: 'aborting' })
+    expect(signal?.aborted).toBe(true)
+
+    const body = await active.text()
+    expect(body).toContain('event: complete')
+    expect(body).toContain('"stopReason":"aborted"')
+
+    promptPiSession.mockResolvedValue(completed)
+    const after = await app.request('/api/sessions/session-1/prompts', request)
+    expect(after.status).toBe(200)
+    await after.text()
+  })
+
+  it('rejects abort requests for sessions that are not running', async () => {
+    const { app } = await import('./app.js')
+    const response = await app.request('/api/sessions/session-1/abort', { method: 'POST' })
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: 'Pi session is not running' })
+  })
+
   it('emits a safe error and releases the lock after adapter failure', async () => {
     promptPiSession.mockRejectedValueOnce(new Error('/secret/session.jsonl failed'))
     const { app } = await import('./app.js')

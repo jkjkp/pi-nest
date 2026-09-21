@@ -12,7 +12,7 @@ const promptSchema = z
   })
   .strict()
 
-const activeSessionIds = new Set<string>()
+const activePrompts = new Map<string, AbortController>()
 
 export const app = new Hono()
   .get('/api/health', (context) => context.json({ status: 'ok' }))
@@ -26,6 +26,14 @@ export const app = new Hono()
     } catch {
       return context.json({ error: 'Failed to list Pi sessions' }, 500)
     }
+  })
+  .post('/api/sessions/:sessionId/abort', (context) => {
+    const controller = activePrompts.get(context.req.param('sessionId'))
+
+    if (!controller) return context.json({ error: 'Pi session is not running' }, 409)
+
+    controller.abort()
+    return context.json({ status: 'aborting' }, 202)
   })
   .post('/api/sessions/:sessionId/prompts', async (context) => {
     const body = await context.req.json().catch(() => undefined)
@@ -44,15 +52,15 @@ export const app = new Hono()
 
     if (!nativeSession) return context.json({ error: 'Pi session not found' }, 404)
     if (!nativeSession.cwd) return context.json({ error: 'Pi session cwd is unavailable' }, 422)
-    if (activeSessionIds.has(sessionId)) {
+    if (activePrompts.has(sessionId)) {
       return context.json({ error: 'Pi session is already running' }, 409)
     }
 
     const sessionCwd = nativeSession.cwd
-    activeSessionIds.add(sessionId)
+    const controller = new AbortController()
+    activePrompts.set(sessionId, controller)
 
     return streamSSE(context, async (stream) => {
-      const controller = new AbortController()
       let timedOut = false
       let writes = Promise.resolve()
       const timeout = setTimeout(() => {
@@ -96,14 +104,26 @@ export const app = new Hono()
       } catch {
         await writes.catch(() => undefined)
         if (!stream.aborted) {
-          await stream.writeSSE({
-            event: 'error',
-            data: JSON.stringify({ code: 'PROMPT_FAILED', message: 'Pi session prompt failed' }),
-          })
+          if (timedOut) {
+            await stream.writeSSE({
+              event: 'error',
+              data: JSON.stringify({ code: 'PROMPT_TIMEOUT', message: 'Pi session prompt timed out' }),
+            })
+          } else if (controller.signal.aborted) {
+            await stream.writeSSE({
+              event: 'complete',
+              data: JSON.stringify({ model: undefined, stopReason: 'aborted', textDeltaCount: 0 }),
+            })
+          } else {
+            await stream.writeSSE({
+              event: 'error',
+              data: JSON.stringify({ code: 'PROMPT_FAILED', message: 'Pi session prompt failed' }),
+            })
+          }
         }
       } finally {
         clearTimeout(timeout)
-        activeSessionIds.delete(sessionId)
+        if (activePrompts.get(sessionId) === controller) activePrompts.delete(sessionId)
       }
     })
   })
