@@ -1,5 +1,7 @@
 export { listPiSessions } from './list-sessions.js'
 export type { PiSessionSummary } from './list-sessions.js'
+export { deletePiSession, renamePiSession } from './manage-session.js'
+export type { PiDeletedSession, PiSessionMutationOptions } from './manage-session.js'
 export { openPiSession } from './open-session.js'
 export type { PiOpenedSessionSummary } from './open-session.js'
 export { restorePiSession } from './restore-session.js'

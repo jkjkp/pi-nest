@@ -21,6 +21,8 @@ describe('listPiSessions', () => {
     listAll.mockResolvedValue([
       {
         id: 'session-1',
+        name: 'Named session',
+        firstMessage: 'First question',
         path: '/pi/sessions/session-1.jsonl',
         cwd: '',
         modified: new Date('2026-09-20T08:00:00.000Z'),
@@ -32,10 +34,52 @@ describe('listPiSessions', () => {
     await expect(listPiSessions()).resolves.toEqual([
       {
         id: 'session-1',
+        name: 'Named session',
+        firstMessage: 'First question',
         sessionFile: '/pi/sessions/session-1.jsonl',
         cwd: undefined,
         updatedAt: '2026-09-20T08:00:00.000Z',
       },
+    ])
+  })
+
+  it('collapses, trims, and limits the first user message', async () => {
+    listAll.mockResolvedValue([
+      {
+        id: 'session-multiline',
+        path: '/pi/sessions/multiline.jsonl',
+        cwd: '/work',
+        firstMessage: '  fix   the\n\nsidebar   title  ',
+        modified: new Date('2026-09-20T08:00:00.000Z'),
+      },
+      {
+        id: 'session-long',
+        path: '/pi/sessions/long.jsonl',
+        cwd: '/work',
+        firstMessage: 'x'.repeat(200),
+        modified: new Date('2026-09-20T08:00:00.000Z'),
+      },
+    ])
+
+    const { listPiSessions } = await import('./index.js')
+    const [multiline, long] = await listPiSessions()
+
+    expect(multiline.firstMessage).toBe('fix the sidebar title')
+    expect(Array.from(long.firstMessage ?? '')).toHaveLength(121)
+    expect(long.firstMessage?.endsWith('…')).toBe(true)
+  })
+
+  it('treats empty and placeholder first messages as absent', async () => {
+    listAll.mockResolvedValue([
+      { id: 'empty', path: '/pi/empty.jsonl', cwd: '/work', firstMessage: '   ', modified: new Date() },
+      { id: 'placeholder', path: '/pi/none.jsonl', cwd: '/work', firstMessage: '(no messages)', modified: new Date() },
+    ])
+
+    const { listPiSessions } = await import('./index.js')
+
+    await expect(listPiSessions()).resolves.toMatchObject([
+      { firstMessage: undefined, id: 'empty' },
+      { firstMessage: undefined, id: 'placeholder' },
     ])
   })
 
