@@ -1,4 +1,7 @@
 import { create } from 'zustand'
+import { createJSONStorage, persist } from 'zustand/middleware'
+
+import type { NavigationOrder } from './navigation-order.js'
 
 export type PromptStatus = 'idle' | 'running' | 'aborting' | 'aborted' | 'complete' | 'error'
 
@@ -11,6 +14,12 @@ export type SessionRunSummary = {
   textDeltaCount?: number
 }
 
+const unavailableStorage = {
+  getItem: () => null,
+  removeItem: () => undefined,
+  setItem: () => undefined,
+}
+
 type WorkspaceState = {
   collapsedProjectKeys: Record<string, boolean>
   drafts: Record<string, string>
@@ -19,23 +28,26 @@ type WorkspaceState = {
   navigationOpen: boolean
   navigationWidth: number
   appendRunDelta: (sessionId: string, delta: string) => void
-  expandProject: (projectKey: string) => void
   runs: Record<string, SessionRunSummary>
+  navigationOrder: NavigationOrder
   setDraft: (sessionId: string, draft: string) => void
   setInspectorOpen: (open: boolean) => void
   setNavigationOpen: (open: boolean) => void
+  setNavigationOrder: (order: NavigationOrder) => void
   setRun: (sessionId: string, run: SessionRunSummary) => void
   toggleProjectCollapsed: (projectKey: string) => void
   updateRun: (sessionId: string, update: Partial<SessionRunSummary>) => void
 }
 
-export const useWorkspaceStore = create<WorkspaceState>((set) => ({
+export const useWorkspaceStore = create<WorkspaceState>()(
+  persist((set) => ({
   collapsedProjectKeys: {},
   drafts: {},
   inspectorOpen: false,
   inspectorWidth: 288,
   navigationOpen: false,
   navigationWidth: 272,
+  navigationOrder: { projectOrder: [], sessionOrderByProject: {} },
   runs: {},
   appendRunDelta: (sessionId, delta) =>
     set((state) => {
@@ -53,20 +65,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
         },
       }
     }),
-  expandProject: (projectKey) =>
-    set((state) => {
-      if (!state.collapsedProjectKeys[projectKey]) return state
-      return { collapsedProjectKeys: { ...state.collapsedProjectKeys, [projectKey]: false } }
-    }),
   setDraft: (sessionId, draft) => set((state) => ({ drafts: { ...state.drafts, [sessionId]: draft } })),
   setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
   setNavigationOpen: (navigationOpen) => set({ navigationOpen }),
+  setNavigationOrder: (navigationOrder) => set({ navigationOrder }),
   setRun: (sessionId, run) => set((state) => ({ runs: { ...state.runs, [sessionId]: run } })),
   toggleProjectCollapsed: (projectKey) =>
     set((state) => ({
       collapsedProjectKeys: {
         ...state.collapsedProjectKeys,
-        [projectKey]: !state.collapsedProjectKeys[projectKey],
+        [projectKey]: !(state.collapsedProjectKeys[projectKey] ?? true),
       },
     })),
   updateRun: (sessionId, update) =>
@@ -76,4 +84,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
         [sessionId]: { ...state.runs[sessionId], responseText: '', status: 'idle', ...update },
       },
     })),
-}))
+    }),
+    {
+      name: 'pi-nest-navigation-order',
+      partialize: (state) => ({ navigationOrder: state.navigationOrder }),
+      storage: createJSONStorage(() => (typeof window === 'undefined' ? unavailableStorage : window.localStorage)),
+    },
+  ),
+)

@@ -1,20 +1,38 @@
-import { type CSSProperties, type FormEvent, type ReactNode, useEffect } from 'react'
-import { type UseQueryResult, useQuery } from '@tanstack/react-query'
+import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type UseQueryResult, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  closestCenter,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core'
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import {
   ChevronRight,
   CircleAlert,
   CircleCheck,
   CircleX,
+  GripVertical,
   Menu,
+  MoreHorizontal,
   PanelRight,
+  Pencil,
   RefreshCw,
   Send,
   Settings2,
   Square,
+  Trash2,
 } from 'lucide-react'
 import { Navigate, Route, Routes, useSearchParams } from 'react-router'
 
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -26,14 +44,17 @@ import {
   type PiSessionHistoryMessage,
   type PiSessionHistoryResponse,
 } from './history.js'
+import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import type { SessionRunController } from './session-run-controller.js'
 import { type PromptStatus, type SessionRunSummary, useWorkspaceStore } from './workspace-store.js'
 import {
   formatUpdatedAt,
   groupSessionsByProject,
   type PiSessionSummary,
-  projectSessionGroupKey,
+  type ProjectSessionGroup,
+  projectIsCollapsed,
   runInspectorFields,
+  sessionDisplayName,
   sessionStatusLabel,
   shortSessionId,
 } from './workspace.js'
@@ -60,6 +81,7 @@ function App({ sessionRuns }: { sessionRuns: SessionRunController }) {
 
 function Workspace({ sessionRuns }: { sessionRuns: SessionRunController }) {
   const [searchParams, setSearchParams] = useSearchParams()
+  const queryClient = useQueryClient()
   const selectedSessionId = searchParams.get('session') ?? ''
   const drafts = useWorkspaceStore((state) => state.drafts)
   const collapsedProjectKeys = useWorkspaceStore((state) => state.collapsedProjectKeys)
@@ -69,10 +91,12 @@ function Workspace({ sessionRuns }: { sessionRuns: SessionRunController }) {
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
   const runs = useWorkspaceStore((state) => state.runs)
   const setDraft = useWorkspaceStore((state) => state.setDraft)
-  const expandProject = useWorkspaceStore((state) => state.expandProject)
+  const navigationOrder = useWorkspaceStore((state) => state.navigationOrder)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
+  const setNavigationOrder = useWorkspaceStore((state) => state.setNavigationOrder)
   const toggleProjectCollapsed = useWorkspaceStore((state) => state.toggleProjectCollapsed)
+  const [mutatingSessionId, setMutatingSessionId] = useState<string>()
   const health = useQuery({
     queryKey: ['health'],
     queryFn: () => fetchJson<HealthResponse>('/api/health'),
@@ -90,7 +114,6 @@ function Workspace({ sessionRuns }: { sessionRuns: SessionRunController }) {
   })
   const sessions = sessionsQuery.data ?? emptySessions
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
-  const selectedProjectKey = selectedSession ? projectSessionGroupKey(selectedSession.cwd) : undefined
   const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
   const status = currentRun?.status ?? 'idle'
   const isActive = status === 'running' || status === 'aborting'
@@ -101,6 +124,8 @@ function Workspace({ sessionRuns }: { sessionRuns: SessionRunController }) {
     retry: false,
   })
   const prompt = drafts[selectedSessionId] ?? ''
+  const sourceProjects = useMemo(() => groupSessionsByProject(sessions), [sessions])
+  const projects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
 
   useEffect(() => {
     if (sessions.length === 0 || sessions.some((session) => session.id === selectedSessionId)) return
@@ -109,8 +134,9 @@ function Workspace({ sessionRuns }: { sessionRuns: SessionRunController }) {
   }, [selectedSessionId, sessions, setSearchParams])
 
   useEffect(() => {
-    if (selectedProjectKey) expandProject(selectedProjectKey)
-  }, [expandProject, selectedProjectKey])
+    const reconciled = reconcileNavigationOrder(navigationOrder, sourceProjects)
+    if (!navigationOrdersEqual(navigationOrder, reconciled)) setNavigationOrder(reconciled)
+  }, [navigationOrder, setNavigationOrder, sourceProjects])
 
   function selectSession(sessionId: string) {
     setSearchParams({ session: sessionId })
@@ -132,16 +158,55 @@ function Workspace({ sessionRuns }: { sessionRuns: SessionRunController }) {
     void sessionRuns.stop(selectedSessionId)
   }
 
+  async function renameSession(sessionId: string, name: string) {
+    setMutatingSessionId(sessionId)
+    try {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+        body: JSON.stringify({ name }),
+        headers: { 'content-type': 'application/json' },
+        method: 'PATCH',
+      })
+      if (!response.ok) throw new Error('Failed to rename Pi session')
+      await sessionsQuery.refetch()
+    } finally {
+      setMutatingSessionId(undefined)
+    }
+  }
+
+  async function deleteSession(sessionId: string) {
+    setMutatingSessionId(sessionId)
+    try {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+      if (!response.ok) throw new Error('Failed to delete Pi session')
+      queryClient.removeQueries({ queryKey: sessionHistoryQueryKey(sessionId) })
+      await sessionsQuery.refetch()
+    } finally {
+      setMutatingSessionId(undefined)
+    }
+  }
+
   const navigation = (
     <SessionNavigation
       collapsedProjectKeys={collapsedProjectKeys}
       error={sessionsQuery.error}
       isLoading={sessionsQuery.isPending}
+      mutationSessionId={mutatingSessionId}
+      onDelete={deleteSession}
       onSelect={selectSession}
       onToggleProject={toggleProjectCollapsed}
+      onRename={renameSession}
+      onProjectOrderChange={(projectOrder) =>
+        setNavigationOrder({ ...navigationOrder, projectOrder })
+      }
+      onSessionOrderChange={(projectKey, sessionOrder) =>
+        setNavigationOrder({
+          ...navigationOrder,
+          sessionOrderByProject: { ...navigationOrder.sessionOrderByProject, [projectKey]: sessionOrder },
+        })
+      }
+      projects={projects}
       runs={runs}
       selectedSessionId={selectedSessionId}
-      sessions={sessions}
     />
   )
   const inspector = <SessionInspector run={currentRun} session={selectedSession} />
@@ -390,22 +455,88 @@ function SessionNavigation({
   collapsedProjectKeys,
   error,
   isLoading,
+  mutationSessionId,
+  onDelete,
   onSelect,
+  onRename,
+  onProjectOrderChange,
+  onSessionOrderChange,
   onToggleProject,
+  projects,
   runs,
   selectedSessionId,
-  sessions,
 }: {
   collapsedProjectKeys: Record<string, boolean>
   error: Error | null
   isLoading: boolean
+  mutationSessionId: string | undefined
+  onDelete: (sessionId: string) => Promise<void>
   onSelect: (sessionId: string) => void
+  onRename: (sessionId: string, name: string) => Promise<void>
+  onProjectOrderChange: (projectOrder: string[]) => void
+  onSessionOrderChange: (projectKey: string, sessionOrder: string[]) => void
   onToggleProject: (projectKey: string) => void
+  projects: ProjectSessionGroup[]
   runs: Record<string, SessionRunSummary>
   selectedSessionId: string
-  sessions: PiSessionSummary[]
 }) {
-  const projects = groupSessionsByProject(sessions)
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+  const [renaming, setRenaming] = useState<PiSessionSummary>()
+  const [renameValue, setRenameValue] = useState('')
+  const [deleting, setDeleting] = useState<PiSessionSummary>()
+  const [actionError, setActionError] = useState<string>()
+
+  function requestRename(session: PiSessionSummary) {
+    setActionError(undefined)
+    setRenameValue(session.name ?? '')
+    setRenaming(session)
+  }
+
+  async function confirmRename() {
+    if (!renaming || renameValue.trim().length === 0) return
+    try {
+      await onRename(renaming.id, renameValue)
+      setRenaming(undefined)
+    } catch {
+      setActionError('重命名失败，请刷新后重试。')
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleting) return
+    try {
+      await onDelete(deleting.id)
+      setDeleting(undefined)
+    } catch {
+      setActionError('删除失败，请刷新后重试。')
+    }
+  }
+
+  function reorder(event: DragEndEvent) {
+    const over = event.over
+    const kind = event.active.data.current?.kind
+    if (!over || event.active.id === over.id) return
+
+    if (kind === 'project') {
+      const activeIndex = projects.findIndex((project) => `project:${project.key}` === event.active.id)
+      const overIndex = projects.findIndex((project) => `project:${project.key}` === over.id)
+      if (activeIndex >= 0 && overIndex >= 0) onProjectOrderChange(arrayMove(projects.map((project) => project.key), activeIndex, overIndex))
+      return
+    }
+
+    if (kind !== 'session' || event.active.data.current?.projectKey !== over.data.current?.projectKey) return
+    const project = projects.find((candidate) => candidate.key === event.active.data.current?.projectKey)
+    if (!project) return
+    const activeIndex = project.sessions.findIndex((session) => `session:${session.id}` === event.active.id)
+    const overIndex = project.sessions.findIndex((session) => `session:${session.id}` === over.id)
+    if (activeIndex >= 0 && overIndex >= 0) {
+      onSessionOrderChange(project.key, arrayMove(project.sessions.map((session) => session.id), activeIndex, overIndex))
+    }
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -417,64 +548,224 @@ function SessionNavigation({
         <div className="space-y-1 p-2">
           {isLoading && Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-16" />)}
           {error && <p className="p-3 text-sm text-destructive">会话列表不可用</p>}
-          {!isLoading && !error && sessions.length === 0 && (
+          {!isLoading && !error && projects.length === 0 && (
             <p className="p-3 text-sm text-muted-foreground">未发现本机 Pi 会话</p>
           )}
-          {projects.map((project, index) => {
-            const expanded = !collapsedProjectKeys[project.key]
-            const sessionListId = `project-sessions-${index}`
-            const projectDescription = project.cwd ?? '工作目录不可用'
-
-            return (
-              <section className="space-y-1" key={project.key}>
-                <button
-                  aria-controls={sessionListId}
-                  aria-expanded={expanded}
-                  aria-label={`项目 ${project.name}，目录 ${projectDescription}，${project.sessions.length} 个会话，${expanded ? '已展开' : '已折叠'}`}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-semibold outline-none transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 motion-reduce:transition-none"
-                  onClick={() => onToggleProject(project.key)}
-                  title={project.cwd}
-                  type="button"
-                >
-                  <ChevronRight
-                    aria-hidden="true"
-                    className={`size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`}
-                  />
-                  <span className="min-w-0 flex-1 truncate">{project.name}</span>
-                  <span className="shrink-0 font-mono text-xs font-normal tabular-nums text-muted-foreground">
-                    {project.sessions.length}
-                  </span>
-                </button>
-                {expanded && (
-                  <div className="space-y-1 border-l pl-2" id={sessionListId}>
-                    {project.sessions.map((session) => {
-                      const status = runs[session.id]?.status ?? 'idle'
-                      const selected = session.id === selectedSessionId
-                      return (
-                        <Button
-                          aria-current={selected ? 'page' : undefined}
-                          className="h-auto w-full justify-start px-3 py-2 text-left"
-                          key={session.id}
-                          onClick={() => onSelect(session.id)}
-                          variant={selected ? 'secondary' : 'ghost'}
-                        >
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate font-mono text-xs text-muted-foreground">
-                              {shortSessionId(session.id)} · {formatUpdatedAt(session.updatedAt)}
-                            </span>
-                            <span className="mt-1 block text-xs text-muted-foreground">{sessionStatusLabel(status)}</span>
-                          </span>
-                        </Button>
-                      )
-                    })}
-                  </div>
-                )}
-              </section>
-            )
-          })}
+          <DndContext collisionDetection={closestCenter} onDragEnd={reorder} sensors={sensors}>
+            <SortableContext items={projects.map((project) => `project:${project.key}`)} strategy={verticalListSortingStrategy}>
+              {projects.map((project, index) => (
+                <SortableProject
+                  collapsed={projectIsCollapsed(collapsedProjectKeys, project.key)}
+                  index={index}
+                  key={project.key}
+                  mutationSessionId={mutationSessionId}
+                  onDelete={(session) => {
+                    setActionError(undefined)
+                    setDeleting(session)
+                  }}
+                  onRename={requestRename}
+                  onSelect={onSelect}
+                  onToggle={onToggleProject}
+                  project={project}
+                  runs={runs}
+                  selectedSessionId={selectedSessionId}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
         </div>
       </ScrollArea>
+      <Dialog onOpenChange={(open) => !open && setRenaming(undefined)} open={Boolean(renaming)}>
+        <DialogContent>
+          <DialogTitle>重命名会话</DialogTitle>
+          <DialogDescription>名称会作为 Pi 原生会话元数据保存，Pi CLI 也可读取。</DialogDescription>
+          <label className="mt-4 grid gap-2 text-sm font-medium" htmlFor="session-name">
+            会话名称
+            <input
+              className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              id="session-name"
+              maxLength={120}
+              onChange={(event) => setRenameValue(event.target.value)}
+              placeholder={renaming && !renaming.name ? sessionDisplayName(renaming) : '输入会话名称'}
+              value={renameValue}
+            />
+          </label>
+          {actionError && <p className="mt-3 text-sm text-destructive" role="alert">{actionError}</p>}
+          <div className="mt-5 flex justify-end gap-2">
+            <DialogClose asChild><Button type="button" variant="secondary">取消</Button></DialogClose>
+            <Button disabled={renameValue.trim().length === 0 || mutationSessionId === renaming?.id} onClick={() => void confirmRename()} type="button">
+              保存名称
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <AlertDialog onOpenChange={(open) => !open && setDeleting(undefined)} open={Boolean(deleting)}>
+        <AlertDialogContent>
+          <AlertDialogTitle>删除原生 Pi 会话？</AlertDialogTitle>
+          <AlertDialogDescription>
+            将先移入系统废纸篓；若废纸篓不可用，会永久删除原生会话文件且无法恢复。
+          </AlertDialogDescription>
+          {actionError && <p className="mt-3 text-sm text-destructive" role="alert">{actionError}</p>}
+          <div className="mt-5 flex justify-end gap-2">
+            <AlertDialogCancel asChild><Button type="button" variant="secondary">取消</Button></AlertDialogCancel>
+            <Button disabled={mutationSessionId === deleting?.id} onClick={() => void confirmDelete()} type="button" variant="destructive">
+              删除会话
+            </Button>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
+  )
+}
+
+function SortableProject({
+  collapsed,
+  index,
+  mutationSessionId,
+  onDelete,
+  onRename,
+  onSelect,
+  onToggle,
+  project,
+  runs,
+  selectedSessionId,
+}: {
+  collapsed: boolean
+  index: number
+  mutationSessionId: string | undefined
+  onDelete: (session: PiSessionSummary) => void
+  onRename: (session: PiSessionSummary) => void
+  onSelect: (sessionId: string) => void
+  onToggle: (projectKey: string) => void
+  project: ProjectSessionGroup
+  runs: Record<string, SessionRunSummary>
+  selectedSessionId: string
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
+    data: { kind: 'project', projectKey: project.key },
+    id: `project:${project.key}`,
+  })
+  const expanded = !collapsed
+  const sessionListId = `project-sessions-${index}`
+  const projectDescription = project.cwd ?? '工作目录不可用'
+
+  return (
+    <section
+      className="space-y-1"
+      ref={setNodeRef}
+      style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}
+    >
+      <div className="flex items-center gap-1">
+        <button
+          aria-label={`拖动排序项目 ${project.name}`}
+          className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50"
+          type="button"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical aria-hidden="true" className="size-3.5" />
+        </button>
+        <button
+          aria-controls={sessionListId}
+          aria-expanded={expanded}
+          aria-label={`项目 ${project.name}，目录 ${projectDescription}，${project.sessions.length} 个会话，${expanded ? '已展开' : '已折叠'}`}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-semibold outline-none transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 motion-reduce:transition-none"
+          onClick={() => onToggle(project.key)}
+          title={project.cwd}
+          type="button"
+        >
+          <ChevronRight aria-hidden="true" className={`size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`} />
+          <span className="min-w-0 flex-1 truncate">{project.name}</span>
+          <span className="shrink-0 font-mono text-xs font-normal tabular-nums text-muted-foreground">{project.sessions.length}</span>
+        </button>
+      </div>
+      {expanded && (
+        <div className="space-y-1 border-l pl-2" id={sessionListId}>
+          <SortableContext items={project.sessions.map((session) => `session:${session.id}`)} strategy={verticalListSortingStrategy}>
+            {project.sessions.map((session) => (
+              <SortableSession
+                key={session.id}
+                mutationSessionId={mutationSessionId}
+                onDelete={onDelete}
+                onRename={onRename}
+                onSelect={onSelect}
+                projectKey={project.key}
+                run={runs[session.id]}
+                selected={session.id === selectedSessionId}
+                session={session}
+              />
+            ))}
+          </SortableContext>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function SortableSession({
+  mutationSessionId,
+  onDelete,
+  onRename,
+  onSelect,
+  projectKey,
+  run,
+  selected,
+  session,
+}: {
+  mutationSessionId: string | undefined
+  onDelete: (session: PiSessionSummary) => void
+  onRename: (session: PiSessionSummary) => void
+  onSelect: (sessionId: string) => void
+  projectKey: string
+  run: SessionRunSummary | undefined
+  selected: boolean
+  session: PiSessionSummary
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
+    data: { kind: 'session', projectKey },
+    id: `session:${session.id}`,
+  })
+  const status = run?.status ?? 'idle'
+  const cannotDelete = selected || status === 'running' || status === 'aborting' || mutationSessionId === session.id
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          className="flex items-center gap-1"
+          ref={setNodeRef}
+          style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}
+        >
+          <button
+            aria-label={`拖动排序会话 ${sessionDisplayName(session)}`}
+            className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50"
+            type="button"
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical aria-hidden="true" className="size-3.5" />
+          </button>
+          <Button
+            aria-current={selected ? 'page' : undefined}
+            className="h-auto min-w-0 flex-1 justify-start px-3 py-2 text-left"
+            onClick={() => onSelect(session.id)}
+            variant={selected ? 'secondary' : 'ghost'}
+          >
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">{sessionDisplayName(session)}</span>
+            <MoreHorizontal aria-hidden="true" className="size-3.5 text-muted-foreground" />
+          </Button>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem disabled={mutationSessionId === session.id} onSelect={() => onRename(session)}>
+          <Pencil aria-hidden="true" className="mr-2 size-3.5" />重命名
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={cannotDelete} onSelect={() => onDelete(session)}>
+          <Trash2 aria-hidden="true" className="mr-2 size-3.5" />删除
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 

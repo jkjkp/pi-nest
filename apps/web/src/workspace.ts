@@ -2,7 +2,9 @@ import type { PromptStatus, SessionRunSummary } from './workspace-store.js'
 
 export type PiSessionSummary = {
   cwd?: string
+  firstMessage?: string
   id: string
+  name?: string
   updatedAt?: string
 }
 
@@ -36,6 +38,10 @@ export function projectName(cwd?: string) {
 
 export function projectSessionGroupKey(cwd?: string) {
   return cwd ? `cwd:${cwd}` : 'cwd:unavailable'
+}
+
+export function projectIsCollapsed(collapsedProjectKeys: Record<string, boolean>, projectKey: string) {
+  return collapsedProjectKeys[projectKey] ?? true
 }
 
 function updatedAtValue(updatedAt?: string) {
@@ -86,6 +92,10 @@ export function groupSessionsByProject(sessions: PiSessionSummary[]): ProjectSes
       return right.latest - left.latest || left.firstIndex - right.firstIndex
     })
     .map(({ group }) => group)
+}
+
+export function sessionDisplayName(session: Pick<PiSessionSummary, 'name' | 'firstMessage'>) {
+  return session.name ?? session.firstMessage ?? '未命名会话'
 }
 
 export function sessionStatusLabel(status: PromptStatus = 'idle') {

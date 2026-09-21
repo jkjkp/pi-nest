@@ -3,11 +3,14 @@ import { describe, expect, it } from 'vitest'
 import {
   groupSessionsByProject,
   projectName,
+  projectIsCollapsed,
   projectSessionGroupKey,
   runInspectorFields,
+  sessionDisplayName,
   sessionStatusLabel,
   shortSessionId,
 } from './workspace.js'
+import { applyNavigationOrder, reconcileNavigationOrder } from './navigation-order.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
 describe('workspace presentation helpers', () => {
@@ -41,6 +44,11 @@ describe('workspace presentation helpers', () => {
     expect(projectSessionGroupKey()).toBe('cwd:unavailable')
   })
 
+  it('keeps newly discovered projects collapsed until the user opens them', () => {
+    expect(projectIsCollapsed({}, 'cwd:/alpha')).toBe(true)
+    expect(projectIsCollapsed({ 'cwd:/alpha': false }, 'cwd:/alpha')).toBe(false)
+  })
+
   it('keeps initial desktop panel widths in UI-only state', () => {
     expect(useWorkspaceStore.getState()).toMatchObject({ inspectorWidth: 288, navigationWidth: 272 })
   })
@@ -61,15 +69,44 @@ describe('workspace presentation helpers', () => {
     })
   })
 
-  it('keeps project collapse state in memory and can reveal a selected project', () => {
+  it('keeps project collapse state in memory', () => {
     const projectKey = projectSessionGroupKey('/work/alpha')
     useWorkspaceStore.setState({ collapsedProjectKeys: {} })
 
     useWorkspaceStore.getState().toggleProjectCollapsed(projectKey)
-    expect(useWorkspaceStore.getState().collapsedProjectKeys[projectKey]).toBe(true)
-
-    useWorkspaceStore.getState().expandProject(projectKey)
     expect(useWorkspaceStore.getState().collapsedProjectKeys[projectKey]).toBe(false)
+
+    useWorkspaceStore.getState().toggleProjectCollapsed(projectKey)
+    expect(useWorkspaceStore.getState().collapsedProjectKeys[projectKey]).toBe(true)
+  })
+
+  it('reconciles persisted navigation order while appending newly discovered sessions', () => {
+    const source = [
+      { key: 'cwd:/alpha', sessions: [{ id: 'new' }, { id: 'saved' }] },
+      { key: 'cwd:/beta', sessions: [{ id: 'beta' }] },
+    ]
+    const order = reconcileNavigationOrder(
+      {
+        projectOrder: ['cwd:/beta', 'cwd:/gone'],
+        sessionOrderByProject: { 'cwd:/alpha': ['saved', 'gone'] },
+      },
+      source,
+    )
+
+    expect(order).toEqual({
+      projectOrder: ['cwd:/beta', 'cwd:/alpha'],
+      sessionOrderByProject: { 'cwd:/alpha': ['saved', 'new'], 'cwd:/beta': ['beta'] },
+    })
+    expect(applyNavigationOrder(source, order)).toEqual([
+      { key: 'cwd:/beta', sessions: [{ id: 'beta' }] },
+      { key: 'cwd:/alpha', sessions: [{ id: 'saved' }, { id: 'new' }] },
+    ])
+  })
+
+  it('prefers an explicit name and falls back to the first user message', () => {
+    expect(sessionDisplayName({ firstMessage: '首条提问', name: '自定义名称' })).toBe('自定义名称')
+    expect(sessionDisplayName({ firstMessage: '首条提问' })).toBe('首条提问')
+    expect(sessionDisplayName({})).toBe('未命名会话')
   })
 
   it('only exposes run details that this browser has observed', () => {
