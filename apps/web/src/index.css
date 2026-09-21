@@ -118,6 +118,11 @@ button:disabled {
   opacity: 0.55;
 }
 
+button.abort {
+  color: #fff1f2;
+  background: #be123c;
+}
+
 .result-heading {
   display: flex;
   align-items: center;

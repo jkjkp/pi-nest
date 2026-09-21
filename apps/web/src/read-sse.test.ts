@@ -21,14 +21,14 @@ describe('readSse', () => {
     const response = streamingResponse([
       'event: text_',
       'delta\r\ndata: {"delta":"A"}\r\n\r',
-      '\nevent: complete\ndata: {"stopReason":"stop"}\n\n',
+      '\nevent: complete\ndata: {"stopReason":"aborted"}\n\n',
     ])
 
     await readSse(response, onEvent)
 
     expect(onEvent.mock.calls).toEqual([
       [{ event: 'text_delta', data: '{"delta":"A"}' }],
-      [{ event: 'complete', data: '{"stopReason":"stop"}' }],
+      [{ event: 'complete', data: '{"stopReason":"aborted"}' }],
     ])
   })
 

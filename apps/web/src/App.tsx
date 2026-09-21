@@ -9,7 +9,7 @@ type PiSessionSummary = {
   updatedAt?: string
 }
 
-type PromptStatus = 'idle' | 'running' | 'complete' | 'error'
+type PromptStatus = 'idle' | 'running' | 'aborting' | 'aborted' | 'complete' | 'error'
 
 function App() {
   return (
@@ -59,7 +59,9 @@ function Workspace() {
 
   async function submitPrompt(event: FormEvent) {
     event.preventDefault()
-    if (!selectedSessionId || status === 'running' || prompt.trim().length === 0) return
+    if (!selectedSessionId || status === 'running' || status === 'aborting' || prompt.trim().length === 0) {
+      return
+    }
 
     const controller = new AbortController()
     requestController.current = controller
@@ -85,6 +87,7 @@ function Workspace() {
           delta?: string
           message?: string
           model?: { provider: string; id: string }
+          stopReason?: string
         }
 
         if (eventName === 'text_delta' && typeof payload.delta === 'string') {
@@ -93,7 +96,7 @@ function Workspace() {
         if (eventName === 'complete') {
           terminalEvent = true
           setModel(payload.model && `${payload.model.provider}/${payload.model.id}`)
-          setStatus('complete')
+          setStatus(payload.stopReason === 'aborted' ? 'aborted' : 'complete')
         }
         if (eventName === 'error') {
           terminalEvent = true
@@ -112,7 +115,25 @@ function Workspace() {
     }
   }
 
+  async function abortPrompt() {
+    if (!selectedSessionId || status !== 'running') return
+
+    setError(undefined)
+    setStatus('aborting')
+
+    try {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(selectedSessionId)}/abort`, {
+        method: 'POST',
+      })
+      if (response.status !== 202) throw new Error('Pi session could not be stopped')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Pi session could not be stopped')
+      setStatus('running')
+    }
+  }
+
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
+  const isActive = status === 'running' || status === 'aborting'
 
   return (
     <main>
@@ -129,7 +150,7 @@ function Workspace() {
             id="session"
             value={selectedSessionId}
             onChange={(event) => setSelectedSessionId(event.target.value)}
-            disabled={status === 'running'}
+            disabled={isActive}
           >
             {sessions.length === 0 && <option value="">No sessions found</option>}
             {sessions.map((session) => (
@@ -155,19 +176,25 @@ function Workspace() {
             onChange={(event) => setPrompt(event.target.value)}
             maxLength={20_000}
             rows={6}
-            disabled={status === 'running'}
+            disabled={isActive}
             placeholder="Send a prompt to the selected native Pi session"
           />
 
           <button
             type="submit"
-            disabled={!selectedSessionId || prompt.trim().length === 0 || status === 'running'}
+            disabled={!selectedSessionId || prompt.trim().length === 0 || isActive}
           >
-            {status === 'running' ? 'Streaming…' : 'Send prompt'}
+            {isActive ? 'Streaming…' : 'Send prompt'}
           </button>
+          {status === 'running' && (
+            <button className="abort" type="button" onClick={() => void abortPrompt()}>
+              Stop response
+            </button>
+          )}
+          {status === 'aborting' && <p className="session-meta">Stopping response…</p>}
         </form>
 
-        <section className="result" aria-busy={status === 'running'}>
+        <section className="result" aria-busy={isActive}>
           <div className="result-heading">
             <h2>Response</h2>
             <span data-status={status}>{status}</span>
