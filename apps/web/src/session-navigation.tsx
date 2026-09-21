@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   DndContext,
   type DragEndEvent,
@@ -10,7 +10,7 @@ import {
   useSensors,
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { ChevronRight, Pencil, Trash2 } from 'lucide-react'
+import { ChevronRight, Pencil, Search, Trash2 } from 'lucide-react'
 
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
@@ -20,7 +20,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 
 import type { SessionRunSummary } from './workspace-store.js'
-import { type PiSessionSummary, type ProjectSessionGroup, projectIsCollapsed, sessionDisplayName } from './workspace.js'
+import { filterProjectsByQuery, type PiSessionSummary, type ProjectSessionGroup, sessionDisplayName } from './workspace.js'
 
 export function SessionNavigation({
   collapsedProjectKeys,
@@ -46,7 +46,7 @@ export function SessionNavigation({
   onRename: (sessionId: string, name: string) => Promise<void>
   onProjectOrderChange: (projectOrder: string[]) => void
   onSessionOrderChange: (projectKey: string, sessionOrder: string[]) => void
-  onToggleProject: (projectKey: string) => void
+  onToggleProject: (projectKey: string, collapsed: boolean) => void
   projects: ProjectSessionGroup[]
   runs: Record<string, SessionRunSummary>
   selectedSessionId: string
@@ -60,6 +60,9 @@ export function SessionNavigation({
   const [renameValue, setRenameValue] = useState('')
   const [deleting, setDeleting] = useState<PiSessionSummary>()
   const [actionError, setActionError] = useState<string>()
+  const [searchValue, setSearchValue] = useState('')
+  const visibleProjects = useMemo(() => filterProjectsByQuery(projects, searchValue), [projects, searchValue])
+  const isFiltering = searchValue.trim().length > 0
 
   function requestRename(session: PiSessionSummary) {
     setActionError(undefined)
@@ -111,26 +114,35 @@ export function SessionNavigation({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b px-4 py-4">
-        <div className="flex items-center gap-2">
+      <div className="border-b">
+        <div className="flex h-14 items-center gap-2 px-4">
           <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">PN</span>
-          <div className="min-w-0">
-            <p className="text-xs font-medium text-muted-foreground">Pi Nest</p>
-            <h2 className="text-sm font-semibold">会话</h2>
-          </div>
+          <h2 className="min-w-0 truncate text-sm font-semibold tracking-tight">Pi Nest</h2>
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">本机原生 Pi 会话</p>
+        <label className="relative block px-3 pb-3" htmlFor="session-search">
+          <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-2.5 size-3.5 text-muted-foreground" />
+          <input
+            className="h-8 w-full rounded-md border bg-background/60 py-1 pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+            id="session-search"
+            onChange={(event) => setSearchValue(event.target.value)}
+            placeholder="搜索项目或会话"
+            type="search"
+            value={searchValue}
+          />
+        </label>
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-1 p-2">
           {isLoading && Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-16" />)}
           {error && <p className="p-3 text-sm text-destructive">会话列表不可用</p>}
           {!isLoading && !error && projects.length === 0 && <p className="p-3 text-sm text-muted-foreground">未发现本机 Pi 会话</p>}
+          {!isLoading && !error && projects.length > 0 && visibleProjects.length === 0 && <p className="p-3 text-sm text-muted-foreground">未找到匹配的项目或会话</p>}
           <DndContext collisionDetection={closestCenter} onDragEnd={reorder} sensors={sensors}>
-            <SortableContext items={projects.map((project) => `project:${project.key}`)} strategy={verticalListSortingStrategy}>
-              {projects.map((project, index) => (
+            <SortableContext items={visibleProjects.map((project) => `project:${project.key}`)} strategy={verticalListSortingStrategy}>
+              {visibleProjects.map((project, index) => (
                 <SortableProject
-                  collapsed={projectIsCollapsed(collapsedProjectKeys, project.key)}
+                  collapsed={collapsedProjectKeys[project.key] ?? !project.sessions.some((session) => session.id === selectedSessionId)}
+                  disabled={isFiltering}
                   index={index}
                   key={project.key}
                   mutationSessionId={mutationSessionId}
@@ -195,6 +207,7 @@ export function SessionNavigation({
 
 function SortableProject({
   collapsed,
+  disabled,
   index,
   mutationSessionId,
   onDelete,
@@ -206,18 +219,20 @@ function SortableProject({
   selectedSessionId,
 }: {
   collapsed: boolean
+  disabled: boolean
   index: number
   mutationSessionId: string | undefined
   onDelete: (session: PiSessionSummary) => void
   onRename: (session: PiSessionSummary) => void
   onSelect: (sessionId: string) => void
-  onToggle: (projectKey: string) => void
+  onToggle: (projectKey: string, collapsed: boolean) => void
   project: ProjectSessionGroup
   runs: Record<string, SessionRunSummary>
   selectedSessionId: string
 }) {
   const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
     data: { kind: 'project', projectKey: project.key },
+    disabled,
     id: `project:${project.key}`,
   })
   const expanded = !collapsed
@@ -231,7 +246,7 @@ function SortableProject({
         aria-expanded={expanded}
         aria-label={`项目 ${project.name}，目录 ${projectDescription}，${project.sessions.length} 个会话，${expanded ? '已展开' : '已折叠'}`}
         className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-semibold outline-none transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 motion-reduce:transition-none"
-        onClick={() => onToggle(project.key)}
+        onClick={() => onToggle(project.key, !collapsed)}
         ref={setActivatorNodeRef}
         title={project.cwd}
         type="button"
@@ -243,11 +258,12 @@ function SortableProject({
         <span className="shrink-0 font-mono text-xs font-normal tabular-nums text-muted-foreground">{project.sessions.length}</span>
       </button>
       {expanded && (
-        <div className="space-y-1 border-l pl-2" id={sessionListId}>
+        <div className="space-y-1 pl-2" id={sessionListId}>
           <SortableContext items={project.sessions.map((session) => `session:${session.id}`)} strategy={verticalListSortingStrategy}>
             {project.sessions.map((session) => (
               <SortableSession
                 key={session.id}
+                disabled={disabled}
                 mutationSessionId={mutationSessionId}
                 onDelete={onDelete}
                 onRename={onRename}
@@ -266,6 +282,7 @@ function SortableProject({
 }
 
 function SortableSession({
+  disabled,
   mutationSessionId,
   onDelete,
   onRename,
@@ -275,6 +292,7 @@ function SortableSession({
   selected,
   session,
 }: {
+  disabled: boolean
   mutationSessionId: string | undefined
   onDelete: (session: PiSessionSummary) => void
   onRename: (session: PiSessionSummary) => void
@@ -286,6 +304,7 @@ function SortableSession({
 }) {
   const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
     data: { kind: 'session', projectKey },
+    disabled,
     id: `session:${session.id}`,
   })
   const status = run?.status ?? 'idle'
@@ -297,7 +316,7 @@ function SortableSession({
         <div className="flex items-center gap-1" ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
           <Button
             aria-current={selected ? 'page' : undefined}
-            className={`h-auto min-w-0 flex-1 justify-start border-0 px-3 py-2 text-left ${selected ? 'bg-muted/80 hover:bg-muted/80' : 'bg-transparent hover:bg-muted/50'}`}
+            className={`h-9 min-w-0 flex-1 justify-start border-0 px-2 text-left ${selected ? 'bg-primary/10 hover:bg-primary/10' : 'bg-transparent hover:bg-muted/50'}`}
             onClick={() => onSelect(session.id)}
             ref={setActivatorNodeRef}
             variant="ghost"

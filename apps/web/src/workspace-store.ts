@@ -34,8 +34,8 @@ type WorkspaceState = {
   setInspectorOpen: (open: boolean) => void
   setNavigationOpen: (open: boolean) => void
   setNavigationOrder: (order: NavigationOrder) => void
+  setProjectCollapsed: (projectKey: string, collapsed: boolean) => void
   setRun: (sessionId: string, run: SessionRunSummary) => void
-  toggleProjectCollapsed: (projectKey: string) => void
   updateRun: (sessionId: string, update: Partial<SessionRunSummary>) => void
 }
 
@@ -44,7 +44,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   collapsedProjectKeys: {},
   drafts: {},
   inspectorOpen: false,
-  inspectorWidth: 288,
+  inspectorWidth: 300,
   navigationOpen: false,
   navigationWidth: 272,
   navigationOrder: { projectOrder: [], sessionOrderByProject: {} },
@@ -69,14 +69,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
   setNavigationOpen: (navigationOpen) => set({ navigationOpen }),
   setNavigationOrder: (navigationOrder) => set({ navigationOrder }),
+  setProjectCollapsed: (projectKey, collapsed) =>
+    set((state) => ({ collapsedProjectKeys: { ...state.collapsedProjectKeys, [projectKey]: collapsed } })),
   setRun: (sessionId, run) => set((state) => ({ runs: { ...state.runs, [sessionId]: run } })),
-  toggleProjectCollapsed: (projectKey) =>
-    set((state) => ({
-      collapsedProjectKeys: {
-        ...state.collapsedProjectKeys,
-        [projectKey]: !(state.collapsedProjectKeys[projectKey] ?? true),
-      },
-    })),
   updateRun: (sessionId, update) =>
     set((state) => ({
       runs: {

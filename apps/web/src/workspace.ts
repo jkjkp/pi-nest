@@ -40,10 +40,6 @@ export function projectSessionGroupKey(cwd?: string) {
   return cwd ? `cwd:${cwd}` : 'cwd:unavailable'
 }
 
-export function projectIsCollapsed(collapsedProjectKeys: Record<string, boolean>, projectKey: string) {
-  return collapsedProjectKeys[projectKey] ?? true
-}
-
 function updatedAtValue(updatedAt?: string) {
   const value = updatedAt ? Date.parse(updatedAt) : Number.NaN
   return Number.isNaN(value) ? undefined : value
@@ -92,6 +88,18 @@ export function groupSessionsByProject(sessions: PiSessionSummary[]): ProjectSes
       return right.latest - left.latest || left.firstIndex - right.firstIndex
     })
     .map(({ group }) => group)
+}
+
+export function filterProjectsByQuery(projects: ProjectSessionGroup[], value: string) {
+  const query = value.trim().toLocaleLowerCase()
+  if (!query) return projects
+
+  return projects.flatMap((project) => {
+    if (`${project.name} ${project.cwd ?? ''}`.toLocaleLowerCase().includes(query)) return [project]
+
+    const sessions = project.sessions.filter((session) => sessionDisplayName(session).toLocaleLowerCase().includes(query))
+    return sessions.length > 0 ? [{ ...project, sessions }] : []
+  })
 }
 
 export function sessionDisplayName(session: Pick<PiSessionSummary, 'name' | 'firstMessage'>) {

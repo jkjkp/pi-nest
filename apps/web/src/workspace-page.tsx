@@ -37,7 +37,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
   const setNavigationOrder = useWorkspaceStore((state) => state.setNavigationOrder)
-  const toggleProjectCollapsed = useWorkspaceStore((state) => state.toggleProjectCollapsed)
+  const setProjectCollapsed = useWorkspaceStore((state) => state.setProjectCollapsed)
   const [mutatingSessionId, setMutatingSessionId] = useState<string>()
   const health = useQuery({
     queryKey: ['health'],
@@ -130,7 +130,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           sessionOrderByProject: { ...navigationOrder.sessionOrderByProject, [projectKey]: sessionOrder },
         })
       }
-      onToggleProject={toggleProjectCollapsed}
+      onToggleProject={setProjectCollapsed}
       projects={projects}
       runs={runs}
       selectedSessionId={selectedSessionId}
@@ -200,7 +200,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           </header>
 
           <ScrollArea className="min-h-0 flex-1">
-            <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6 sm:px-6">
+            <div className="mx-auto flex w-full max-w-[920px] flex-col gap-4 px-4 py-6 sm:px-6">
               <SessionTimeline error={historyQuery.isError} history={historyQuery.data} isLoading={historyQuery.isPending} onRetry={() => void historyQuery.refetch()} />
               <section className="border-b pb-6">
                 {isActive && currentRun?.responseText && <pre aria-live="polite" className="mt-4 whitespace-pre-wrap break-words text-sm leading-6">{currentRun.responseText}</pre>}

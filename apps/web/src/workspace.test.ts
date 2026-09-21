@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   groupSessionsByProject,
+  filterProjectsByQuery,
   projectName,
-  projectIsCollapsed,
   projectSessionGroupKey,
   runInspectorFields,
   sessionDisplayName,
@@ -44,13 +44,30 @@ describe('workspace presentation helpers', () => {
     expect(projectSessionGroupKey()).toBe('cwd:unavailable')
   })
 
-  it('keeps newly discovered projects collapsed until the user opens them', () => {
-    expect(projectIsCollapsed({}, 'cwd:/alpha')).toBe(true)
-    expect(projectIsCollapsed({ 'cwd:/alpha': false }, 'cwd:/alpha')).toBe(false)
+  it('keeps collapse choices in UI-only state', () => {
+    const projectKey = projectSessionGroupKey('/work/alpha')
+    useWorkspaceStore.setState({ collapsedProjectKeys: {} })
+
+    useWorkspaceStore.getState().setProjectCollapsed(projectKey, false)
+    expect(useWorkspaceStore.getState().collapsedProjectKeys[projectKey]).toBe(false)
+
+    useWorkspaceStore.getState().setProjectCollapsed(projectKey, true)
+    expect(useWorkspaceStore.getState().collapsedProjectKeys[projectKey]).toBe(true)
   })
 
   it('keeps initial desktop panel widths in UI-only state', () => {
-    expect(useWorkspaceStore.getState()).toMatchObject({ inspectorWidth: 288, navigationWidth: 272 })
+    expect(useWorkspaceStore.getState()).toMatchObject({ inspectorWidth: 300, navigationWidth: 272 })
+  })
+
+  it('filters by project metadata or session display name without changing the source groups', () => {
+    const projects = groupSessionsByProject([
+      { cwd: '/work/alpha', firstMessage: '修复导航', id: 'alpha' },
+      { cwd: '/work/beta', firstMessage: '检查接口', id: 'beta' },
+    ])
+
+    expect(filterProjectsByQuery(projects, 'alpha')).toHaveLength(1)
+    expect(filterProjectsByQuery(projects, '接口')[0]?.sessions).toMatchObject([{ id: 'beta' }])
+    expect(projects).toHaveLength(2)
   })
 
   it('appends stream deltas to only the target session', () => {
@@ -67,17 +84,6 @@ describe('workspace presentation helpers', () => {
       first: { responseText: 'AC', textDeltaCount: 2 },
       second: { responseText: 'B', textDeltaCount: 1 },
     })
-  })
-
-  it('keeps project collapse state in memory', () => {
-    const projectKey = projectSessionGroupKey('/work/alpha')
-    useWorkspaceStore.setState({ collapsedProjectKeys: {} })
-
-    useWorkspaceStore.getState().toggleProjectCollapsed(projectKey)
-    expect(useWorkspaceStore.getState().collapsedProjectKeys[projectKey]).toBe(false)
-
-    useWorkspaceStore.getState().toggleProjectCollapsed(projectKey)
-    expect(useWorkspaceStore.getState().collapsedProjectKeys[projectKey]).toBe(true)
   })
 
   it('reconciles persisted navigation order while appending newly discovered sessions', () => {
