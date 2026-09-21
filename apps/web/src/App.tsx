@@ -1,5 +1,5 @@
 import { type CSSProperties, type FormEvent, type ReactNode, useEffect, useRef } from 'react'
-import { type UseQueryResult, useQuery } from '@tanstack/react-query'
+import { type UseQueryResult, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ChevronRight,
   CircleAlert,
@@ -22,6 +22,11 @@ import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 import { readSse } from './read-sse.js'
+import {
+  sessionHistoryQueryKey,
+  type PiSessionHistoryMessage,
+  type PiSessionHistoryResponse,
+} from './history.js'
 import { type PromptStatus, type SessionRunSummary, useWorkspaceStore } from './workspace-store.js'
 import {
   formatUpdatedAt,
@@ -53,6 +58,7 @@ function App() {
 
 function Workspace() {
   const requestController = useRef<AbortController | undefined>(undefined)
+  const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedSessionId = searchParams.get('session') ?? ''
   const drafts = useWorkspaceStore((state) => state.drafts)
@@ -83,6 +89,12 @@ function Workspace() {
   })
   const sessions = sessionsQuery.data ?? emptySessions
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
+  const historyQuery = useQuery({
+    enabled: Boolean(selectedSession),
+    queryKey: sessionHistoryQueryKey(selectedSessionId),
+    queryFn: () => fetchJson<PiSessionHistoryResponse>(`/api/sessions/${encodeURIComponent(selectedSessionId)}/history`),
+    retry: false,
+  })
   const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
   const status = currentRun?.status ?? 'idle'
   const isActive = status === 'running' || status === 'aborting'
@@ -162,6 +174,7 @@ function Workspace() {
       }
     } finally {
       if (requestController.current === controller) requestController.current = undefined
+      void queryClient.invalidateQueries({ queryKey: sessionHistoryQueryKey(selectedSessionId) })
     }
   }
 
@@ -285,12 +298,14 @@ function Workspace() {
 
           <ScrollArea className="min-h-0 flex-1">
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-6 sm:px-6">
+              <SessionTimeline
+                error={historyQuery.isError}
+                history={historyQuery.data}
+                isLoading={historyQuery.isPending}
+                onRetry={() => void historyQuery.refetch()}
+              />
               <section className="border-b pb-6">
-                <h2 className="text-sm font-semibold">会话内容</h2>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  历史消息将在下一阶段以只读方式加载。当前区域保留原生会话的流式验证结果。
-                </p>
-                {currentRun?.responseText && (
+                {isActive && currentRun?.responseText && (
                   <pre aria-live="polite" className="mt-4 whitespace-pre-wrap break-words text-sm leading-6">
                     {currentRun.responseText}
                   </pre>
@@ -337,6 +352,86 @@ function Workspace() {
         <aside className="hidden min-h-0 border-l bg-card/60 xl:block">{inspector}</aside>
       </div>
     </main>
+  )
+}
+
+function SessionTimeline({
+  error,
+  history,
+  isLoading,
+  onRetry,
+}: {
+  error: boolean
+  history: PiSessionHistoryResponse | undefined
+  isLoading: boolean
+  onRetry: () => void
+}) {
+  if (isLoading) {
+    return (
+      <section aria-label="正在加载会话历史" className="space-y-3">
+        {Array.from({ length: 3 }, (_, index) => <Skeleton className="h-24" key={index} />)}
+      </section>
+    )
+  }
+
+  if (error) {
+    return (
+      <section className="border-b pb-6" role="alert">
+        <h2 className="text-sm font-semibold">无法读取会话历史</h2>
+        <p className="mt-2 text-sm text-muted-foreground">历史仍保留在本机原生会话中；请刷新后重试。</p>
+        <Button className="mt-3" onClick={onRetry} size="sm" type="button" variant="secondary">
+          重试
+        </Button>
+      </section>
+    )
+  }
+
+  if (!history) return null
+
+  if (history.entries.length === 0) {
+    return (
+      <section className="border-b pb-6">
+        <h2 className="text-sm font-semibold">会话内容</h2>
+        <p className="mt-2 text-sm text-muted-foreground">当前活动分支尚无可展示的消息。</p>
+      </section>
+    )
+  }
+
+  return (
+    <section className="space-y-3 border-b pb-6">
+      <h2 className="text-sm font-semibold">会话内容</h2>
+      {history.hasEarlier && (
+        <p className="text-xs text-muted-foreground">首版仅展示当前活动分支最近 200 条原生记录。</p>
+      )}
+      {history.entries.map((entry, index) =>
+        entry.kind === 'omitted' ? (
+          <div className="border-l-2 border-muted px-3 py-2 text-xs text-muted-foreground" key={`${entry.timestamp}-${index}`}>
+            {entry.label}（连续 {entry.count} 条）
+          </div>
+        ) : (
+          <TimelineMessage entry={entry} key={entry.id} />
+        ),
+      )}
+    </section>
+  )
+}
+
+function TimelineMessage({ entry }: { entry: PiSessionHistoryMessage }) {
+  const assistant = entry.role === 'assistant'
+  return (
+    <article className={assistant ? 'border bg-card p-4' : 'border bg-muted/45 p-3'}>
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">{assistant ? '助手' : '用户'}</span>
+        <time dateTime={entry.timestamp}>{formatUpdatedAt(entry.timestamp)}</time>
+      </header>
+      <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6">{entry.text}</p>
+      {(entry.stopReason || entry.hasOmittedContent) && (
+        <footer className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {entry.stopReason && <span>终止原因：{entry.stopReason}</span>}
+          {entry.hasOmittedContent && <span>包含未展示的原生内容</span>}
+        </footer>
+      )}
+    </article>
   )
 }
 
