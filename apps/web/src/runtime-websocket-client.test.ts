@@ -84,6 +84,37 @@ describe('RuntimeWebSocketClient', () => {
     vi.unstubAllGlobals()
   })
 
+  it('keeps delivering live events after attach repeats for the same session', async () => {
+    vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+    const socket = new FakeSocket()
+    const socketFactory = vi.fn(() => socket as never)
+    const client = new RuntimeWebSocketClient({
+      fetchFn: vi.fn().mockResolvedValue(new Response(JSON.stringify({ runtimeId: 'runtime-1', token: 'token', websocketPath: '/api/runtime' }))),
+      socketFactory,
+    })
+    const sequences: number[] = []
+    client.onPiEvent((event) => sequences.push(event.sequence))
+
+    const attach = client.attach('session-a')
+    await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledOnce())
+    socket.open()
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'attach' }))
+    socket.receive({ command: 'attach', id: 'web-1', sessionId: 'session-a', type: 'ack' })
+    await attach
+    socket.receive({ event: { type: 'one' }, observedAt: 'now', sequence: 1, sessionId: 'session-a', type: 'pi_event' })
+
+    // The run controller re-attaches before every prompt even though the stream is already consumed.
+    const repeated = client.attach('session-a')
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-2', resume: { after: 0 }, sessionId: 'session-a', type: 'attach' }))
+    socket.receive({ command: 'attach', id: 'web-2', sessionId: 'session-a', type: 'ack' })
+    await repeated
+    socket.receive({ event: { type: 'two' }, observedAt: 'now', sequence: 2, sessionId: 'session-a', type: 'pi_event' })
+
+    expect(sequences).toEqual([1, 2])
+    expect(socket.sent.filter((message) => message.type === 'attach')).toHaveLength(2)
+    vi.unstubAllGlobals()
+  })
+
   it('does not render an out-of-order event before requesting a replay', async () => {
     vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
     const socket = new FakeSocket()

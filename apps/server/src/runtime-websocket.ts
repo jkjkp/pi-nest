@@ -21,7 +21,7 @@ const commandSchema = z.discriminatedUnion('type', [
 ])
 
 type RuntimeSocket = { send: (data: string) => void }
-type AttachedSession = { after: number; session: PiRuntimeSession; unsubscribe: () => void }
+type AttachedSession = { session: PiRuntimeSession; unsubscribe: () => void }
 type SocketState = { sessions: Map<string, AttachedSession> }
 
 function serialize(value: unknown) {
@@ -121,8 +121,7 @@ export class RuntimeWebSocketBroker {
 
   private async attach(socket: RuntimeSocket, state: SocketState, command: { id: string; resume?: { after: number }; sessionId: string }) {
     const after = command.resume?.after ?? 0
-    const current = state.sessions.get(command.sessionId)
-    if (current?.after === after) return this.ack(socket, command.id, 'attach', command.sessionId)
+
     let session
     try {
       session = (await listPiSessions()).find((candidate) => candidate.id === command.sessionId)
@@ -132,10 +131,13 @@ export class RuntimeWebSocketBroker {
     if (!session) return this.error(socket, command.id, 'SESSION_NOT_FOUND', 'Pi session not found', command.sessionId)
     if (!session.cwd) return this.error(socket, command.id, 'SESSION_UNAVAILABLE', 'Pi session cwd is unavailable', command.sessionId)
 
+    const current = state.sessions.get(session.id)
     current?.unsubscribe()
     state.sessions.delete(session.id)
     let unsubscribe
     try {
+      // Always resubscribe, even for a repeated attach: the replay is what a client needs
+      // after a sequence gap, and duplicate events are dropped by the client's cursor.
       unsubscribe = await this.runtime.subscribe(
         session.id,
         after,
@@ -147,7 +149,6 @@ export class RuntimeWebSocketBroker {
       return this.error(socket, command.id, 'EVENT_BUFFER_FAILED', 'Pi runtime event buffer failed', session.id)
     }
     state.sessions.set(session.id, {
-      after,
       session: { cwd: session.cwd, id: session.id, sessionFile: session.sessionFile },
       unsubscribe,
     })

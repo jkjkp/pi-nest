@@ -99,7 +99,9 @@ export class RuntimeWebSocketClient {
   }
 
   attach(sessionId: string, after = 0) {
-    this.attached.set(sessionId, after)
+    // Never move the cursor backwards: callers re-attach before every prompt, and a lower
+    // cursor would make every following event look out of order.
+    this.attached.set(sessionId, Math.max(this.attached.get(sessionId) ?? 0, after))
     return this.command('attach', sessionId, undefined, after)
   }
 

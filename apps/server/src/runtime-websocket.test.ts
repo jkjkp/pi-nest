@@ -85,6 +85,19 @@ describe('RuntimeWebSocketBroker', () => {
     expect(client.sent).toContainEqual({ command: 'attach', id: 'a2', sessionId: 'session-1', type: 'ack' })
   })
 
+  it('resubscribes when attach repeats with the same cursor so replays stay possible', async () => {
+    const registry = runtime()
+    const broker = new RuntimeWebSocketBroker(registry as never)
+    const client = socket()
+    broker.open(client)
+
+    await broker.message(client, JSON.stringify({ id: 'a1', resume: { after: 0 }, sessionId: 'session-1', type: 'attach' }))
+    await broker.message(client, JSON.stringify({ id: 'a2', resume: { after: 0 }, sessionId: 'session-1', type: 'attach' }))
+
+    expect(registry.subscribe).toHaveBeenCalledTimes(2)
+    expect(client.sent).toContainEqual({ command: 'attach', id: 'a2', sessionId: 'session-1', type: 'ack' })
+  })
+
   it('returns a safe error for an impossible replay cursor', async () => {
     const registry = new PiRuntimeRegistry()
     const broker = new RuntimeWebSocketBroker(registry)
