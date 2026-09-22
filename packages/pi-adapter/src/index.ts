@@ -16,3 +16,7 @@ export type {
   PiSessionHistoryOmitted,
   PiSessionHistoryOptions,
 } from './read-session-history.js'
+export { readPiSettings, updatePiSettings } from './settings.js'
+export type { PiRuntimeSettings, PiSettingsSnapshot, PiSettingsUpdate } from './settings.js'
+export { PiRpcProcess } from './pi-rpc-process.js'
+export type { PiRpcProcessOptions, PiRpcProcessState } from './pi-rpc-process.js'
