@@ -111,10 +111,11 @@ export function sessionStatusLabel(status: PromptStatus = 'idle') {
 }
 
 export function runInspectorFields(run: SessionRunSummary | undefined) {
+  const eventCount = run ? run.systemEvents.length + run.turns.reduce((count, turn) => count + turn.events.length, 0) : undefined
   return {
     error: run?.error,
     model: run?.model ?? '当前不可用',
     stopReason: run?.stopReason ?? '当前不可用',
-    textDeltaCount: run?.textDeltaCount === undefined ? '当前不可用' : String(run.textDeltaCount),
+    eventCount: eventCount === undefined ? '当前不可用' : String(eventCount),
   }
 }

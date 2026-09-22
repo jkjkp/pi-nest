@@ -24,7 +24,7 @@ export function SessionInspector({ run, session }: { run: SessionRunSummary | un
             </h3>
             <dl className="space-y-4">
               <InspectorItem label="运行状态"><StatusBadge status={status} /></InspectorItem>
-              <InspectorItem label="本工作台文本增量事件"><InspectorCodeValue value={fields.textDeltaCount} /></InspectorItem>
+              <InspectorItem label="本工作台原生事件"><InspectorCodeValue value={fields.eventCount} /></InspectorItem>
               <InspectorItem label="终止原因"><InspectorCodeValue value={fields.stopReason} /></InspectorItem>
               <InspectorItem label="最近错误">
                 {fields.error ? (
@@ -47,7 +47,7 @@ export function SessionInspector({ run, session }: { run: SessionRunSummary | un
               <InspectorItem label="最近更新">{formatUpdatedAt(session?.updatedAt)}</InspectorItem>
               <InspectorItem label="模型"><InspectorCodeValue value={fields.model} /></InspectorItem>
               <InspectorItem label="Thinking"><InspectorUnavailable /></InspectorItem>
-              <InspectorItem label="工具">受限模式：已禁用</InspectorItem>
+              <InspectorItem label="工具">以 Pi CLI 实际执行为准</InspectorItem>
             </dl>
           </section>
         </div>

@@ -1,7 +1,7 @@
 import { type CSSProperties, type FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CircleX, Menu, PanelRight, Send, ShieldAlert, Square } from 'lucide-react'
-import { useSearchParams } from 'react-router'
+import { ChevronDown, CircleX, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router'
 
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -25,6 +25,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const queryClient = useQueryClient()
   const selectedSessionId = searchParams.get('session') ?? ''
   const drafts = useWorkspaceStore((state) => state.drafts)
+  const extensionStatus = useWorkspaceStore((state) => state.extensionStatus)
+  const extensionWidgets = useWorkspaceStore((state) => state.extensionWidgets)
   const collapsedProjectKeys = useWorkspaceStore((state) => state.collapsedProjectKeys)
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
   const inspectorWidth = useWorkspaceStore((state) => state.inspectorWidth)
@@ -38,11 +40,17 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const setNavigationOrder = useWorkspaceStore((state) => state.setNavigationOrder)
   const setProjectCollapsed = useWorkspaceStore((state) => state.setProjectCollapsed)
   const [mutatingSessionId, setMutatingSessionId] = useState<string>()
+  const [controlOpen, setControlOpen] = useState(false)
+  const [controlError, setControlError] = useState<string>()
+  const [models, setModels] = useState<{ id: string; name?: string; provider: string }[]>([])
+  const [thinkingLevels, setThinkingLevels] = useState<string[]>([])
+  const [queueMode, setQueueMode] = useState<'follow_up' | 'steer'>('steer')
   const messageScrollAreaRef = useRef<HTMLDivElement>(null)
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
   const sessions = sessionsQuery.data ?? emptySessions
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
   const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
+  const modelLabel = currentRun?.model ?? '当前模型不可用'
   const status = currentRun?.status ?? 'idle'
   const isActive = status === 'running' || status === 'aborting'
   const historyQuery = useQuery({
@@ -73,7 +81,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     })
 
     return () => cancelAnimationFrame(frame)
-  }, [currentRun?.error, currentRun?.responseText, historyQuery.data, selectedSessionId])
+  }, [currentRun?.error, currentRun?.systemEvents, currentRun?.turns, historyQuery.data, selectedSessionId])
 
   function selectSession(sessionId: string) {
     setSearchParams({ session: sessionId })
@@ -82,13 +90,30 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   function submitPrompt(event: FormEvent) {
     event.preventDefault()
-    if (!selectedSessionId || isActive || prompt.trim().length === 0) return
-    sessionRuns.start({ prompt, sessionId: selectedSessionId })
+    if (!selectedSessionId || prompt.trim().length === 0) return
+    if (!isActive) sessionRuns.start({ prompt, sessionId: selectedSessionId })
+    else void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败'))
   }
 
   function abortPrompt() {
     if (!selectedSessionId || status !== 'running') return
     void sessionRuns.stop(selectedSessionId)
+  }
+
+  async function openControls() {
+    if (!selectedSessionId) return
+    setControlError(undefined)
+    setControlOpen(true)
+    try {
+      const [state, availableModels, levels] = await Promise.all([
+        sessionRuns.getRuntimeState(selectedSessionId), sessionRuns.getAvailableModels(selectedSessionId), sessionRuns.getAvailableThinkingLevels(selectedSessionId),
+      ])
+      setModels(availableModels)
+      setThinkingLevels(levels)
+      if (state.model?.id && state.model.provider) useWorkspaceStore.getState().updateRun(selectedSessionId, { model: `${state.model.provider}/${state.model.id}` })
+    } catch (cause) {
+      setControlError(cause instanceof Error ? cause.message : '无法读取 Pi 运行状态')
+    }
   }
 
   async function handleRename(sessionId: string, name: string) {
@@ -175,19 +200,26 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             <h1 className="truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>
               {selectedSession ? sessionDisplayName(selectedSession) : '选择一个会话'}
             </h1>
+            {selectedSession && <Button asChild className="ml-auto" size="sm" variant="ghost"><Link to={`/settings?session=${encodeURIComponent(selectedSession.id)}`}><Settings aria-hidden="true" />设置</Link></Button>}
           </header>
 
           <div className="min-h-0 flex-1" ref={messageScrollAreaRef}>
             <ScrollArea className="h-full">
               <div className="mx-auto flex w-full max-w-[920px] flex-col gap-4 px-4 py-6 sm:px-6">
-                <SessionTimeline error={historyQuery.isError} history={historyQuery.data} isLoading={historyQuery.isPending} onRetry={() => void historyQuery.refetch()} />
+                <SessionTimeline
+                  error={historyQuery.isError}
+                  history={isActive ? undefined : historyQuery.data}
+                  isLoading={!isActive && historyQuery.isPending}
+                  isRunning={isActive}
+                  onRetry={() => void historyQuery.refetch()}
+                  systemEvents={currentRun?.systemEvents}
+                  turns={currentRun?.turns}
+                />
                 <section className="space-y-3">
+                  {extensionWidgets[selectedSessionId]?.length ? <pre className="rounded border bg-muted p-2 text-xs">{extensionWidgets[selectedSessionId]?.join('\n')}</pre> : null}
                   {isActive && (
                     <div aria-live="polite">
                       <p className="text-xs font-medium text-warning">{sessionStatusLabel(status)}</p>
-                      {currentRun?.responseText ? (
-                        <pre className="whitespace-pre-wrap break-words text-base leading-7">{currentRun.responseText}</pre>
-                      ) : <p className="text-sm text-muted-foreground">正在等待回复…</p>}
                     </div>
                   )}
                   {currentRun?.error && (
@@ -196,16 +228,16 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                       {currentRun.error}
                     </p>
                   )}
+                  {controlError && <p className="text-xs text-destructive" role="alert">{controlError}</p>}
                 </section>
               </div>
             </ScrollArea>
           </div>
-          <div className="shrink-0 bg-gradient-to-t from-background via-background to-transparent px-4 pb-4 pt-8 sm:px-6">
-            <form className="mx-auto flex h-[100px] w-full max-w-[920px] flex-col gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:px-6" onSubmit={(event) => void submitPrompt(event)}>
+            <form className="mx-auto mb-4 flex h-[100px] w-[calc(100%-2rem)] max-w-[920px] shrink-0 flex-col gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:w-[calc(100%-3rem)] sm:px-6" onSubmit={(event) => void submitPrompt(event)}>
               <label className="sr-only" htmlFor="prompt">向当前 Pi 会话发送提示词</label>
               <Textarea
                 className="min-h-0! flex-1 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
-                disabled={!selectedSession || isActive}
+                disabled={!selectedSession}
                 id="prompt"
                 maxLength={20_000}
                 onChange={(event) => selectedSessionId && setDraft(selectedSessionId, event.target.value)}
@@ -214,11 +246,13 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 value={prompt}
               />
               <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 text-sm text-warning">
-                  <ShieldAlert aria-hidden="true" className="size-4" />
-                  工具：已禁用
-                </span>
+                {extensionStatus[selectedSessionId] && <span className="text-xs text-muted-foreground">{extensionStatus[selectedSessionId]}</span>}
+                {isActive && <div className="flex gap-1 text-xs"><Button onClick={() => setQueueMode('steer')} size="sm" type="button" variant={queueMode === 'steer' ? 'secondary' : 'ghost'}>Steer</Button><Button onClick={() => setQueueMode('follow_up')} size="sm" type="button" variant={queueMode === 'follow_up' ? 'secondary' : 'ghost'}>Follow-up</Button></div>}
                 <div className="ml-auto flex items-center gap-2">
+                  <Button aria-label="Pi 运行控制" className="hidden max-w-48 text-foreground sm:inline-flex" disabled={!selectedSession || isActive} onClick={() => void openControls()} size="sm" type="button" variant="ghost">
+                    <span className="truncate">{modelLabel}</span>
+                    <ChevronDown aria-hidden="true" className="text-muted-foreground" />
+                  </Button>
                   <Sheet open={inspectorOpen} onOpenChange={setInspectorOpen}>
                     <SheetTrigger asChild>
                       <Button aria-label="打开会话检查器" className="hidden md:inline-flex xl:hidden" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
@@ -231,13 +265,23 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   </Sheet>
                   {status === 'running' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
+                  {status === 'running' && <Button aria-label={queueMode === 'steer' ? '发送 Steer' : '发送 Follow-up'} className="rounded-full" disabled={prompt.trim().length === 0} size="icon-lg" type="submit"><Send aria-hidden="true" /></Button>}
                   {status !== 'running' && status !== 'aborting' && (
                     <Button aria-label="发送提示词" className="rounded-full" disabled={!selectedSession || prompt.trim().length === 0} size="icon-lg" type="submit"><Send aria-hidden="true" /></Button>
                   )}
                 </div>
               </div>
             </form>
-          </div>
+          <Sheet open={controlOpen} onOpenChange={setControlOpen}>
+            <SheetContent className="space-y-5 overflow-y-auto" side="right">
+              <SheetTitle>Pi 运行控制</SheetTitle>
+              <SheetDescription>直接发送原生 Pi CLI RPC 控制命令。</SheetDescription>
+              {controlError && <p className="text-sm text-destructive">{controlError}</p>}
+              <div className="space-y-2"><p className="text-sm font-medium">模型</p>{models.map((model) => <Button className="w-full justify-start" key={`${model.provider}:${model.id}`} onClick={() => selectedSessionId && void sessionRuns.setModel(selectedSessionId, model.provider, model.id).then(() => setControlOpen(false)).catch((cause) => setControlError(cause instanceof Error ? cause.message : '模型切换失败'))} variant="outline">{model.name ?? `${model.provider}/${model.id}`}</Button>)}</div>
+              <div className="space-y-2"><p className="text-sm font-medium">Thinking</p>{thinkingLevels.map((level) => <Button key={level} onClick={() => selectedSessionId && void sessionRuns.setThinkingLevel(selectedSessionId, level).then(() => setControlOpen(false)).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Thinking 切换失败'))} variant="outline">{level}</Button>)}</div>
+              <Button disabled={isActive} onClick={() => selectedSessionId && void sessionRuns.compact(selectedSessionId).then(() => setControlOpen(false)).catch((cause) => setControlError(cause instanceof Error ? cause.message : '压缩失败'))} variant="secondary">压缩上下文</Button>
+            </SheetContent>
+          </Sheet>
         </section>
         <aside className="hidden min-h-0 border-l bg-card/60 xl:block">{inspector}</aside>
       </div>

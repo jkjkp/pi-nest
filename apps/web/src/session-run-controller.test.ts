@@ -1,126 +1,87 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { PiRuntimeEvent } from './runtime-websocket-client.js'
 import { createSessionRunController } from './session-run-controller.js'
-import type { ServerSentEvent } from './read-sse.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
-type Stream = {
-  complete: () => void
-  emit: (event: string, data: object) => Promise<void>
-}
-
-async function waitFor(assertion: () => void) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      assertion()
-      return
-    } catch {
-      await Promise.resolve()
-    }
+function runtimeMock() {
+  const errors = new Set<(error: { message: string; sessionId?: string }) => void>()
+  const events = new Set<(event: PiRuntimeEvent) => void>()
+  return {
+    abort: vi.fn().mockResolvedValue(undefined),
+    attach: vi.fn().mockResolvedValue(undefined),
+    onError: vi.fn((listener: (error: { message: string; sessionId?: string }) => void) => { errors.add(listener); return () => errors.delete(listener) }),
+    onPiEvent: vi.fn((listener: (event: PiRuntimeEvent) => void) => { events.add(listener); return () => events.delete(listener) }),
+    prompt: vi.fn().mockResolvedValue(undefined),
+    emit: (event: PiRuntimeEvent) => { for (const listener of events) listener(event) },
+    fail: (error: { message: string; sessionId?: string }) => { for (const listener of errors) listener(error) },
   }
-  assertion()
 }
 
-function createStreamingDependencies() {
-  const streams = new Map<string, Stream>()
-  const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
-    const sessionId = String(input).split('/').at(-2)!
-    return new Response(null, { headers: { 'x-session-id': sessionId } })
-  })
-  const readSseFn = vi.fn(async (response: Response, onEvent: (event: ServerSentEvent) => Promise<void> | void) => {
-    const sessionId = response.headers.get('x-session-id')!
-    let resolve!: () => void
-    const done = new Promise<void>((doneResolve) => {
-      resolve = doneResolve
-    })
-    streams.set(sessionId, {
-      complete: resolve,
-      emit: async (event, data) => {
-        await onEvent({ data: JSON.stringify(data), event })
-      },
-    })
-    await done
-  })
-
-  return { fetchFn, readSseFn, streams }
-}
+async function tick() { await Promise.resolve(); await Promise.resolve() }
 
 describe('session run controller', () => {
-  beforeEach(() => {
-    useWorkspaceStore.setState({ runs: {} })
-  })
+  beforeEach(() => useWorkspaceStore.setState({ runs: {} }))
+  afterEach(() => vi.unstubAllGlobals())
 
-  it('keeps concurrent session streams isolated and rejects a local duplicate', async () => {
-    const { fetchFn, readSseFn, streams } = createStreamingDependencies()
+  it('attaches before prompting and completes from native Pi events', async () => {
+    const runtime = runtimeMock()
     const invalidateHistory = vi.fn()
-    const controller = createSessionRunController({ fetchFn, invalidateHistory, readSseFn })
+    const controller = createSessionRunController({ invalidateHistory, runtime: runtime as never })
 
-    expect(controller.start({ prompt: 'A', sessionId: 'session-a' })).toBe(true)
-    expect(controller.start({ prompt: 'B', sessionId: 'session-b' })).toBe(true)
+    expect(controller.start({ prompt: 'hello', sessionId: 'session-a' })).toBe(true)
     expect(controller.start({ prompt: 'again', sessionId: 'session-a' })).toBe(false)
-    await waitFor(() => expect(streams.size).toBe(2))
+    await tick()
+    expect(runtime.attach).toHaveBeenCalledWith('session-a')
+    expect(runtime.prompt).toHaveBeenCalledWith('session-a', 'hello')
 
-    await streams.get('session-a')!.emit('text_delta', { delta: 'A1' })
-    await streams.get('session-b')!.emit('text_delta', { delta: 'B1' })
-    await streams.get('session-a')!.emit('text_delta', { delta: 'A2' })
-
-    expect(useWorkspaceStore.getState().runs).toMatchObject({
-      'session-a': { responseText: 'A1A2', status: 'running', textDeltaCount: 2 },
-      'session-b': { responseText: 'B1', status: 'running', textDeltaCount: 1 },
-    })
-    expect(fetchFn).toHaveBeenCalledTimes(2)
-
-    await streams.get('session-a')!.emit('complete', { model: { id: 'model', provider: 'provider' }, stopReason: 'stop' })
-    streams.get('session-a')!.complete()
-    await waitFor(() => expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete'))
-    expect(useWorkspaceStore.getState().runs['session-b']?.status).toBe('running')
-    await waitFor(() => expect(invalidateHistory).toHaveBeenCalledWith('session-a'))
-
-    await streams.get('session-b')!.emit('complete', { stopReason: 'stop' })
-    streams.get('session-b')!.complete()
-    await waitFor(() => expect(useWorkspaceStore.getState().runs['session-b']?.status).toBe('complete'))
+    runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Hi' } }, observedAt: 'now', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
+    runtime.emit({ event: { type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } }, observedAt: 'now', sequence: 2, sessionId: 'session-a', turnId: 'turn-1' })
+    runtime.emit({ event: { type: 'turn_end' }, observedAt: 'now', sequence: 3, sessionId: 'session-a', turnId: 'turn-1' })
+    runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', sequence: 4, sessionId: 'session-a' })
+    const completed = useWorkspaceStore.getState().runs['session-a']
+    expect(completed).toMatchObject({ status: 'complete', stopReason: 'stop' })
+    expect(completed?.turns[0]).toMatchObject({ id: 'turn-1', prompt: 'hello' })
+    expect(completed?.turns[0]?.events.map((event) => event.event.type)).toEqual(['message_update', 'message_end', 'turn_end'])
+    expect(completed?.systemEvents.map((event) => event.event.type)).toEqual(['agent_settled'])
+    expect(invalidateHistory).toHaveBeenCalledWith('session-a')
   })
 
-  it('stops only the requested session and waits for its aborted SSE completion', async () => {
-    const { fetchFn, readSseFn, streams } = createStreamingDependencies()
-    fetchFn.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === 'POST' && String(input).endsWith('/abort')) return new Response(null, { status: 202 })
-      const sessionId = String(input).split('/').at(-2)!
-      return new Response(null, { headers: { 'x-session-id': sessionId } })
-    })
-    const controller = createSessionRunController({ fetchFn, invalidateHistory: vi.fn(), readSseFn })
-
+  it('aborts only the requested attached session and handles runtime errors', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: 'A', sessionId: 'session-a' })
     controller.start({ prompt: 'B', sessionId: 'session-b' })
-    await waitFor(() => expect(streams.size).toBe(2))
+    await tick()
 
     await expect(controller.stop('session-a')).resolves.toBe(true)
-    expect(useWorkspaceStore.getState().runs).toMatchObject({
-      'session-a': { status: 'aborting' },
-      'session-b': { status: 'running' },
-    })
-    expect(fetchFn).toHaveBeenLastCalledWith('/api/sessions/session-a/abort', { method: 'POST' })
-
-    await streams.get('session-a')!.emit('complete', { stopReason: 'aborted' })
-    streams.get('session-a')!.complete()
-    await waitFor(() => expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('aborted'))
+    expect(runtime.abort).toHaveBeenCalledWith('session-a')
     expect(useWorkspaceStore.getState().runs['session-b']?.status).toBe('running')
-
-    await streams.get('session-b')!.emit('complete', { stopReason: 'stop' })
-    streams.get('session-b')!.complete()
-    await waitFor(() => expect(useWorkspaceStore.getState().runs['session-b']?.status).toBe('complete'))
+    runtime.fail({ message: 'prompt failed', sessionId: 'session-b' })
+    expect(useWorkspaceStore.getState().runs['session-b']).toMatchObject({ error: 'prompt failed', status: 'error' })
   })
 
-  it('records safe HTTP failures and permits a later retry after cleanup', async () => {
-    const fetchFn = vi
-      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Pi session is already running' }), { status: 409 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Pi session is already running' }), { status: 409 }))
-    const controller = createSessionRunController({ fetchFn, invalidateHistory: vi.fn() })
+  it('restores an active turn after refresh and clears its session-only marker when Pi settles', async () => {
+    const storage = new Map<string, string>([['pi-nest-active-runtime-sessions', JSON.stringify(['session-a'])]])
+    vi.stubGlobal('window', {
+      sessionStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+      },
+    })
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
 
-    expect(controller.start({ prompt: 'A', sessionId: 'session-a' })).toBe(true)
-    await waitFor(() => expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('error'))
-    expect(useWorkspaceStore.getState().runs['session-a']?.error).toBe('Pi session is already running')
-    expect(controller.start({ prompt: 'retry', sessionId: 'session-a' })).toBe(true)
+    controller.resume()
+    await tick()
+    expect(runtime.attach).toHaveBeenCalledWith('session-a', 0)
+    runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Recovered' } }, observedAt: 'now', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
+    runtime.emit({ event: { type: 'turn_end' }, observedAt: 'now', sequence: 2, sessionId: 'session-a', turnId: 'turn-1' })
+    runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', sequence: 3, sessionId: 'session-a' })
+    const recovered = useWorkspaceStore.getState().runs['session-a']
+    expect(recovered?.status).toBe('complete')
+    expect(recovered?.turns[0]?.events.map((event) => event.event.type)).toEqual(['message_update', 'turn_end'])
+    expect(recovered?.systemEvents.map((event) => event.event.type)).toEqual(['agent_settled'])
+    expect(storage.get('pi-nest-active-runtime-sessions')).toBe('[]')
   })
 })

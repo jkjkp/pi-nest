@@ -1,6 +1,17 @@
 import type { PiSessionHistoryResponse } from './history.js'
 import type { PiSessionSummary } from './workspace.js'
 
+export type PiRuntimeSettings = {
+  compactionEnabled: boolean
+  defaultModel?: string
+  defaultProvider?: string
+  defaultThinkingLevel?: string
+  followUpMode: 'all' | 'one-at-a-time'
+  retryEnabled: boolean
+  steeringMode: 'all' | 'one-at-a-time'
+}
+export type PiSettingsSnapshot = { effective: PiRuntimeSettings; global: PiRuntimeSettings; project: Partial<PiRuntimeSettings> }
+
 async function fetchJson<T>(url: string) {
   const response = await fetch(url)
   if (!response.ok) throw new Error(`Request failed with status ${response.status}`)
@@ -33,4 +44,18 @@ export async function renameSession(sessionId: string, name: string) {
     method: 'PATCH',
   })
   if (!response.ok) throw new Error('Failed to rename Pi session')
+}
+
+export async function fetchSessionSettings(sessionId: string) {
+  const body = await fetchJson<{ settings?: PiSettingsSnapshot }>(`${sessionUrl(sessionId)}/settings`)
+  if (!body.settings) throw new Error('Invalid Pi settings response')
+  return body.settings
+}
+
+export async function saveSessionSettings(sessionId: string, settings: Partial<PiRuntimeSettings>) {
+  const response = await fetch(`${sessionUrl(sessionId)}/settings`, { body: JSON.stringify(settings), headers: { 'content-type': 'application/json' }, method: 'PATCH' })
+  if (!response.ok) throw new Error('Failed to save Pi settings')
+  const body = await response.json() as { settings?: PiSettingsSnapshot }
+  if (!body.settings) throw new Error('Invalid Pi settings response')
+  return body.settings
 }

@@ -1,120 +1,141 @@
-import { readSse, type ServerSentEvent } from './read-sse.js'
+import { isRuntimeConnectionError, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
-type FetchFn = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
-type ReadSseFn = (response: Response, onEvent: (event: ServerSentEvent) => Promise<void> | void) => Promise<void>
-
 type SessionRunControllerOptions = {
-  fetchFn?: FetchFn
   invalidateHistory: (sessionId: string) => void | Promise<void>
-  readSseFn?: ReadSseFn
+  runtime: RuntimeWebSocketClient
 }
 
-type StartSessionRunOptions = {
-  prompt: string
-  sessionId: string
-}
-
-type ActiveRun = { controller: AbortController }
+type StartSessionRunOptions = { prompt: string; sessionId: string }
+type ActiveRun = { stopReason: string | undefined }
 
 export type SessionRunController = {
+  compact: (sessionId: string) => Promise<void>
+  followUp: (sessionId: string, message: string) => Promise<void>
+  getAvailableModels: (sessionId: string) => Promise<PiRuntimeModel[]>
+  getAvailableThinkingLevels: (sessionId: string) => Promise<string[]>
+  getRuntimeState: (sessionId: string) => Promise<PiRuntimeState>
+  resume: () => void
+  setModel: (sessionId: string, provider: string, modelId: string) => Promise<void>
+  setThinkingLevel: (sessionId: string, level: string) => Promise<void>
   start: (options: StartSessionRunOptions) => boolean
+  steer: (sessionId: string, message: string) => Promise<void>
   stop: (sessionId: string) => Promise<boolean>
 }
 
-type PromptEvent = {
-  delta?: string
-  message?: string
-  model?: { id: string; provider: string }
-  stopReason?: string
+const recoveryKey = 'pi-nest-active-runtime-sessions'
+
+function savedActiveSessions() {
+  if (typeof window === 'undefined') return [] as string[]
+  try {
+    const saved = JSON.parse(window.sessionStorage.getItem(recoveryKey) ?? '[]')
+    return Array.isArray(saved) ? saved.filter((sessionId): sessionId is string => typeof sessionId === 'string') : []
+  } catch {
+    return []
+  }
 }
 
-function errorMessage(cause: unknown, fallback: string) {
-  return cause instanceof Error ? cause.message : fallback
+function saveActiveSessions(sessionIds: Iterable<string>) {
+  try {
+    if (typeof window !== 'undefined') window.sessionStorage.setItem(recoveryKey, JSON.stringify([...sessionIds]))
+  } catch {
+    // sessionStorage is only a recovery hint; Pi keeps running without it.
+  }
 }
 
-export function createSessionRunController({
-  fetchFn = fetch,
-  invalidateHistory,
-  readSseFn = readSse,
-}: SessionRunControllerOptions): SessionRunController {
+function assistantStopReason(event: PiRuntimeEvent) {
+  if (event.event.type !== 'message_end') return undefined
+  const message = event.event.message
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return undefined
+  const candidate = message as Record<string, unknown>
+  return candidate.role === 'assistant' && typeof candidate.stopReason === 'string' ? candidate.stopReason : undefined
+}
+
+export function createSessionRunController({ invalidateHistory, runtime }: SessionRunControllerOptions): SessionRunController {
   const activeRuns = new Map<string, ActiveRun>()
+  const save = () => saveActiveSessions(activeRuns.keys())
 
-  const run = async (sessionId: string, prompt: string, activeRun: ActiveRun) => {
-    let terminalEvent = false
-
-    try {
-      const response = await fetchFn(`/api/sessions/${encodeURIComponent(sessionId)}/prompts`, {
-        body: JSON.stringify({ prompt }),
-        headers: { 'content-type': 'application/json' },
-        method: 'POST',
-        signal: activeRun.controller.signal,
-      })
-
-      await readSseFn(response, ({ data, event }) => {
-        const payload = JSON.parse(data) as PromptEvent
-
-        if (event === 'text_delta' && typeof payload.delta === 'string') {
-          useWorkspaceStore.getState().appendRunDelta(sessionId, payload.delta)
-          return
-        }
-
-        if (event === 'complete') {
-          terminalEvent = true
-          useWorkspaceStore.getState().updateRun(sessionId, {
-            model: payload.model && `${payload.model.provider}/${payload.model.id}`,
-            status: payload.stopReason === 'aborted' ? 'aborted' : 'complete',
-            stopReason: payload.stopReason,
-          })
-          return
-        }
-
-        if (event === 'error') {
-          terminalEvent = true
-          throw new Error(payload.message ?? 'Pi session prompt failed')
-        }
-      })
-
-      if (!terminalEvent) throw new Error('Pi session stream ended without a result')
-    } catch (cause) {
-      useWorkspaceStore.getState().updateRun(sessionId, {
-        error: errorMessage(cause, 'Pi session prompt failed'),
-        status: 'error',
-      })
-    } finally {
-      if (activeRuns.get(sessionId) === activeRun) activeRuns.delete(sessionId)
-      void invalidateHistory(sessionId)
-    }
+  function fail(sessionId: string, message: string) {
+    if (!activeRuns.delete(sessionId)) return
+    save()
+    useWorkspaceStore.getState().updateRun(sessionId, { error: message, status: 'error' })
+    void invalidateHistory(sessionId)
   }
 
+  runtime.onPiEvent((event) => {
+    const activeRun = activeRuns.get(event.sessionId)
+    if (!activeRun) return
+    useWorkspaceStore.getState().appendRunEvent(event.sessionId, event)
+    activeRun.stopReason ??= assistantStopReason(event)
+    if (event.event.type !== 'agent_settled') return
+
+    activeRuns.delete(event.sessionId)
+    save()
+    useWorkspaceStore.getState().updateRun(event.sessionId, {
+      status: activeRun.stopReason === 'aborted' ? 'aborted' : 'complete',
+      stopReason: activeRun.stopReason ?? 'stop',
+    })
+    void invalidateHistory(event.sessionId)
+  })
+
+  runtime.onError((error) => {
+    const sessionIds = error.sessionId ? [error.sessionId] : [...activeRuns.keys()]
+    for (const sessionId of sessionIds) fail(sessionId, error.message)
+  })
+
   return {
+    compact: (sessionId) => runtime.compact(sessionId),
+    followUp: (sessionId, message) => runtime.followUp(sessionId, message),
+    getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,
+    getAvailableThinkingLevels: async (sessionId) => (await runtime.getAvailableThinkingLevels(sessionId)).levels,
+    getRuntimeState: (sessionId) => runtime.getRuntimeState(sessionId),
+    resume: () => {
+      for (const sessionId of savedActiveSessions()) {
+        if (activeRuns.has(sessionId)) continue
+        activeRuns.set(sessionId, { stopReason: undefined })
+        useWorkspaceStore.getState().setRun(sessionId, { status: 'running', systemEvents: [], turns: [] })
+        void runtime.attach(sessionId, 0).catch((cause) => {
+          if (!isRuntimeConnectionError(cause)) fail(sessionId, cause instanceof Error ? cause.message : 'Pi session replay failed')
+        })
+      }
+      save()
+    },
+    setModel: (sessionId, provider, modelId) => runtime.setModel(sessionId, provider, modelId),
+    setThinkingLevel: (sessionId, level) => runtime.setThinkingLevel(sessionId, level),
     start: ({ prompt, sessionId }) => {
       if (activeRuns.has(sessionId)) return false
-
-      const activeRun = { controller: new AbortController() }
-      activeRuns.set(sessionId, activeRun)
-      useWorkspaceStore.getState().setRun(sessionId, { responseText: '', status: 'running', textDeltaCount: 0 })
-      void run(sessionId, prompt, activeRun)
+      activeRuns.set(sessionId, { stopReason: undefined })
+      save()
+      useWorkspaceStore.getState().setRun(sessionId, {
+        status: 'running',
+        systemEvents: [],
+        turns: [{ events: [], id: `pending:${sessionId}`, prompt, startedAt: new Date().toISOString() }],
+      })
+      void (async () => {
+        try {
+          await runtime.attach(sessionId)
+          await runtime.prompt(sessionId, prompt)
+        } catch (cause) {
+          if (!isRuntimeConnectionError(cause)) fail(sessionId, cause instanceof Error ? cause.message : 'Pi session prompt failed')
+        }
+      })()
       return true
     },
     stop: async (sessionId) => {
-      const activeRun = activeRuns.get(sessionId)
-      if (!activeRun || useWorkspaceStore.getState().runs[sessionId]?.status !== 'running') return false
-
+      if (!activeRuns.has(sessionId) || useWorkspaceStore.getState().runs[sessionId]?.status !== 'running') return false
       useWorkspaceStore.getState().updateRun(sessionId, { error: undefined, status: 'aborting' })
       try {
-        const response = await fetchFn(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST' })
-        if (response.status !== 202) throw new Error('Pi session could not be stopped')
+        await runtime.abort(sessionId)
         return true
       } catch (cause) {
-        if (activeRuns.get(sessionId) === activeRun) {
+        if (activeRuns.has(sessionId)) {
           useWorkspaceStore.getState().updateRun(sessionId, {
-            error: errorMessage(cause, 'Pi session could not be stopped'),
-            status: 'running',
+            error: cause instanceof Error ? cause.message : 'Pi session could not be stopped', status: 'running',
           })
         }
         return false
       }
     },
+    steer: (sessionId, message) => runtime.steer(sessionId, message),
   }
 }

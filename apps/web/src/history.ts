@@ -1,24 +1,15 @@
 import type { PiSessionSummary } from './workspace.js'
 
-export type PiSessionHistoryMessage = {
-  hasOmittedContent?: boolean
+export type PiSessionHistoryEntry = {
   id: string
-  kind: 'message'
-  role: 'assistant' | 'user'
-  stopReason?: string
-  text: string
+  parentId: string | null
+  raw: Record<string, unknown>
   timestamp: string
-}
-
-export type PiSessionHistoryOmitted = {
-  count: number
-  kind: 'omitted'
-  label: '未展示的原生事件'
-  timestamp: string
+  type: string
 }
 
 export type PiSessionHistoryResponse = {
-  entries: Array<PiSessionHistoryMessage | PiSessionHistoryOmitted>
+  entries: PiSessionHistoryEntry[]
   hasEarlier: boolean
   session: PiSessionSummary
 }

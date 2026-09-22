@@ -68,19 +68,19 @@ describe('workspace presentation helpers', () => {
     expect(projects).toHaveLength(2)
   })
 
-  it('appends stream deltas to only the target session', () => {
+  it('appends native events to only the matching session turn', () => {
     useWorkspaceStore.setState({
       runs: {
-        first: { responseText: 'A', status: 'running', textDeltaCount: 1 },
-        second: { responseText: 'B', status: 'running', textDeltaCount: 1 },
+        first: { status: 'running', systemEvents: [], turns: [{ events: [], id: 'turn-1', startedAt: 'now' }] },
+        second: { status: 'running', systemEvents: [], turns: [{ events: [], id: 'turn-2', startedAt: 'now' }] },
       },
     })
 
-    useWorkspaceStore.getState().appendRunDelta('first', 'C')
+    useWorkspaceStore.getState().appendRunEvent('first', { event: { type: 'unknown_event' }, observedAt: 'now', sequence: 1, sessionId: 'first', turnId: 'turn-1' })
 
     expect(useWorkspaceStore.getState().runs).toMatchObject({
-      first: { responseText: 'AC', textDeltaCount: 2 },
-      second: { responseText: 'B', textDeltaCount: 1 },
+      first: { turns: [{ events: [{ event: { type: 'unknown_event' } }] }] },
+      second: { turns: [{ events: [] }] },
     })
   })
 
@@ -118,22 +118,22 @@ describe('workspace presentation helpers', () => {
       error: undefined,
       model: '当前不可用',
       stopReason: '当前不可用',
-      textDeltaCount: '当前不可用',
+      eventCount: '当前不可用',
     })
     expect(
       runInspectorFields({
         error: 'safe failure',
         model: 'provider/model',
-        responseText: 'text',
         status: 'aborted',
         stopReason: 'aborted',
-        textDeltaCount: 3,
+        systemEvents: [{ event: { type: 'model_change' }, observedAt: 'now', sequence: 1, sessionId: 'first' }],
+        turns: [{ events: [{ event: { type: 'message_update' }, observedAt: 'now', sequence: 2, sessionId: 'first', turnId: 'turn-1' }], id: 'turn-1', startedAt: 'now' }],
       }),
     ).toEqual({
       error: 'safe failure',
       model: 'provider/model',
       stopReason: 'aborted',
-      textDeltaCount: '3',
+      eventCount: '2',
     })
   })
 })

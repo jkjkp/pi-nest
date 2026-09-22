@@ -8,28 +8,21 @@ describe('session history presentation contract', () => {
     expect(sessionHistoryQueryKey('second')).not.toEqual(sessionHistoryQueryKey('first'))
   })
 
-  it('models only safe timeline entries for the browser', () => {
+  it('models complete native timeline entries for the browser', () => {
     const response: PiSessionHistoryResponse = {
       entries: [
         {
           id: 'assistant-1',
-          kind: 'message',
-          role: 'assistant',
-          stopReason: 'aborted',
-          text: 'safe text',
+          parentId: 'user-1',
+          raw: { id: 'assistant-1', message: { content: 'raw text', role: 'assistant' }, nested: { value: true }, type: 'message' },
           timestamp: '2026-09-21T00:00:00.000Z',
-        },
-        {
-          count: 2,
-          kind: 'omitted',
-          label: '未展示的原生事件',
-          timestamp: '2026-09-21T00:00:01.000Z',
+          type: 'message',
         },
       ],
       hasEarlier: false,
       session: { cwd: '/safe/project', id: 'session-1', updatedAt: '2026-09-21T00:00:00.000Z' },
     }
 
-    expect(response.entries[1]).toMatchObject({ count: 2, label: '未展示的原生事件' })
+    expect(response.entries[0]?.raw).toMatchObject({ nested: { value: true } })
   })
 })

@@ -2,16 +2,18 @@ import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 
 import type { NavigationOrder } from './navigation-order.js'
+import type { RuntimeTurn } from './timeline-model.js'
+import type { PiRuntimeEvent } from './runtime-websocket-client.js'
 
 export type PromptStatus = 'idle' | 'running' | 'aborting' | 'aborted' | 'complete' | 'error'
 
 export type SessionRunSummary = {
   error?: string
   model?: string
-  responseText: string
   status: PromptStatus
   stopReason?: string
-  textDeltaCount?: number
+  systemEvents: PiRuntimeEvent[]
+  turns: RuntimeTurn[]
 }
 
 const unavailableStorage = {
@@ -23,14 +25,18 @@ const unavailableStorage = {
 type WorkspaceState = {
   collapsedProjectKeys: Record<string, boolean>
   drafts: Record<string, string>
+  extensionStatus: Record<string, string | undefined>
+  extensionWidgets: Record<string, string[]>
   inspectorOpen: boolean
   inspectorWidth: number
   navigationOpen: boolean
   navigationWidth: number
-  appendRunDelta: (sessionId: string, delta: string) => void
+  appendRunEvent: (sessionId: string, event: PiRuntimeEvent) => void
   runs: Record<string, SessionRunSummary>
   navigationOrder: NavigationOrder
   setDraft: (sessionId: string, draft: string) => void
+  setExtensionStatus: (sessionId: string, status: string | undefined) => void
+  setExtensionWidget: (sessionId: string, lines: string[]) => void
   setInspectorOpen: (open: boolean) => void
   setNavigationOpen: (open: boolean) => void
   setNavigationOrder: (order: NavigationOrder) => void
@@ -43,29 +49,49 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist((set) => ({
   collapsedProjectKeys: {},
   drafts: {},
+  extensionStatus: {},
+  extensionWidgets: {},
   inspectorOpen: false,
   inspectorWidth: 300,
   navigationOpen: false,
   navigationWidth: 272,
   navigationOrder: { projectOrder: [], sessionOrderByProject: {} },
   runs: {},
-  appendRunDelta: (sessionId, delta) =>
+  appendRunEvent: (sessionId, event) =>
     set((state) => {
       const run = state.runs[sessionId]
       if (!run) return state
 
+      if (!event.turnId) {
+        return {
+          runs: {
+            ...state.runs,
+            [sessionId]: { ...run, systemEvents: [...run.systemEvents, event] },
+          },
+        }
+      }
+
+      const existingIndex = run.turns.findIndex((turn) => turn.id === event.turnId)
+      const pendingIndex = run.turns.findIndex((turn) => turn.id === `pending:${sessionId}`)
+      const index = existingIndex >= 0 ? existingIndex : pendingIndex
+      const turns = [...run.turns]
+      if (index >= 0) {
+        const current = turns[index]!
+        turns[index] = { ...current, events: [...current.events, event], id: existingIndex >= 0 ? current.id : event.turnId }
+      } else {
+        turns.push({ events: [event], id: event.turnId, startedAt: event.observedAt })
+      }
+
       return {
         runs: {
           ...state.runs,
-          [sessionId]: {
-            ...run,
-            responseText: run.responseText + delta,
-            textDeltaCount: (run.textDeltaCount ?? 0) + 1,
-          },
+          [sessionId]: { ...run, turns },
         },
       }
     }),
   setDraft: (sessionId, draft) => set((state) => ({ drafts: { ...state.drafts, [sessionId]: draft } })),
+  setExtensionStatus: (sessionId, status) => set((state) => ({ extensionStatus: { ...state.extensionStatus, [sessionId]: status } })),
+  setExtensionWidget: (sessionId, lines) => set((state) => ({ extensionWidgets: { ...state.extensionWidgets, [sessionId]: lines } })),
   setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
   setNavigationOpen: (navigationOpen) => set({ navigationOpen }),
   setNavigationOrder: (navigationOrder) => set({ navigationOrder }),
@@ -76,7 +102,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     set((state) => ({
       runs: {
         ...state.runs,
-        [sessionId]: { ...state.runs[sessionId], responseText: '', status: 'idle', ...update },
+        [sessionId]: state.runs[sessionId]
+          ? { ...state.runs[sessionId], ...update }
+          : { status: 'idle', systemEvents: [], turns: [], ...update },
       },
     })),
     }),
