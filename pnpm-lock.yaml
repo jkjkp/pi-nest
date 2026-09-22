@@ -181,6 +181,9 @@ importers:
       hono:
         specifier: 4.13.8
         version: 4.13.8
+      ws:
+        specifier: 8.21.3
+        version: 8.21.3
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -188,6 +191,9 @@ importers:
       '@types/node':
         specifier: 22.19.19
         version: 22.19.19
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
       tsx:
         specifier: 4.20.6
         version: 4.20.6
@@ -1877,6 +1883,9 @@ packages:
 
   '@types/retry@0.12.0':
     resolution: {integrity: sha512-wWKOClTTiizcZhXnPY4wikVAwmdYHp8q6DmC+EJUzAMsycb7HB32Kh9RN4+0gExjmPmZSAQjgURXIGATPegAvA==}
+
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   '@vitejs/plugin-react@6.1.1':
     resolution: {integrity: sha512-yxLaQV9gkhS8ezJqCM6+ndU7mDY6gqAg75NQ+0IjwEI8IYOmQCgkRwHKVSfWXW076DsqMo0Dk+0FK1U+M5RgFw==}
@@ -4230,6 +4239,10 @@ snapshots:
       csstype: 3.2.3
 
   '@types/retry@0.12.0': {}
+
+  '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 24.13.6
 
   '@vitejs/plugin-react@6.1.1(vite@8.3.0(@types/node@24.13.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.20.6)(yaml@2.9.0))':
     dependencies:

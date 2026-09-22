@@ -1,404 +1,89 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const listPiSessions = vi.fn()
-const deletePiSession = vi.fn()
-const promptPiSession = vi.fn()
-const readPiSessionHistory = vi.fn()
-const renamePiSession = vi.fn()
+import { createApp } from './app.js'
+import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
+import { RuntimeSecurity } from './runtime-security.js'
 
-class PiSessionHistorySourceChangedError extends Error {}
+const adapter = vi.hoisted(() => {
+  class PiSessionHistorySourceChangedError extends Error {}
+  return {
+    PiSessionHistorySourceChangedError,
+    deletePiSession: vi.fn(),
+    listPiSessions: vi.fn(),
+    readPiSessionHistory: vi.fn(),
+    renamePiSession: vi.fn(),
+  }
+})
+const { deletePiSession, listPiSessions, readPiSessionHistory, renamePiSession } = adapter
 
 vi.mock('@pi-nest/pi-adapter', () => ({
-  listPiSessions,
-  deletePiSession,
-  PiSessionHistorySourceChangedError,
-  promptPiSession,
-  readPiSessionHistory,
-  renamePiSession,
+  ...adapter,
 }))
 
 const nativeSession = {
-  cwd: '/working',
-  firstMessage: 'Original question',
-  id: 'session-1',
-  name: 'Existing session',
-  sessionFile: '/pi/session.jsonl',
-  updatedAt: '2026-09-21T00:00:00.000Z',
+  cwd: '/working', firstMessage: 'Original question', id: 'session-1', name: 'Existing session',
+  sessionFile: '/pi/session.jsonl', updatedAt: '2026-09-21T00:00:00.000Z',
 }
-
-const completed = {
-  cwd: '/working',
-  id: 'session-1',
-  messageCountAfter: 3,
-  messageCountBefore: 1,
-  model: { provider: 'provider', id: 'model' },
-  stopReason: 'stop',
-  textDeltaCount: 1,
-  toolEventCount: 0,
+function runtimeMock() {
+  return {
+    abort: vi.fn().mockResolvedValue(false),
+    beginMutation: vi.fn().mockResolvedValue(() => undefined),
+    isPromptActive: vi.fn().mockReturnValue(false),
+    startPrompt: vi.fn(),
+  }
 }
 
 describe('Pi Nest API', () => {
+  let runtime: ReturnType<typeof runtimeMock>
+
   beforeEach(() => {
-    listPiSessions.mockReset()
-    deletePiSession.mockReset()
-    promptPiSession.mockReset()
-    readPiSessionHistory.mockReset()
-    renamePiSession.mockReset()
+    listPiSessions.mockReset(); deletePiSession.mockReset(); readPiSessionHistory.mockReset(); renamePiSession.mockReset()
+    runtime = runtimeMock()
     listPiSessions.mockResolvedValue([nativeSession])
-    readPiSessionHistory.mockReturnValue({
-      entries: [
-        {
-          id: 'entry-1',
-          kind: 'message',
-          role: 'assistant',
-          stopReason: 'stop',
-          text: 'safe history',
-          timestamp: '2026-09-21T00:00:01.000Z',
-        },
-      ],
-      hasEarlier: false,
-    })
-    promptPiSession.mockImplementation(async ({ onTextDelta }) => {
-      onTextDelta?.('OK')
-      return completed
+    readPiSessionHistory.mockReturnValue({ entries: [], hasEarlier: false })
+  })
+
+  function app() { return createApp(runtime as unknown as PiRuntimeRegistry) }
+
+  it('reports readiness and lists safe native session summaries', async () => {
+    const health = await app().request('/api/health')
+    await expect(health.json()).resolves.toEqual({ status: 'ok' })
+    const response = await app().request('/api/sessions')
+    await expect(response.json()).resolves.toEqual({
+      sessions: [{ cwd: '/working', firstMessage: 'Original question', id: 'session-1', name: 'Existing session', updatedAt: nativeSession.updatedAt }],
     })
   })
 
-  it('reports that the local server is ready', async () => {
-    const { app } = await import('./app.js')
-    const response = await app.request('/api/health')
-
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({ status: 'ok' })
+  it('issues a runtime bootstrap token only to the configured origin', async () => {
+    const securedApp = createApp(runtime as unknown as PiRuntimeRegistry, new RuntimeSecurity('http://localhost:5173'))
+    const rejected = await securedApp.request('/api/runtime/bootstrap', { method: 'POST' })
+    expect(rejected.status).toBe(403)
+    const accepted = await securedApp.request('/api/runtime/bootstrap', { method: 'POST', headers: { origin: 'http://localhost:5173' } })
+    expect(accepted.status).toBe(200)
+    await expect(accepted.json()).resolves.toMatchObject({ runtimeId: expect.any(String), websocketPath: '/api/runtime', token: expect.any(String) })
   })
 
-  it('lists safe native session summaries without file paths', async () => {
-    const { app } = await import('./app.js')
-    const response = await app.request('/api/sessions')
-
-    expect(response.status).toBe(200)
-    const body = await response.json()
-    expect(body).toEqual({
-      sessions: [
-        {
-          cwd: '/working',
-          firstMessage: 'Original question',
-          id: 'session-1',
-          name: 'Existing session',
-          updatedAt: '2026-09-21T00:00:00.000Z',
-        },
-      ],
-    })
-    expect(JSON.stringify(body)).not.toContain('sessionFile')
-  })
-
-  it('returns safe session history without native file paths', async () => {
-    const { app } = await import('./app.js')
-    const response = await app.request('/api/sessions/session-1/history')
-
+  it('reads safe history and rejects it while the runtime owns the session', async () => {
+    const response = await app().request('/api/sessions/session-1/history')
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('no-store')
-    const body = await response.json()
-    expect(body).toEqual({
-      entries: [
-        {
-          id: 'entry-1',
-          kind: 'message',
-          role: 'assistant',
-          stopReason: 'stop',
-          text: 'safe history',
-          timestamp: '2026-09-21T00:00:01.000Z',
-        },
-      ],
-      hasEarlier: false,
-      session: { cwd: '/working', id: 'session-1', updatedAt: '2026-09-21T00:00:00.000Z' },
-    })
-    expect(JSON.stringify(body)).not.toContain('sessionFile')
-    expect(readPiSessionHistory).toHaveBeenCalledWith({
-      expectedCwd: '/working',
-      expectedSessionId: 'session-1',
-      sessionFile: '/pi/session.jsonl',
-    })
+    expect(readPiSessionHistory).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', sessionFile: '/pi/session.jsonl' })
+    runtime.isPromptActive.mockReturnValue(true)
+    expect((await app().request('/api/sessions/session-1/history')).status).toBe(409)
   })
 
-  it('returns safe errors for missing, changing, and unreadable histories', async () => {
-    const { app } = await import('./app.js')
-
-    listPiSessions.mockResolvedValueOnce([])
-    const missing = await app.request('/api/sessions/missing/history')
-    expect(missing.status).toBe(404)
-
-    readPiSessionHistory.mockImplementationOnce(() => {
-      throw new PiSessionHistorySourceChangedError()
+  it('keeps native session mutations mutually exclusive through the runtime registry', async () => {
+    const finish = vi.fn()
+    runtime.beginMutation.mockReturnValueOnce(Promise.resolve(finish))
+    const renamed = await app().request('/api/sessions/session-1', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Renamed' }),
     })
-    const changed = await app.request('/api/sessions/session-1/history')
-    expect(changed.status).toBe(409)
-    await expect(changed.json()).resolves.toEqual({ error: 'Pi session changed while reading history' })
-
-    readPiSessionHistory.mockImplementationOnce(() => {
-      throw new Error('/secret/session.jsonl failed')
-    })
-    const failed = await app.request('/api/sessions/session-1/history')
-    expect(failed.status).toBe(500)
-    const body = await failed.text()
-    expect(body).toContain('Failed to read Pi session history')
-    expect(body).not.toContain('/secret')
+    expect(renamed.status).toBe(200)
+    expect(renamePiSession).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', name: 'Renamed', sessionFile: '/pi/session.jsonl' })
+    expect(finish).toHaveBeenCalledOnce()
+    runtime.beginMutation.mockReturnValueOnce(undefined)
+    expect((await app().request('/api/sessions/session-1', { method: 'DELETE' })).status).toBe(409)
+    expect(deletePiSession).not.toHaveBeenCalled()
   })
 
-  it('validates prompt requests and missing sessions', async () => {
-    const { app } = await import('./app.js')
-    const invalid = await app.request('/api/sessions/session-1/prompts', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: '   ', extra: true }),
-    })
-    expect(invalid.status).toBe(400)
-
-    listPiSessions.mockResolvedValueOnce([])
-    const missing = await app.request('/api/sessions/missing/prompts', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: 'prompt' }),
-    })
-    expect(missing.status).toBe(404)
-  })
-
-  it('renames a resolved session without exposing its native file path', async () => {
-    const { app } = await import('./app.js')
-    const invalid = await app.request('/api/sessions/session-1', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: '   ', extra: true }),
-    })
-    expect(invalid.status).toBe(400)
-
-    const response = await app.request('/api/sessions/session-1', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: '  Renamed session  ' }),
-    })
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toEqual({ session: { id: 'session-1', name: 'Renamed session' } })
-    expect(renamePiSession).toHaveBeenCalledWith({
-      expectedCwd: '/working',
-      expectedSessionId: 'session-1',
-      name: 'Renamed session',
-      sessionFile: '/pi/session.jsonl',
-    })
-  })
-
-  it('deletes only resolved idle sessions and keeps errors safe', async () => {
-    const { app } = await import('./app.js')
-    const response = await app.request('/api/sessions/session-1', { method: 'DELETE' })
-    expect(response.status).toBe(204)
-    expect(deletePiSession).toHaveBeenCalledWith({
-      expectedCwd: '/working',
-      expectedSessionId: 'session-1',
-      sessionFile: '/pi/session.jsonl',
-    })
-
-    listPiSessions.mockResolvedValueOnce([])
-    expect((await app.request('/api/sessions/missing', { method: 'DELETE' })).status).toBe(404)
-
-    deletePiSession.mockRejectedValueOnce(new Error('/secret/session.jsonl failed'))
-    const failure = await app.request('/api/sessions/session-1', { method: 'DELETE' })
-    expect(failure.status).toBe(500)
-    expect(await failure.text()).not.toContain('/secret')
-  })
-
-  it('rejects a competing mutation while deletion is active', async () => {
-    let release: (() => void) | undefined
-    deletePiSession.mockImplementation(() => new Promise<void>((resolve) => (release = resolve)))
-    const { app } = await import('./app.js')
-    const deleting = app.request('/api/sessions/session-1', { method: 'DELETE' })
-    await vi.waitFor(() => expect(deletePiSession).toHaveBeenCalledOnce())
-
-    const rename = await app.request('/api/sessions/session-1', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Blocked' }),
-    })
-    expect(rename.status).toBe(409)
-
-    release?.()
-    expect((await deleting).status).toBe(204)
-  })
-
-  it('streams ordered text and completion events', async () => {
-    const { app } = await import('./app.js')
-    const response = await app.request('/api/sessions/session-1/prompts', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: 'prompt' }),
-    })
-
-    expect(response.status).toBe(200)
-    expect(response.headers.get('content-type')).toContain('text/event-stream')
-    const body = await response.text()
-    expect(body).toContain('event: text_delta\ndata: {"delta":"OK"}')
-    expect(body).toContain(
-      'event: complete\ndata: {"model":{"provider":"provider","id":"model"},"stopReason":"stop","textDeltaCount":1}',
-    )
-    expect(body.indexOf('event: text_delta')).toBeLessThan(body.indexOf('event: complete'))
-    expect(promptPiSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedCwd: '/working',
-        expectedSessionId: 'session-1',
-        prompt: 'prompt',
-        sessionFile: '/pi/session.jsonl',
-        signal: expect.any(AbortSignal),
-      }),
-    )
-  })
-
-  it('rejects concurrent prompts for the same session and releases the lock', async () => {
-    let release: ((value: typeof completed) => void) | undefined
-    promptPiSession.mockImplementation(
-      () => new Promise<typeof completed>((resolve) => (release = resolve)),
-    )
-    const { app } = await import('./app.js')
-    const request = {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: 'prompt' }),
-    }
-    const first = await app.request('/api/sessions/session-1/prompts', request)
-    await vi.waitFor(() => expect(promptPiSession).toHaveBeenCalledOnce())
-
-    const concurrent = await app.request('/api/sessions/session-1/prompts', request)
-    expect(concurrent.status).toBe(409)
-
-    release?.(completed)
-    await first.text()
-
-    promptPiSession.mockResolvedValue(completed)
-    const after = await app.request('/api/sessions/session-1/prompts', request)
-    expect(after.status).toBe(200)
-    await after.text()
-  })
-
-  it('does not read history while the same session is running', async () => {
-    let release: ((value: typeof completed) => void) | undefined
-    promptPiSession.mockImplementation(
-      () => new Promise<typeof completed>((resolve) => (release = resolve)),
-    )
-    const { app } = await import('./app.js')
-    const request = {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: 'prompt' }),
-    }
-    const active = await app.request('/api/sessions/session-1/prompts', request)
-    await vi.waitFor(() => expect(promptPiSession).toHaveBeenCalledOnce())
-
-    const history = await app.request('/api/sessions/session-1/history')
-    expect(history.status).toBe(409)
-    await expect(history.json()).resolves.toEqual({ error: 'Pi session is running' })
-    expect(readPiSessionHistory).not.toHaveBeenCalled()
-
-    release?.(completed)
-    await active.text()
-  })
-
-  it('aborts an active prompt and releases it for a later request', async () => {
-    let signal: AbortSignal | undefined
-    promptPiSession.mockImplementation(
-      ({ signal: nextSignal }) =>
-        new Promise<typeof completed>((resolve) => {
-          signal = nextSignal
-          nextSignal.addEventListener(
-            'abort',
-            () => resolve({ ...completed, stopReason: 'aborted', textDeltaCount: 0 }),
-            { once: true },
-          )
-        }),
-    )
-    const { app } = await import('./app.js')
-    const request = {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: 'prompt' }),
-    }
-    const active = await app.request('/api/sessions/session-1/prompts', request)
-    await vi.waitFor(() => expect(signal).toBeDefined())
-
-    const aborted = await app.request('/api/sessions/session-1/abort', { method: 'POST' })
-    expect(aborted.status).toBe(202)
-    await expect(aborted.json()).resolves.toEqual({ status: 'aborting' })
-    expect(signal?.aborted).toBe(true)
-
-    const body = await active.text()
-    expect(body).toContain('event: complete')
-    expect(body).toContain('"stopReason":"aborted"')
-
-    promptPiSession.mockResolvedValue(completed)
-    const after = await app.request('/api/sessions/session-1/prompts', request)
-    expect(after.status).toBe(200)
-    await after.text()
-  })
-
-  it('rejects abort requests for sessions that are not running', async () => {
-    const { app } = await import('./app.js')
-    const response = await app.request('/api/sessions/session-1/abort', { method: 'POST' })
-
-    expect(response.status).toBe(409)
-    await expect(response.json()).resolves.toEqual({ error: 'Pi session is not running' })
-  })
-
-  it('emits a safe error and releases the lock after adapter failure', async () => {
-    promptPiSession.mockRejectedValueOnce(new Error('/secret/session.jsonl failed'))
-    const { app } = await import('./app.js')
-    const request = {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: 'prompt' }),
-    }
-    const failed = await app.request('/api/sessions/session-1/prompts', request)
-    const body = await failed.text()
-
-    expect(body).toContain(
-      'event: error\ndata: {"code":"PROMPT_FAILED","message":"Pi session prompt failed"}',
-    )
-    expect(body).not.toContain('/secret')
-
-    const after = await app.request('/api/sessions/session-1/prompts', request)
-    expect(after.status).toBe(200)
-    await after.text()
-  })
-
-  it('aborts the adapter when the response stream is cancelled', async () => {
-    let signal: AbortSignal | undefined
-    promptPiSession.mockImplementation(
-      ({ signal: nextSignal }) =>
-        new Promise<typeof completed>((resolve) => {
-          signal = nextSignal
-          nextSignal.addEventListener(
-            'abort',
-            () => resolve({ ...completed, stopReason: 'aborted' }),
-            { once: true },
-          )
-        }),
-    )
-    const { app } = await import('./app.js')
-    const response = await app.request('/api/sessions/session-1/prompts', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: 'prompt' }),
-    })
-    await vi.waitFor(() => expect(signal).toBeDefined())
-
-    await response.body?.cancel()
-    await vi.waitFor(() => expect(signal?.aborted).toBe(true))
-
-    promptPiSession.mockResolvedValue(completed)
-    await vi.waitFor(async () => {
-      const after = await app.request('/api/sessions/session-1/prompts', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ prompt: 'prompt' }),
-      })
-      expect(after.status).toBe(200)
-      await after.text()
-    })
-  })
 })

@@ -1,30 +1,31 @@
 import {
   deletePiSession,
   listPiSessions,
+  readPiSettings,
   PiSessionHistorySourceChangedError,
-  promptPiSession,
   readPiSessionHistory,
   renamePiSession,
+  updatePiSettings,
   type PiSessionSummary,
 } from '@pi-nest/pi-adapter'
 import { Hono } from 'hono'
-import { streamSSE } from 'hono/streaming'
 import { z } from 'zod'
 
-import { createSessionActivity } from './session-activity.js'
-
-const promptSchema = z
-  .object({
-    prompt: z
-      .string()
-      .max(20_000)
-      .refine((prompt) => prompt.trim().length > 0),
-  })
-  .strict()
+import { PiRuntimeRegistry } from './pi-runtime-registry.js'
 
 const sessionNameSchema = z
   .object({ name: z.string().trim().min(1).max(120) })
   .strict()
+
+const settingsSchema = z.object({
+  compactionEnabled: z.boolean().optional(),
+  defaultModel: z.string().min(1).max(256).optional(),
+  defaultProvider: z.string().min(1).max(256).optional(),
+  defaultThinkingLevel: z.string().min(1).max(64).optional(),
+  followUpMode: z.enum(['all', 'one-at-a-time']).optional(),
+  retryEnabled: z.boolean().optional(),
+  steeringMode: z.enum(['all', 'one-at-a-time']).optional(),
+}).strict()
 
 type SessionResolution =
   | { kind: 'found'; session: PiSessionSummary }
@@ -40,9 +41,7 @@ async function resolveSession(sessionId: string): Promise<SessionResolution> {
   }
 }
 
-export function createSessionRoutes() {
-  const activity = createSessionActivity()
-
+export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
   return new Hono()
     .get('/sessions', async (context) => {
       try {
@@ -57,11 +56,12 @@ export function createSessionRoutes() {
     })
     .get('/sessions/:sessionId/history', async (context) => {
       const sessionId = context.req.param('sessionId')
-      if (activity.isPromptActive(sessionId)) return context.json({ error: 'Pi session is running' }, 409)
+      if (runtime.isPromptActive(sessionId)) return context.json({ error: 'Pi session is running' }, 409)
 
       const resolved = await resolveSession(sessionId)
       if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
       if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
+      if (!resolved.session.cwd) return context.json({ error: 'Pi session cwd is unavailable' }, 409)
 
       try {
         const history = readPiSessionHistory({
@@ -81,12 +81,34 @@ export function createSessionRoutes() {
         return context.json({ error: 'Failed to read Pi session history' }, 500)
       }
     })
-    .post('/sessions/:sessionId/abort', (context) => {
-      if (!activity.abortPrompt(context.req.param('sessionId'))) {
-        return context.json({ error: 'Pi session is not running' }, 409)
+    .get('/sessions/:sessionId/settings', async (context) => {
+      const resolved = await resolveSession(context.req.param('sessionId'))
+      if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
+      if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
+      if (!resolved.session.cwd) return context.json({ error: 'Pi session cwd is unavailable' }, 409)
+      try {
+        return context.json({ settings: readPiSettings(resolved.session.cwd) })
+      } catch {
+        return context.json({ error: 'Failed to read Pi settings' }, 500)
       }
-
-      return context.json({ status: 'aborting' }, 202)
+    })
+    .patch('/sessions/:sessionId/settings', async (context) => {
+      const parsed = settingsSchema.safeParse(await context.req.json().catch(() => undefined))
+      if (!parsed.success || Object.keys(parsed.data).length === 0) return context.json({ error: 'Invalid Pi settings' }, 400)
+      const resolved = await resolveSession(context.req.param('sessionId'))
+      if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
+      if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
+      if (!resolved.session.cwd) return context.json({ error: 'Pi session cwd is unavailable' }, 409)
+      const finish = runtime.beginGlobalSettingsUpdate()
+      if (!finish) return context.json({ error: 'Pi runtime is busy' }, 409)
+      try {
+        const settings = await updatePiSettings(resolved.session.cwd, parsed.data)
+        await finish(true)
+        return context.json({ settings })
+      } catch {
+        await finish(false)
+        return context.json({ error: 'Failed to save Pi settings' }, 500)
+      }
     })
     .patch('/sessions/:sessionId', async (context) => {
       const parsed = sessionNameSchema.safeParse(await context.req.json().catch(() => undefined))
@@ -97,10 +119,13 @@ export function createSessionRoutes() {
       if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
       if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
 
-      const finishMutation = activity.beginMutation(sessionId)
-      if (!finishMutation) return context.json({ error: 'Pi session is busy' }, 409)
+      const mutation = runtime.beginMutation(sessionId)
+      if (!mutation) return context.json({ error: 'Pi session is busy' }, 409)
+
+      let finishMutation: (() => void) | undefined
 
       try {
+        finishMutation = await mutation
         renamePiSession({
           expectedCwd: resolved.session.cwd,
           expectedSessionId: resolved.session.id,
@@ -111,7 +136,7 @@ export function createSessionRoutes() {
       } catch {
         return context.json({ error: 'Failed to rename Pi session' }, 500)
       } finally {
-        finishMutation()
+        finishMutation?.()
       }
     })
     .delete('/sessions/:sessionId', async (context) => {
@@ -120,10 +145,13 @@ export function createSessionRoutes() {
       if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
       if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
 
-      const finishMutation = activity.beginMutation(sessionId)
-      if (!finishMutation) return context.json({ error: 'Pi session is busy' }, 409)
+      const mutation = runtime.beginMutation(sessionId)
+      if (!mutation) return context.json({ error: 'Pi session is busy' }, 409)
+
+      let finishMutation: (() => void) | undefined
 
       try {
+        finishMutation = await mutation
         await deletePiSession({
           expectedCwd: resolved.session.cwd,
           expectedSessionId: resolved.session.id,
@@ -133,89 +161,7 @@ export function createSessionRoutes() {
       } catch {
         return context.json({ error: 'Failed to delete Pi session' }, 500)
       } finally {
-        finishMutation()
+        finishMutation?.()
       }
-    })
-    .post('/sessions/:sessionId/prompts', async (context) => {
-      const body = await context.req.json().catch(() => undefined)
-      const parsed = promptSchema.safeParse(body)
-      if (!parsed.success) return context.json({ error: 'Invalid prompt request' }, 400)
-
-      const sessionId = context.req.param('sessionId')
-      const resolved = await resolveSession(sessionId)
-      if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
-      if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
-      if (!resolved.session.cwd) return context.json({ error: 'Pi session cwd is unavailable' }, 422)
-
-      const sessionCwd = resolved.session.cwd
-      const controller = activity.beginPrompt(sessionId)
-      if (!controller) return context.json({ error: 'Pi session is already running' }, 409)
-
-      return streamSSE(context, async (stream) => {
-        let timedOut = false
-        let writes = Promise.resolve()
-        const timeout = setTimeout(() => {
-          timedOut = true
-          controller.abort()
-        }, 300_000)
-        const write = (event: string, data: unknown) => {
-          writes = writes.then(() =>
-            stream.writeSSE({ event, data: JSON.stringify(data) }).then(() => undefined),
-          )
-        }
-
-        stream.onAbort(() => controller.abort())
-
-        try {
-          const result = await promptPiSession({
-            expectedCwd: sessionCwd,
-            expectedSessionId: sessionId,
-            onTextDelta: (delta) => write('text_delta', { delta }),
-            prompt: parsed.data.prompt,
-            sessionFile: resolved.session.sessionFile,
-            signal: controller.signal,
-          })
-          await writes
-
-          if (timedOut) {
-            await stream.writeSSE({
-              event: 'error',
-              data: JSON.stringify({ code: 'PROMPT_TIMEOUT', message: 'Pi session prompt timed out' }),
-            })
-          } else if (!stream.aborted) {
-            await stream.writeSSE({
-              event: 'complete',
-              data: JSON.stringify({
-                model: result.model,
-                stopReason: result.stopReason,
-                textDeltaCount: result.textDeltaCount,
-              }),
-            })
-          }
-        } catch {
-          await writes.catch(() => undefined)
-          if (!stream.aborted) {
-            if (timedOut) {
-              await stream.writeSSE({
-                event: 'error',
-                data: JSON.stringify({ code: 'PROMPT_TIMEOUT', message: 'Pi session prompt timed out' }),
-              })
-            } else if (controller.signal.aborted) {
-              await stream.writeSSE({
-                event: 'complete',
-                data: JSON.stringify({ model: undefined, stopReason: 'aborted', textDeltaCount: 0 }),
-              })
-            } else {
-              await stream.writeSSE({
-                event: 'error',
-                data: JSON.stringify({ code: 'PROMPT_FAILED', message: 'Pi session prompt failed' }),
-              })
-            }
-          }
-        } finally {
-          clearTimeout(timeout)
-          activity.finishPrompt(sessionId, controller)
-        }
-      })
     })
 }

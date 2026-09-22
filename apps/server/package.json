@@ -14,10 +14,12 @@
     "@hono/node-server": "2.1.1",
     "@pi-nest/pi-adapter": "workspace:*",
     "hono": "4.13.8",
+    "ws": "8.21.3",
     "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
+    "@types/ws": "8.18.1",
     "tsx": "4.20.6",
     "typescript": "~6.0.2"
   }

@@ -38,7 +38,7 @@ describe('readPiSessionHistory', () => {
     rmSync(fixtureDirectory, { force: true, recursive: true })
   })
 
-  it('is exported and maps only safe current-branch content without changing the source', async () => {
+  it('is exported and preserves every current-branch entry without changing the source', async () => {
     open.mockReturnValue(
       session([
         user('user-1', '2026-09-21T00:00:00.000Z', 'Hello'),
@@ -84,25 +84,49 @@ describe('readPiSessionHistory', () => {
       entries: [
         {
           id: 'user-1',
-          kind: 'message',
-          role: 'user',
-          text: 'Hello',
+          parentId: null,
+          raw: user('user-1', '2026-09-21T00:00:00.000Z', 'Hello'),
           timestamp: '2026-09-21T00:00:00.000Z',
+          type: 'message',
         },
         {
-          hasOmittedContent: true,
           id: 'assistant-1',
-          kind: 'message',
-          role: 'assistant',
-          stopReason: 'aborted',
-          text: 'Hello back',
+          parentId: 'user-1',
+          raw: {
+            id: 'assistant-1',
+            message: {
+              content: [{ text: 'Hello back', type: 'text' }, { thinking: 'hidden', type: 'thinking' }],
+              role: 'assistant',
+              stopReason: 'aborted',
+            },
+            parentId: 'user-1',
+            timestamp: '2026-09-21T00:00:01.000Z',
+            type: 'message',
+          },
           timestamp: '2026-09-21T00:00:01.000Z',
+          type: 'message',
         },
         {
-          count: 2,
-          kind: 'omitted',
-          label: '未展示的原生事件',
+          id: 'tool-1',
+          parentId: 'assistant-1',
+          raw: {
+            id: 'tool-1',
+            message: { content: [{ text: 'hidden tool output', type: 'text' }], role: 'toolResult' },
+            parentId: 'assistant-1',
+            timestamp: '2026-09-21T00:00:02.000Z',
+            type: 'message',
+          },
           timestamp: '2026-09-21T00:00:02.000Z',
+          type: 'message',
+        },
+        {
+          id: 'model-1',
+          parentId: 'tool-1',
+          raw: {
+            id: 'model-1', modelId: 'hidden-model', parentId: 'tool-1', provider: 'hidden-provider', timestamp: '2026-09-21T00:00:03.000Z', type: 'model_change',
+          },
+          timestamp: '2026-09-21T00:00:03.000Z',
+          type: 'model_change',
         },
       ],
       hasEarlier: false,
@@ -128,8 +152,8 @@ describe('readPiSessionHistory', () => {
 
     expect(history.hasEarlier).toBe(true)
     expect(history.entries).toHaveLength(200)
-    expect(history.entries[0]).toMatchObject({ id: 'user-1', kind: 'message' })
-    expect(history.entries.at(-1)).toMatchObject({ id: 'user-200', kind: 'message' })
+    expect(history.entries[0]).toMatchObject({ id: 'user-1', type: 'message' })
+    expect(history.entries.at(-1)).toMatchObject({ id: 'user-200', type: 'message' })
   })
 
   it('fails safely when SDK binding validation fails and cleans the temporary copy', async () => {
