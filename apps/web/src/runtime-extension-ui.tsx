@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 
 import { RuntimeWebSocketClient, type PiRuntimeEvent } from './runtime-websocket-client.js'
+import { stripAnsiLine, stripAnsiText } from './ansi-text.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
 type Dialog = { id: string; method: 'confirm' | 'editor' | 'input' | 'select'; sessionId: string; title: string; message?: string; options?: string[]; prefill?: string }
@@ -11,7 +12,7 @@ function dialogFrom(event: PiRuntimeEvent): Dialog | undefined {
   const value = event.event
   if (value.type !== 'extension_ui_request' || typeof value.id !== 'string' || typeof value.method !== 'string') return undefined
   if (value.method !== 'select' && value.method !== 'confirm' && value.method !== 'input' && value.method !== 'editor') return undefined
-  return { id: value.id, method: value.method, sessionId: event.sessionId, title: typeof value.title === 'string' ? value.title : 'Pi extension request', message: typeof value.message === 'string' ? value.message : undefined, options: Array.isArray(value.options) ? value.options.filter((item): item is string => typeof item === 'string') : undefined, prefill: typeof value.prefill === 'string' ? value.prefill : undefined }
+  return { id: value.id, method: value.method, sessionId: event.sessionId, title: typeof value.title === 'string' ? stripAnsiLine(value.title) : 'Pi extension request', message: typeof value.message === 'string' ? stripAnsiLine(value.message) : undefined, options: Array.isArray(value.options) ? value.options.filter((item): item is string => typeof item === 'string').map(stripAnsiLine) : undefined, prefill: typeof value.prefill === 'string' ? stripAnsiText(value.prefill) : undefined }
 }
 
 /** Native extension UI bridge. Unsupported TUI-only requests remain visible in the timeline. */
@@ -27,11 +28,11 @@ export function RuntimeExtensionUi({ runtime }: { runtime: RuntimeWebSocketClien
     const dialog = dialogFrom(event)
     if (dialog) { setDialogs((current) => current.some((item) => item.id === dialog.id) ? current : [...current, dialog]); setValue(dialog.prefill ?? ''); return }
     const raw = event.event
-    if (raw.type === 'extension_ui_request' && raw.method === 'set_editor_text' && typeof raw.text === 'string') setDraft(event.sessionId, raw.text)
-    if (raw.type === 'extension_ui_request' && raw.method === 'setStatus') setExtensionStatus(event.sessionId, typeof raw.statusText === 'string' ? raw.statusText : undefined)
-    if (raw.type === 'extension_ui_request' && raw.method === 'setWidget') setExtensionWidget(event.sessionId, Array.isArray(raw.widgetLines) ? raw.widgetLines.filter((line): line is string => typeof line === 'string') : [])
-    if (raw.type === 'extension_ui_request' && raw.method === 'setTitle' && typeof raw.title === 'string') document.title = raw.title
-    if (raw.type === 'extension_ui_request' && raw.method === 'notify' && typeof raw.message === 'string') setNotice(raw.message)
+    if (raw.type === 'extension_ui_request' && raw.method === 'set_editor_text' && typeof raw.text === 'string') setDraft(event.sessionId, stripAnsiText(raw.text))
+    if (raw.type === 'extension_ui_request' && raw.method === 'setStatus') setExtensionStatus(event.sessionId, typeof raw.statusText === 'string' ? stripAnsiLine(raw.statusText) : undefined)
+    if (raw.type === 'extension_ui_request' && raw.method === 'setWidget') setExtensionWidget(event.sessionId, Array.isArray(raw.widgetLines) ? raw.widgetLines.filter((line): line is string => typeof line === 'string').map(stripAnsiLine) : [])
+    if (raw.type === 'extension_ui_request' && raw.method === 'setTitle' && typeof raw.title === 'string') document.title = stripAnsiLine(raw.title)
+    if (raw.type === 'extension_ui_request' && raw.method === 'notify' && typeof raw.message === 'string') setNotice(stripAnsiLine(raw.message))
     })
     return unsubscribe
   }, [runtime, setDraft, setExtensionStatus, setExtensionWidget])
