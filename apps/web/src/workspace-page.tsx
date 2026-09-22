@@ -1,4 +1,4 @@
-import { type CSSProperties, type FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, CircleX, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
@@ -88,10 +88,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     setNavigationOpen(false)
   }
 
-  function submitPrompt(event: FormEvent) {
-    event.preventDefault()
+  function submitPrompt() {
     if (!selectedSessionId || prompt.trim().length === 0) return
-    if (!isActive) sessionRuns.start({ prompt, sessionId: selectedSessionId })
+    if (!isActive) {
+      if (sessionRuns.start({ prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
+    }
     else void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败'))
   }
 
@@ -233,7 +234,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               </div>
             </ScrollArea>
           </div>
-            <form className="mx-auto mb-4 flex h-[100px] w-[calc(100%-2rem)] max-w-[920px] shrink-0 flex-col gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:w-[calc(100%-3rem)] sm:px-6" onSubmit={(event) => void submitPrompt(event)}>
+            <div className="mx-auto mb-4 flex h-[100px] w-[calc(100%-2rem)] max-w-[920px] shrink-0 flex-col gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:w-[calc(100%-3rem)] sm:px-6">
               <label className="sr-only" htmlFor="prompt">向当前 Pi 会话发送提示词</label>
               <Textarea
                 className="min-h-0! flex-1 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
@@ -241,7 +242,13 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 id="prompt"
                 maxLength={20_000}
                 onChange={(event) => selectedSessionId && setDraft(selectedSessionId, event.target.value)}
-                placeholder="随心输入"
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+
+                  event.preventDefault()
+                  submitPrompt()
+                }}
+                placeholder="Enter 发送，Shift + Enter 换行"
                 rows={3}
                 value={prompt}
               />
@@ -265,13 +272,13 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   </Sheet>
                   {status === 'running' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
-                  {status === 'running' && <Button aria-label={queueMode === 'steer' ? '发送 Steer' : '发送 Follow-up'} className="rounded-full" disabled={prompt.trim().length === 0} size="icon-lg" type="submit"><Send aria-hidden="true" /></Button>}
+                  {status === 'running' && <Button aria-label={queueMode === 'steer' ? '发送 Steer' : '发送 Follow-up'} className="rounded-full" disabled={prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>}
                   {status !== 'running' && status !== 'aborting' && (
-                    <Button aria-label="发送提示词" className="rounded-full" disabled={!selectedSession || prompt.trim().length === 0} size="icon-lg" type="submit"><Send aria-hidden="true" /></Button>
+                    <Button aria-label="发送提示词" className="rounded-full" disabled={!selectedSession || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
                   )}
                 </div>
               </div>
-            </form>
+            </div>
           <Sheet open={controlOpen} onOpenChange={setControlOpen}>
             <SheetContent className="space-y-5 overflow-y-auto" side="right">
               <SheetTitle>Pi 运行控制</SheetTitle>
