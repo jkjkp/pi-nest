@@ -231,6 +231,59 @@ describe('PiRuntimeRegistry', () => {
     await registry.close()
   })
 
+  it('restores durable extension projection after restart and promotes it on a live update', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-nest-projection-registry-test-'))
+    const firstHost = hostMock()
+    const first = new PiRuntimeRegistry({ createHost: () => firstHost as unknown as PiRuntimeHost, projectionDirectory: directory })
+    await first.resume(session)
+    firstHost.emit({ method: 'setStatus', statusKey: 'agent', statusText: 'restored value', type: 'extension_ui_request' })
+    await vi.waitFor(() => expect(first.getExtensionUiSnapshot(session.id)).toMatchObject({ freshness: 'known', statuses: { agent: 'restored value' } }))
+    await first.close()
+
+    const secondHost = hostMock()
+    const second = new PiRuntimeRegistry({ createHost: () => secondHost as unknown as PiRuntimeHost, projectionDirectory: directory })
+    const snapshots: any[] = []
+    await second.watch(session.id, 'tab-a', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
+    expect(snapshots[0]).toMatchObject({ extensionUi: { freshness: 'restored', statuses: { agent: 'restored value' } } })
+
+    await second.resume(session)
+    secondHost.emit({ method: 'setWidget', type: 'extension_ui_request', widgetKey: 'todo', widgetLines: ['one'] })
+    await vi.waitFor(() => expect(second.getExtensionUiSnapshot(session.id)).toMatchObject({ freshness: 'known', widgets: { todo: ['one'] } }))
+    await second.close()
+  })
+
+  it('clears a durable projection after runtime failure or session deletion', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-nest-projection-registry-test-'))
+    const failedHost = hostMock()
+    const registry = new PiRuntimeRegistry({ createHost: () => failedHost as unknown as PiRuntimeHost, projectionDirectory: directory })
+    await registry.resume(session)
+    failedHost.emit({ method: 'setStatus', statusKey: 'agent', statusText: 'thinking', type: 'extension_ui_request' })
+    await vi.waitFor(() => expect(registry.getExtensionUiSnapshot(session.id).freshness).toBe('known'))
+    failedHost.fail({ kind: 'process_exit', message: 'Pi process exited unexpectedly' })
+    await vi.waitFor(() => expect(registry.getExtensionUiSnapshot(session.id)).toEqual({ freshness: 'known', statuses: {}, widgets: {} }))
+    await registry.close()
+
+    const afterFailure = new PiRuntimeRegistry({ projectionDirectory: directory })
+    const failureSnapshots: any[] = []
+    await afterFailure.watch(session.id, 'tab-a', 0, () => undefined, () => undefined, (snapshot) => failureSnapshots.push(snapshot))
+    expect(failureSnapshots[0]?.extensionUi.freshness).toBe('unknown')
+    await afterFailure.close()
+
+    const deletingHost = hostMock()
+    const deleting = new PiRuntimeRegistry({ createHost: () => deletingHost as unknown as PiRuntimeHost, projectionDirectory: directory })
+    await deleting.resume(session)
+    deletingHost.emit({ method: 'setStatus', statusKey: 'agent', statusText: 'delete me', type: 'extension_ui_request' })
+    await vi.waitFor(() => expect(deleting.getExtensionUiSnapshot(session.id).freshness).toBe('known'))
+    await deleting.deleteSession(session.id)
+    await deleting.close()
+
+    const afterDelete = new PiRuntimeRegistry({ projectionDirectory: directory })
+    const deletionSnapshots: any[] = []
+    await afterDelete.watch(session.id, 'tab-a', 0, () => undefined, () => undefined, (snapshot) => deletionSnapshots.push(snapshot))
+    expect(deletionSnapshots[0]?.extensionUi.freshness).toBe('unknown')
+    await afterDelete.close()
+  })
+
   it('broadcasts failed then notLoaded, clearing projection while idle expiry preserves it', async () => {
     const failed = hostMock()
     failed.prompt.mockResolvedValueOnce({ model: undefined, stopReason: 'stop' }).mockRejectedValueOnce(new Error('broken RPC'))

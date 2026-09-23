@@ -34,14 +34,14 @@ export class SessionEventStream {
 
   get hasSubscribers() { return this.listeners.size > 0 }
 
-  publish(raw: PiRuntimeHostEvent, beforePublish?: (event: PiRuntimeEvent) => void) {
+  publish(raw: PiRuntimeHostEvent, beforePublish?: (event: PiRuntimeEvent) => void | Promise<void>) {
     return this.serial(async () => {
       if (this.unavailable) return
       const sequence = ++this.sequence
       if (raw.event.type === 'turn_start') this.turnId = `${this.sessionId}:turn:${sequence}`
       const event: PiRuntimeEvent = { ...raw, sequence, ...(this.turnId ? { turnId: this.turnId } : {}) }
       try {
-        beforePublish?.(event)
+        await beforePublish?.(event)
         await this.append(event)
       } catch {
         this.unavailable = true
@@ -79,9 +79,11 @@ export class SessionEventStream {
     })
   }
 
-  async close() {
-    this.listeners.clear()
-    if (this.file) await rm(this.file, { force: true })
+  close() {
+    return this.serial(async () => {
+      this.listeners.clear()
+      if (this.file) await rm(this.file, { force: true })
+    })
   }
 
   private serial<T>(task: () => Promise<T>) {
