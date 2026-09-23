@@ -2,11 +2,13 @@ import { listPiSessions } from '@pi-nest/pi-adapter'
 import { z } from 'zod'
 
 import type { PiRuntimeEvent, PiRuntimeSession } from './pi-runtime-host.js'
-import { PiRuntimeRegistry } from './pi-runtime-registry.js'
+import { PiRuntimeRegistry, type PiRuntimeSessionSnapshot, type PiRuntimeStatus } from './pi-runtime-registry.js'
 import { PiRuntimeResumeError } from './session-event-stream.js'
 
 const commandSchema = z.discriminatedUnion('type', [
-  z.object({ id: z.string().min(1).max(128), resume: z.object({ after: z.number().int().nonnegative() }).strict().optional(), sessionId: z.string().min(1), type: z.literal('attach') }).strict(),
+  z.object({ id: z.string().min(1).max(128), resume: z.object({ after: z.number().int().nonnegative() }).strict().optional(), sessionId: z.string().min(1), type: z.literal('watch') }).strict(),
+  z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('unwatch') }).strict(),
+  z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('resume') }).strict(),
   z.object({ id: z.string().min(1).max(128), message: z.string().trim().min(1).max(20_000), sessionId: z.string().min(1), type: z.literal('prompt') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('abort') }).strict(),
   z.object({ id: z.string().min(1).max(128), message: z.string().trim().min(1).max(20_000), sessionId: z.string().min(1), type: z.literal('steer') }).strict(),
@@ -21,8 +23,8 @@ const commandSchema = z.discriminatedUnion('type', [
 ])
 
 type RuntimeSocket = { send: (data: string) => void }
-type AttachedSession = { session: PiRuntimeSession; unsubscribe: () => void }
-type SocketState = { sessions: Map<string, AttachedSession> }
+type WatchedSession = { session: PiRuntimeSession; subscriberId: string }
+type SocketState = { id: string; sessions: Map<string, WatchedSession> }
 
 function serialize(value: unknown) {
   return JSON.stringify(value)
@@ -30,18 +32,19 @@ function serialize(value: unknown) {
 
 /** Maps one browser WebSocket to zero or more native Pi Session subscriptions. */
 export class RuntimeWebSocketBroker {
+  private nextSocketId = 0
   private readonly sockets = new Map<RuntimeSocket, SocketState>()
 
   constructor(private readonly runtime: PiRuntimeRegistry) {}
 
   open(socket: RuntimeSocket) {
-    this.sockets.set(socket, { sessions: new Map() })
+    this.sockets.set(socket, { id: `socket:${++this.nextSocketId}`, sessions: new Map() })
   }
 
   close(socket: RuntimeSocket) {
     const state = this.sockets.get(socket)
     if (!state) return
-    for (const attached of state.sessions.values()) attached.unsubscribe()
+    for (const sessionId of state.sessions.keys()) this.runtime.unwatch(sessionId, state.id)
     this.sockets.delete(socket)
   }
 
@@ -62,9 +65,21 @@ export class RuntimeWebSocketBroker {
       : undefined
     if (!command.success) return this.error(socket, invalidId, 'INVALID_COMMAND', 'Invalid WebSocket command')
 
-    if (command.data.type === 'attach') return this.attach(socket, state, command.data)
-    const attached = state.sessions.get(command.data.sessionId)
-    if (!attached) return this.error(socket, command.data.id, 'SESSION_NOT_ATTACHED', 'Pi session is not attached', command.data.sessionId)
+    if (command.data.type === 'watch') return this.watch(socket, state, command.data)
+    if (command.data.type === 'unwatch') return this.unwatch(socket, state, command.data)
+    const watched = state.sessions.get(command.data.sessionId)
+    if (!watched) return this.error(socket, command.data.id, 'SESSION_NOT_WATCHED', 'Pi session is not watched', command.data.sessionId)
+
+    if (command.data.type === 'resume') {
+      try {
+        const resumed = this.runtime.resume(watched.session)
+        if (!resumed) return this.error(socket, command.data.id, 'SESSION_BUSY', 'Pi session is busy', command.data.sessionId)
+        await resumed
+        return this.ack(socket, command.data.id, command.data.type, command.data.sessionId)
+      } catch {
+        return this.error(socket, command.data.id, 'COMMAND_FAILED', 'Pi runtime command failed', command.data.sessionId)
+      }
+    }
 
     if (command.data.type === 'abort') {
       if (!(await this.runtime.abort(command.data.sessionId))) return this.error(socket, command.data.id, 'SESSION_NOT_RUNNING', 'Pi session is not running', command.data.sessionId)
@@ -104,8 +119,8 @@ export class RuntimeWebSocketBroker {
           ? { type: 'set_thinking_level', level: command.data.level }
           : { type: command.data.type }
       try {
-        const result = this.runtime.commandWhenIdle(attached.session, rpc)
-        if (!result) return this.error(socket, command.data.id, 'SESSION_BUSY', 'Pi session is busy', command.data.sessionId)
+        const result = this.runtime.commandWhenIdle(watched.session, rpc)
+        if (!result) return this.error(socket, command.data.id, 'RUNTIME_NOT_LOADED', 'Pi runtime is not loaded', command.data.sessionId)
         const response = await result
         return this.ack(socket, command.data.id, command.data.type, command.data.sessionId, this.safeData(command.data.type, response))
       } catch {
@@ -113,13 +128,13 @@ export class RuntimeWebSocketBroker {
       }
     }
 
-    const prompt = this.runtime.startPrompt(attached.session, command.data.message)
+    const prompt = this.runtime.startPrompt(watched.session, command.data.message)
     if (!prompt) return this.error(socket, command.data.id, 'SESSION_BUSY', 'Pi session is already running', command.data.sessionId)
     this.ack(socket, command.data.id, command.data.type, command.data.sessionId)
     void prompt.catch(() => this.error(socket, command.data.id, 'PROMPT_FAILED', 'Pi session prompt failed', command.data.sessionId))
   }
 
-  private async attach(socket: RuntimeSocket, state: SocketState, command: { id: string; resume?: { after: number }; sessionId: string }) {
+  private async watch(socket: RuntimeSocket, state: SocketState, command: { id: string; resume?: { after: number }; sessionId: string }) {
     const after = command.resume?.after ?? 0
 
     let session
@@ -131,28 +146,37 @@ export class RuntimeWebSocketBroker {
     if (!session) return this.error(socket, command.id, 'SESSION_NOT_FOUND', 'Pi session not found', command.sessionId)
     if (!session.cwd) return this.error(socket, command.id, 'SESSION_UNAVAILABLE', 'Pi session cwd is unavailable', command.sessionId)
 
-    const current = state.sessions.get(session.id)
-    current?.unsubscribe()
-    state.sessions.delete(session.id)
-    let unsubscribe
     try {
-      // Always resubscribe, even for a repeated attach: the replay is what a client needs
-      // after a sequence gap, and duplicate events are dropped by the client's cursor.
-      unsubscribe = await this.runtime.subscribe(
+      await this.runtime.watch(
         session.id,
+        state.id,
         after,
         (event) => this.event(socket, event),
         (error) => this.error(socket, undefined, error.code, error.message, session.id),
+        (snapshot) => this.snapshot(socket, snapshot),
+        (status) => this.runtimeStatus(socket, status),
       )
     } catch (cause) {
       if (cause instanceof PiRuntimeResumeError) return this.error(socket, command.id, cause.code, cause.message, session.id)
       return this.error(socket, command.id, 'EVENT_BUFFER_FAILED', 'Pi runtime event buffer failed', session.id)
     }
+    if (this.sockets.get(socket) !== state) {
+      this.runtime.unwatch(session.id, state.id)
+      return
+    }
     state.sessions.set(session.id, {
       session: { cwd: session.cwd, id: session.id, sessionFile: session.sessionFile },
-      unsubscribe,
+      subscriberId: state.id,
     })
-    this.ack(socket, command.id, 'attach', session.id)
+    this.ack(socket, command.id, 'watch', session.id)
+  }
+
+  private unwatch(socket: RuntimeSocket, state: SocketState, command: { id: string; sessionId: string }) {
+    const watched = state.sessions.get(command.sessionId)
+    if (!watched) return this.ack(socket, command.id, 'unwatch', command.sessionId, { status: 'notWatching' })
+    this.runtime.unwatch(command.sessionId, watched.subscriberId)
+    state.sessions.delete(command.sessionId)
+    this.ack(socket, command.id, 'unwatch', command.sessionId, { status: 'unwatched' })
   }
 
   private ack(socket: RuntimeSocket, id: string, command: string, sessionId: string, data?: unknown) {
@@ -165,6 +189,14 @@ export class RuntimeWebSocketBroker {
 
   private event(socket: RuntimeSocket, event: PiRuntimeEvent) {
     this.send(socket, { ...event, type: 'pi_event' })
+  }
+
+  private snapshot(socket: RuntimeSocket, snapshot: PiRuntimeSessionSnapshot) {
+    this.send(socket, { ...snapshot, type: 'session_snapshot' })
+  }
+
+  private runtimeStatus(socket: RuntimeSocket, status: PiRuntimeStatus) {
+    this.send(socket, { ...status, type: 'runtime_status' })
   }
 
   private send(socket: RuntimeSocket, message: unknown) {

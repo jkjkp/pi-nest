@@ -19,7 +19,7 @@ afterEach(async () => {
 
 function runtime() {
   return {
-    abort: vi.fn(), beginMutation: vi.fn(), isPromptActive: vi.fn(), startPrompt: vi.fn(), subscribe: vi.fn(() => () => undefined),
+    abort: vi.fn(), beginMutation: vi.fn(), isPromptActive: vi.fn(), startPrompt: vi.fn(), unwatch: vi.fn(), watch: vi.fn(() => () => undefined),
   }
 }
 
@@ -50,9 +50,9 @@ describe('runtime WebSocket upgrade', () => {
     const bootstrap = await fetch(`${base}/api/runtime/bootstrap`, { method: 'POST', headers: { origin: security.origin } })
     const { token } = await bootstrap.json() as { token: string }
     const socket = await connect(`${base.replace('http', 'ws')}/api/runtime?token=${encodeURIComponent(token)}`, security.origin)
-    socket.send(JSON.stringify({ id: 'attach-1', sessionId: 'session-1', type: 'attach' }))
+    socket.send(JSON.stringify({ id: 'watch-1', sessionId: 'session-1', type: 'watch' }))
     const [message] = await once(socket, 'message')
-    expect(JSON.parse(message.toString())).toEqual({ command: 'attach', id: 'attach-1', sessionId: 'session-1', type: 'ack' })
+    expect(JSON.parse(message.toString())).toEqual({ command: 'watch', id: 'watch-1', sessionId: 'session-1', type: 'ack' })
     socket.close()
 
     await expect(connect(`${base.replace('http', 'ws')}/api/runtime?token=wrong`, security.origin)).rejects.toThrow()
