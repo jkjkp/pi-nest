@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RuntimeWebSocketBroker } from './runtime-websocket.js'
-import { PiRuntimeRegistry } from './pi-runtime-registry.js'
+import { PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
 
 const adapter = vi.hoisted(() => ({ listPiSessions: vi.fn() }))
 vi.mock('@pi-nest/pi-adapter', () => adapter)
@@ -89,6 +89,20 @@ describe('RuntimeWebSocketBroker', () => {
     expect(client.sent).toContainEqual({ command: 'unwatch', data: { status: 'notWatching' }, id: 'u2', sessionId: 'session-1', type: 'ack' })
   })
 
+  it('returns capacity exhaustion before accepting a direct prompt', async () => {
+    const registry = runtime()
+    registry.resume.mockRejectedValueOnce(new PiRuntimeCapacityError())
+    const broker = new RuntimeWebSocketBroker(registry as never)
+    const client = socket()
+    broker.open(client)
+
+    await broker.message(client, JSON.stringify({ id: 'w1', sessionId: 'session-1', type: 'watch' }))
+    await broker.message(client, JSON.stringify({ id: 'p1', message: 'hello', sessionId: 'session-1', type: 'prompt' }))
+
+    expect(client.sent).toContainEqual({ code: 'RUNTIME_CAPACITY_EXCEEDED', id: 'p1', message: 'Pi runtime capacity is exhausted', sessionId: 'session-1', type: 'error' })
+    expect(registry.startPrompt).not.toHaveBeenCalled()
+  })
+
   it('replaces a subscription when watch resumes after a newer sequence', async () => {
     const registry = runtime()
     const broker = new RuntimeWebSocketBroker(registry as never)
@@ -138,13 +152,14 @@ describe('RuntimeWebSocketBroker', () => {
     expect(client.sent[0]).toMatchObject({ atSequence: 7, sessionId: 'session-1', type: 'session_snapshot' })
   })
 
-  it('returns a safe error for an impossible replay cursor', async () => {
+  it('requires a resync before replaying an impossible cursor', async () => {
     const registry = new PiRuntimeRegistry()
     const broker = new RuntimeWebSocketBroker(registry)
     const client = socket()
     broker.open(client)
     await broker.message(client, JSON.stringify({ id: 'a1', resume: { after: 1 }, sessionId: 'session-1', type: 'watch' }))
-    expect(client.sent).toEqual([{ code: 'RESUME_AHEAD', id: 'a1', message: 'Pi runtime replay sequence is invalid', sessionId: 'session-1', type: 'error' }])
+    expect(client.sent.map((message) => (message as { type: string }).type)).toEqual(['resync_required', 'session_snapshot', 'ack'])
+    expect(client.sent[0]).toEqual({ reason: 'sequence_gap', sessionId: 'session-1', type: 'resync_required' })
     await registry.close()
   })
 

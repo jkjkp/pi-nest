@@ -2,7 +2,7 @@ import { listPiSessions } from '@pi-nest/pi-adapter'
 import { z } from 'zod'
 
 import type { PiRuntimeEvent, PiRuntimeSession } from './pi-runtime-host.js'
-import { PiRuntimeRegistry, type PiRuntimeSessionSnapshot, type PiRuntimeStatus } from './pi-runtime-registry.js'
+import { PiRuntimeCapacityError, PiRuntimeRegistry, type PiRuntimeSessionSnapshot, type PiRuntimeStatus } from './pi-runtime-registry.js'
 import { PiRuntimeResumeError } from './session-event-stream.js'
 
 const commandSchema = z.discriminatedUnion('type', [
@@ -76,7 +76,8 @@ export class RuntimeWebSocketBroker {
         if (!resumed) return this.error(socket, command.data.id, 'SESSION_BUSY', 'Pi session is busy', command.data.sessionId)
         await resumed
         return this.ack(socket, command.data.id, command.data.type, command.data.sessionId)
-      } catch {
+      } catch (cause) {
+        if (cause instanceof PiRuntimeCapacityError) return this.error(socket, command.data.id, 'RUNTIME_CAPACITY_EXCEEDED', 'Pi runtime capacity is exhausted', command.data.sessionId)
         return this.error(socket, command.data.id, 'COMMAND_FAILED', 'Pi runtime command failed', command.data.sessionId)
       }
     }
@@ -128,13 +129,21 @@ export class RuntimeWebSocketBroker {
       }
     }
 
+    try {
+      const resumed = this.runtime.resume(watched.session)
+      if (!resumed) return this.error(socket, command.data.id, 'SESSION_BUSY', 'Pi session is already running', command.data.sessionId)
+      await resumed
+    } catch (cause) {
+      if (cause instanceof PiRuntimeCapacityError) return this.error(socket, command.data.id, 'RUNTIME_CAPACITY_EXCEEDED', 'Pi runtime capacity is exhausted', command.data.sessionId)
+      return this.error(socket, command.data.id, 'COMMAND_FAILED', 'Pi runtime command failed', command.data.sessionId)
+    }
     const prompt = this.runtime.startPrompt(watched.session, command.data.message)
     if (!prompt) return this.error(socket, command.data.id, 'SESSION_BUSY', 'Pi session is already running', command.data.sessionId)
     this.ack(socket, command.data.id, command.data.type, command.data.sessionId)
     void prompt.catch(() => this.error(socket, command.data.id, 'PROMPT_FAILED', 'Pi session prompt failed', command.data.sessionId))
   }
 
-  private async watch(socket: RuntimeSocket, state: SocketState, command: { id: string; resume?: { after: number }; sessionId: string }) {
+  private async watch(socket: RuntimeSocket, state: SocketState, command: { id: string; resume?: { after: number }; sessionId: string }): Promise<void> {
     const after = command.resume?.after ?? 0
 
     let session
@@ -157,6 +166,10 @@ export class RuntimeWebSocketBroker {
         (status) => this.runtimeStatus(socket, status),
       )
     } catch (cause) {
+      if (cause instanceof PiRuntimeResumeError && after > 0) {
+        this.resyncRequired(socket, session.id, cause.code === 'RESUME_GAP' ? 'event_buffer_expired' : 'sequence_gap')
+        return this.watch(socket, state, { ...command, resume: { after: 0 } })
+      }
       if (cause instanceof PiRuntimeResumeError) return this.error(socket, command.id, cause.code, cause.message, session.id)
       return this.error(socket, command.id, 'EVENT_BUFFER_FAILED', 'Pi runtime event buffer failed', session.id)
     }
@@ -197,6 +210,10 @@ export class RuntimeWebSocketBroker {
 
   private runtimeStatus(socket: RuntimeSocket, status: PiRuntimeStatus) {
     this.send(socket, { ...status, type: 'runtime_status' })
+  }
+
+  private resyncRequired(socket: RuntimeSocket, sessionId: string, reason: 'event_buffer_expired' | 'sequence_gap') {
+    this.send(socket, { reason, sessionId, type: 'resync_required' })
   }
 
   private send(socket: RuntimeSocket, message: unknown) {
