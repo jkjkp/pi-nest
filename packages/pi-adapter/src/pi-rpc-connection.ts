@@ -2,6 +2,13 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 
 export type PiRpcRecord = Record<string, unknown>
+export type PiRpcFailureKind = 'process_error' | 'process_exit' | 'protocol_error' | 'rpc_timeout'
+
+export class PiRpcConnectionError extends Error {
+  constructor(readonly failureKind: PiRpcFailureKind, message: string, options?: ErrorOptions) {
+    super(message, options)
+  }
+}
 
 export type PiRpcResponse = PiRpcRecord & {
   command: string
@@ -35,6 +42,7 @@ export type PiRpcConnectionOptions = {
  */
 export class PiRpcConnection {
   private readonly commandTimeoutMs: number
+  private readonly failures = new Set<(error: PiRpcConnectionError) => void>()
   private readonly listeners = new Set<(record: PiRpcRecord) => void>()
   private readonly pending = new Map<
     string,
@@ -72,10 +80,10 @@ export class PiRpcConnection {
     child.stderr.on('data', (chunk: Buffer) => {
       this.stderr += chunk.toString('utf8')
     })
-    child.once('error', (cause) => this.fail(new Error(`Pi RPC process error: ${cause.message}`, { cause })))
+    child.once('error', (cause) => this.fail(new PiRpcConnectionError('process_error', `Pi RPC process error: ${cause.message}`, { cause })))
     child.once('exit', (code, signal) => {
       if (!this.closed) {
-        this.fail(new Error(`Pi RPC process exited before close (code ${code ?? 'null'}, signal ${signal ?? 'null'})`))
+        this.fail(new PiRpcConnectionError('process_exit', `Pi RPC process exited before close (code ${code ?? 'null'}, signal ${signal ?? 'null'})`))
       }
     })
   }
@@ -83,6 +91,11 @@ export class PiRpcConnection {
   onRecord(listener: (record: PiRpcRecord) => void) {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  onFailure(listener: (error: PiRpcConnectionError) => void) {
+    this.failures.add(listener)
+    return () => this.failures.delete(listener)
   }
 
   async send(command: PiRpcRecord): Promise<PiRpcResponse> {
@@ -95,7 +108,9 @@ export class PiRpcConnection {
     return new Promise<PiRpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`Pi RPC command timed out: ${type} (${id})`))
+        const error = new PiRpcConnectionError('rpc_timeout', `Pi RPC command timed out: ${type} (${id})`)
+        this.fail(error)
+        reject(error)
       }, this.commandTimeoutMs)
       this.pending.set(id, { resolve, reject, timer })
       try {
@@ -155,11 +170,11 @@ export class PiRpcConnection {
     try {
       parsed = JSON.parse(line)
     } catch (cause) {
-      this.fail(new Error('Pi RPC stdout contained invalid JSONL', { cause }))
+      this.fail(new PiRpcConnectionError('protocol_error', 'Pi RPC stdout contained invalid JSONL', { cause }))
       return
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      this.fail(new Error('Pi RPC stdout JSONL values must be objects'))
+      this.fail(new PiRpcConnectionError('protocol_error', 'Pi RPC stdout JSONL values must be objects'))
       return
     }
 
@@ -179,10 +194,11 @@ export class PiRpcConnection {
     }
   }
 
-  private fail(error: Error) {
+  private fail(error: PiRpcConnectionError) {
     if (this.processError) return
     this.processError = error
     this.rejectPending(error)
+    for (const listener of this.failures) listener(error)
   }
 
   private rejectPending(error: Error) {

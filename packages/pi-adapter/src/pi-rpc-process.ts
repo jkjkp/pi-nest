@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path'
 
 import {
   PiRpcConnection,
+  type PiRpcConnectionError,
   type PiRpcConnectionOptions,
   type PiRpcRecord,
   type PiRpcResponse,
@@ -59,6 +60,10 @@ export class PiRpcProcess {
 
   onEvent(listener: (record: PiRpcRecord) => void) {
     return this.connection.onRecord(listener)
+  }
+
+  onFailure(listener: (error: PiRpcConnectionError) => void) {
+    return this.connection.onFailure(listener)
   }
 
   async start(): Promise<PiRpcProcessState> {

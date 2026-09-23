@@ -126,4 +126,17 @@ describe('PiRpcConnection', () => {
     })
     await connection.close()
   })
+
+  it('reports an unexpected child exit to failure observers', async () => {
+    const child = new FakeChild()
+    const { connection } = createConnection(child)
+    const failures: string[] = []
+    connection.onFailure((error) => failures.push(error.failureKind))
+    await connection.start()
+
+    child.emit('exit', 1, null)
+
+    expect(failures).toEqual(['process_exit'])
+    await connection.close()
+  })
 })
