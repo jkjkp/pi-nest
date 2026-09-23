@@ -1,4 +1,4 @@
-import { PiRpcProcess, type PiRpcProcessState } from '@pi-nest/pi-adapter'
+import { PiRpcConnectionError, PiRpcProcess, type PiRpcFailureKind, type PiRpcProcessState } from '@pi-nest/pi-adapter'
 
 export type PiRuntimeSession = {
   cwd: string
@@ -22,7 +22,16 @@ export type PiRuntimePromptResult = {
   stopReason: string | undefined
 }
 
-type RuntimeProcess = Pick<PiRpcProcess, 'close' | 'onEvent' | 'send' | 'start' | 'write'>
+export type PiRuntimeFailureKind = PiRpcFailureKind | 'rpc_error' | 'startup_timeout'
+export type PiRuntimeHostFailure = { kind: PiRuntimeFailureKind; message: string }
+
+export class PiRuntimeHostError extends Error {
+  constructor(readonly failure: PiRuntimeHostFailure, options?: ErrorOptions) {
+    super(failure.message, options)
+  }
+}
+
+type RuntimeProcess = Pick<PiRpcProcess, 'close' | 'onEvent' | 'onFailure' | 'send' | 'start' | 'write'>
 type ProcessFactory = (session: PiRuntimeSession) => RuntimeProcess
 
 function defaultProcessFactory(session: PiRuntimeSession) {
@@ -57,10 +66,27 @@ function stopReasonFrom(event: Record<string, unknown>) {
   return candidate.stopReason
 }
 
+function failureFrom(cause: unknown): PiRuntimeHostFailure {
+  if (cause instanceof PiRuntimeHostError) return cause.failure
+  if (cause instanceof PiRpcConnectionError) return { kind: cause.failureKind, message: cause.message }
+  if (cause instanceof Error && cause.cause) return failureFrom(cause.cause)
+  return { kind: 'rpc_error', message: cause instanceof Error && cause.message ? cause.message : 'Pi RPC command failed' }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  let timer: NodeJS.Timeout | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new PiRuntimeHostError({ kind: 'startup_timeout', message: 'Pi runtime startup timed out' })), timeoutMs)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
 /** Holds one active native Pi CLI RPC session inside the Server process. */
 export class PiRuntimeHost {
+  private readonly failureListeners = new Set<(failure: PiRuntimeHostFailure) => void>()
   private readonly listeners = new Set<(event: PiRuntimeHostEvent) => void>()
   private process: RuntimeProcess | undefined
+  private processFailureUnsubscribe: (() => void) | undefined
   private processUnsubscribe: (() => void) | undefined
   private startResult: PiRpcProcessState | undefined
   private abortRequested = false
@@ -70,6 +96,7 @@ export class PiRuntimeHost {
   constructor(
     readonly session: PiRuntimeSession,
     private readonly createProcess: ProcessFactory = defaultProcessFactory,
+    private readonly startTimeoutMs = 30_000,
   ) {}
 
   get isRunning() {
@@ -81,20 +108,26 @@ export class PiRuntimeHost {
     return () => this.listeners.delete(listener)
   }
 
+  onFailure(listener: (failure: PiRuntimeHostFailure) => void) {
+    this.failureListeners.add(listener)
+    return () => this.failureListeners.delete(listener)
+  }
+
   async start(): Promise<PiRpcProcessState> {
     if (this.started && this.process && this.startResult) return this.startResult
 
     const process = this.createProcess(this.session)
     this.process = process
     this.processUnsubscribe = process.onEvent((event) => this.publish(event))
+    this.processFailureUnsubscribe = process.onFailure((cause) => this.publishFailure(failureFrom(cause)))
     try {
-      const state = await process.start()
+      const state = await withTimeout(process.start(), this.startTimeoutMs)
       this.started = true
       this.startResult = state
       return state
     } catch (cause) {
       await this.close()
-      throw new Error(`Failed to start Pi runtime for session ${this.session.id}`, { cause })
+      throw new PiRuntimeHostError(failureFrom(cause), { cause })
     }
   }
 
@@ -159,6 +192,8 @@ export class PiRuntimeHost {
     this.startResult = undefined
     this.processUnsubscribe?.()
     this.processUnsubscribe = undefined
+    this.processFailureUnsubscribe?.()
+    this.processFailureUnsubscribe = undefined
     const process = this.process
     this.process = undefined
     await process?.close()
@@ -171,5 +206,9 @@ export class PiRuntimeHost {
       sessionId: this.session.id,
     }
     for (const listener of this.listeners) listener(envelope)
+  }
+
+  private publishFailure(failure: PiRuntimeHostFailure) {
+    for (const listener of this.failureListeners) listener(failure)
   }
 }

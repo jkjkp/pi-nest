@@ -6,6 +6,7 @@ class FakeProcess {
   readonly commands: Record<string, unknown>[] = []
   closed = false
   private readonly listeners = new Set<(event: Record<string, unknown>) => void>()
+  private readonly failures = new Set<(error: Error) => void>()
   private stateReads = 0
 
   async start() {
@@ -15,6 +16,11 @@ class FakeProcess {
   onEvent(listener: (event: Record<string, unknown>) => void) {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  onFailure(listener: (error: Error) => void) {
+    this.failures.add(listener)
+    return () => this.failures.delete(listener)
   }
 
   async send(command: Record<string, unknown>) {
@@ -83,5 +89,22 @@ describe('PiRuntimeHost', () => {
     await expect(host.prompt('hello')).rejects.toThrow('rpc failed')
     expect(process.closed).toBe(true)
     expect(host.isRunning).toBe(false)
+  })
+
+  it('times out a stalled Pi startup and closes its process', async () => {
+    vi.useFakeTimers()
+    const process = new FakeProcess()
+    process.start = vi.fn(() => new Promise<{ sessionId: string; state: { sessionId: string } }>(() => undefined))
+    const host = new PiRuntimeHost(
+      { cwd: '/fixture', id: 'session-1', sessionFile: '/fixture/session.jsonl' },
+      () => process as never,
+      10,
+    )
+
+    const started = expect(host.start()).rejects.toMatchObject({ failure: { kind: 'startup_timeout' } })
+    await vi.advanceTimersByTimeAsync(10)
+    await started
+    expect(process.closed).toBe(true)
+    vi.useRealTimers()
   })
 })

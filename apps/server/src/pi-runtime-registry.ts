@@ -2,19 +2,20 @@ import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { PiRuntimeHost, type PiRuntimeEvent, type PiRuntimePromptResult, type PiRuntimeSession } from './pi-runtime-host.js'
+import { PiRuntimeHost, PiRuntimeHostError, type PiRuntimeEvent, type PiRuntimeFailureKind, type PiRuntimeHostFailure, type PiRuntimePromptResult, type PiRuntimeSession } from './pi-runtime-host.js'
 import { PiRuntimeResumeError, type PiRuntimeStreamError, SessionEventStream } from './session-event-stream.js'
 
 type HostFactory = (session: PiRuntimeSession) => PiRuntimeHost
 type Lock = 'mutation' | 'prompt'
-type RegistryEntry = { host: PiRuntimeHost; unsubscribe: () => void }
+type RegistryEntry = { failureUnsubscribe: () => void; host: PiRuntimeHost; lastUsed: number; unsubscribe: () => void }
 type StreamEntry = { stream: SessionEventStream }
 type StreamListener = (event: PiRuntimeEvent) => void
 type StreamErrorListener = (error: PiRuntimeStreamError) => void
-type UnloadReason = 'deleted' | 'failed' | 'idleExpired' | 'mutation' | 'settingsReload' | 'shutdown'
+type UnloadReason = 'capacityEvicted' | 'deleted' | 'failed' | 'idleExpired' | 'mutation' | 'settingsReload' | 'shutdown'
 type ExtensionUiProjection = { statuses: Map<string, string>; widgets: Map<string, string[]> }
 type RuntimeState = {
   error?: string
+  failureKind?: PiRuntimeFailureKind
   extensionUi?: ExtensionUiProjection
   lifecycle: PiRuntimeLifecycle
   listeners: Set<RuntimeStatusListener>
@@ -25,7 +26,7 @@ type RuntimeState = {
 }
 
 export type PiRuntimeLifecycle = 'notLoaded' | 'loading' | 'idle' | 'active' | 'failed'
-export type PiRuntimeStatus = { error?: string; lifecycle: PiRuntimeLifecycle; revision: number; sessionId: string }
+export type PiRuntimeStatus = { error?: string; failureKind?: PiRuntimeFailureKind; lifecycle: PiRuntimeLifecycle; revision: number; sessionId: string }
 export type PiRuntimeExtensionUi = {
   freshness: 'known' | 'unknown'
   statuses: Record<string, string>
@@ -39,22 +40,34 @@ export type PiRuntimeSessionSnapshot = {
 }
 type RuntimeStatusListener = (status: PiRuntimeStatus) => void
 
-function configuredUnloadGraceMs() {
-  const value = process.env.PI_NEST_RUNTIME_UNLOAD_GRACE_MS
-  if (value === undefined) return 30 * 60_000
-  if (!/^\d+$/.test(value) || Number(value) < 1) throw new Error('PI_NEST_RUNTIME_UNLOAD_GRACE_MS must be a positive integer')
+export class PiRuntimeCapacityError extends Error {
+  constructor() { super('Pi runtime capacity is exhausted') }
+}
+
+function configuredPositiveInteger(name: string, fallback: number) {
+  const value = process.env[name]
+  if (value === undefined) return fallback
+  if (!/^\d+$/.test(value) || Number(value) < 1) throw new Error(`${name} must be a positive integer`)
   return Number(value)
+}
+
+function positiveInteger(value: number, name: string) {
+  if (!Number.isInteger(value) || value < 1) throw new Error(`${name} must be a positive integer`)
+  return value
 }
 
 export type PiRuntimeRegistryOptions = {
   createHost?: HostFactory
   eventBufferDirectory?: string
+  maxLoadedRuntimes?: number
+  runtimeStartTimeoutMs?: number
   runtimeUnloadGraceMs?: number
 }
 
 /** Single-process ownership and lifecycle manager for native Pi sessions. */
 export class PiRuntimeRegistry {
   private readonly createHost: HostFactory
+  private admission = Promise.resolve()
   private readonly entries = new Map<string, RegistryEntry>()
   private readonly eventBufferDirectory: Promise<string>
   private readonly expiredStreams = new Set<string>()
@@ -63,14 +76,19 @@ export class PiRuntimeRegistry {
   private readonly states = new Map<string, RuntimeState>()
   private settingsUpdating = false
   private readonly streams = new Map<string, StreamEntry>()
+  private usageClock = 0
 
   constructor(options: PiRuntimeRegistryOptions = {}) {
-    this.createHost = options.createHost ?? ((session) => new PiRuntimeHost(session))
-    this.runtimeUnloadGraceMs = options.runtimeUnloadGraceMs ?? configuredUnloadGraceMs()
+    this.runtimeStartTimeoutMs = positiveInteger(options.runtimeStartTimeoutMs ?? configuredPositiveInteger('PI_NEST_RUNTIME_START_TIMEOUT_MS', 30_000), 'PI_NEST_RUNTIME_START_TIMEOUT_MS')
+    this.maxLoadedRuntimes = positiveInteger(options.maxLoadedRuntimes ?? configuredPositiveInteger('PI_NEST_MAX_LOADED_RUNTIMES', 4), 'PI_NEST_MAX_LOADED_RUNTIMES')
+    this.createHost = options.createHost ?? ((session) => new PiRuntimeHost(session, undefined, this.runtimeStartTimeoutMs))
+    this.runtimeUnloadGraceMs = positiveInteger(options.runtimeUnloadGraceMs ?? configuredPositiveInteger('PI_NEST_RUNTIME_UNLOAD_GRACE_MS', 30 * 60_000), 'PI_NEST_RUNTIME_UNLOAD_GRACE_MS')
     this.eventBufferDirectory = this.createBufferDirectory(options.eventBufferDirectory)
   }
 
   private readonly runtimeUnloadGraceMs: number
+  private readonly runtimeStartTimeoutMs: number
+  private readonly maxLoadedRuntimes: number
 
   isPromptActive(sessionId: string) {
     return this.locks.get(sessionId) === 'prompt'
@@ -98,9 +116,11 @@ export class PiRuntimeRegistry {
       .then((entry) => entry.host.command(command))
       .then((result) => {
         this.transition(session.id, 'idle')
+        this.touch(session.id)
         return result
       })
       .catch(async (cause) => {
+        if (cause instanceof PiRuntimeCapacityError) throw cause
         this.fail(session.id, cause)
         await this.remove(session.id, 'failed')
         throw cause
@@ -170,6 +190,7 @@ export class PiRuntimeRegistry {
     const previous = state.subscribers.get(subscriberId)
     previous?.()
     state.subscribers.set(subscriberId, unwatch)
+    this.touch(sessionId)
     return unwatch
   }
 
@@ -188,14 +209,17 @@ export class PiRuntimeRegistry {
   resume(session: PiRuntimeSession): Promise<void> | undefined {
     if (this.settingsUpdating || this.locks.has(session.id)) return undefined
     this.cancelUnload(session.id)
-    this.expiredStreams.delete(session.id)
-    this.streamFor(session.id)
     this.locks.set(session.id, 'mutation')
-    this.transition(session.id, 'loading')
     return this.getOrCreate(session)
-      .then((entry) => entry.host.start())
-      .then(() => { this.transition(session.id, 'idle') })
+      .then((entry) => {
+        this.expiredStreams.delete(session.id)
+        this.streamFor(session.id)
+        this.transition(session.id, 'loading')
+        return entry.host.start()
+      })
+      .then(() => { this.transition(session.id, 'idle'); this.touch(session.id) })
       .catch(async (cause) => {
+        if (cause instanceof PiRuntimeCapacityError) throw cause
         this.fail(session.id, cause)
         await this.remove(session.id, 'failed')
         throw cause
@@ -209,14 +233,15 @@ export class PiRuntimeRegistry {
   startPrompt(session: PiRuntimeSession, message: string): Promise<PiRuntimePromptResult> | undefined {
     if (this.settingsUpdating || this.locks.has(session.id)) return undefined
     this.cancelUnload(session.id)
-    this.expiredStreams.delete(session.id)
-    this.streamFor(session.id)
     this.locks.set(session.id, 'prompt')
-    this.transition(session.id, 'loading')
 
     return this.getOrCreate(session)
       .then((entry) => {
+        this.expiredStreams.delete(session.id)
+        this.streamFor(session.id)
+        this.transition(session.id, 'loading')
         this.transition(session.id, 'active')
+        this.touch(session.id)
         return entry.host.prompt(message)
       })
       .then((result) => {
@@ -224,6 +249,7 @@ export class PiRuntimeRegistry {
         return result
       })
       .catch(async (cause) => {
+        if (cause instanceof PiRuntimeCapacityError) throw cause
         this.fail(session.id, cause)
         await this.remove(session.id, 'failed')
         throw cause
@@ -307,32 +333,64 @@ export class PiRuntimeRegistry {
   private async getOrCreate(session: PiRuntimeSession) {
     const current = this.entries.get(session.id)
     if (current) return current
-
-    const host = this.createHost(session)
-    const entry: RegistryEntry = {
-      host,
-      unsubscribe: host.onEvent((event) => {
-        void this.streamFor(session.id).stream.publish(event, (published) => {
-          this.trackExtensionDialog(session.id, published.event)
-          this.trackExtensionUi(session.id, published.event)
-        })
-      }),
-    }
-    this.entries.set(session.id, entry)
-    return entry
+    const result = this.admission.then(async () => {
+      const existing = this.entries.get(session.id)
+      if (existing) return existing
+      await this.makeCapacity(session.id)
+      const host = this.createHost(session)
+      const entry: RegistryEntry = {
+        failureUnsubscribe: () => undefined,
+        host,
+        lastUsed: ++this.usageClock,
+        unsubscribe: host.onEvent((event) => {
+          void this.streamFor(session.id).stream.publish(event, (published) => {
+            this.trackExtensionDialog(session.id, published.event)
+            this.trackExtensionUi(session.id, published.event)
+          })
+        }),
+      }
+      entry.failureUnsubscribe = host.onFailure((failure) => { void this.handleHostFailure(session.id, entry, failure) })
+      this.entries.set(session.id, entry)
+      return entry
+    })
+    this.admission = result.then(() => undefined, () => undefined)
+    return result
   }
 
-  private async remove(sessionId: string, reason: UnloadReason) {
+  private async remove(sessionId: string, reason: UnloadReason, options: { expected?: RegistryEntry; preserveUnloadDeadline?: boolean } = {}) {
     const entry = this.entries.get(sessionId)
+    if (options.expected && entry !== options.expected) return false
     if (entry) {
       this.entries.delete(sessionId)
       this.pendingExtensionDialogs.delete(sessionId)
       entry.unsubscribe()
+      entry.failureUnsubscribe()
       await entry.host.close()
     }
     if (reason === 'failed' || reason === 'deleted') this.clearExtensionUi(sessionId)
     if (reason !== 'shutdown') this.transition(sessionId, 'notLoaded')
-    if (reason !== 'shutdown') this.scheduleUnload(sessionId)
+    if (reason !== 'shutdown' && !options.preserveUnloadDeadline) this.scheduleUnload(sessionId)
+    return true
+  }
+
+  private async makeCapacity(sessionId: string) {
+    if (this.entries.size < this.maxLoadedRuntimes) return
+    const candidate = [...this.entries.entries()]
+      .filter(([id, entry]) => id !== sessionId && this.stateFor(id).lifecycle === 'idle' && this.stateFor(id).subscribers.size === 0 && !this.locks.has(id))
+      .sort(([leftId, left], [rightId, right]) => left.lastUsed - right.lastUsed || leftId.localeCompare(rightId))[0]
+    if (!candidate) throw new PiRuntimeCapacityError()
+    await this.remove(candidate[0], 'capacityEvicted', { expected: candidate[1], preserveUnloadDeadline: true })
+  }
+
+  private touch(sessionId: string) {
+    const entry = this.entries.get(sessionId)
+    if (entry) entry.lastUsed = ++this.usageClock
+  }
+
+  private async handleHostFailure(sessionId: string, entry: RegistryEntry, failure: PiRuntimeHostFailure) {
+    if (this.entries.get(sessionId) !== entry) return
+    this.fail(sessionId, new PiRuntimeHostError(failure))
+    await this.remove(sessionId, 'failed', { expected: entry })
   }
 
   private streamFor(sessionId: string) {
@@ -404,24 +462,27 @@ export class PiRuntimeRegistry {
     return {
       atSequence,
       extensionUi: this.getExtensionUiSnapshot(sessionId),
-      runtime: { ...(state.error ? { error: state.error } : {}), lifecycle: state.lifecycle, revision: state.revision },
+      runtime: { ...(state.error ? { error: state.error } : {}), ...(state.failureKind ? { failureKind: state.failureKind } : {}), lifecycle: state.lifecycle, revision: state.revision },
       sessionId,
     }
   }
 
-  private transition(sessionId: string, lifecycle: PiRuntimeLifecycle, error?: string) {
+  private transition(sessionId: string, lifecycle: PiRuntimeLifecycle, error?: string, failureKind?: PiRuntimeFailureKind) {
     const state = this.stateFor(sessionId)
-    if (state.lifecycle === lifecycle && state.error === error) return
+    if (state.lifecycle === lifecycle && state.error === error && state.failureKind === failureKind) return
     state.lifecycle = lifecycle
     state.error = error
+    state.failureKind = failureKind
     state.revision += 1
-    const status: PiRuntimeStatus = { ...(error ? { error } : {}), lifecycle, revision: state.revision, sessionId }
+    const status: PiRuntimeStatus = { ...(error ? { error } : {}), ...(failureKind ? { failureKind } : {}), lifecycle, revision: state.revision, sessionId }
     for (const listener of state.listeners) listener(status)
   }
 
   private fail(sessionId: string, cause: unknown) {
-    const error = cause instanceof Error && cause.message ? cause.message : 'Pi runtime failed'
-    this.transition(sessionId, 'failed', error)
+    const error = cause instanceof PiRuntimeHostError
+      ? cause.failure
+      : { kind: 'rpc_error' as const, message: cause instanceof Error && cause.message ? cause.message : 'Pi runtime failed' }
+    this.transition(sessionId, 'failed', error.message, error.kind)
   }
 
   private clearExtensionUi(sessionId: string) {

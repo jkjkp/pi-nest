@@ -4,9 +4,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import type { PiRuntimeHost } from './pi-runtime-host.js'
-import { PiRuntimeRegistry } from './pi-runtime-registry.js'
+import { PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
 
 const session = { cwd: '/fixture', id: 'session-1', sessionFile: '/fixture/session.jsonl' }
+const sessionFor = (id: string) => ({ ...session, id })
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -16,6 +17,7 @@ function deferred<T>() {
 }
 
 function hostMock() {
+  const failures = new Set<(failure: { kind: string; message: string }) => void>()
   const listeners = new Set<(event: { event: Record<string, unknown>; observedAt: string; sessionId: string }) => void>()
   return {
     abort: vi.fn().mockResolvedValue(true),
@@ -24,9 +26,11 @@ function hostMock() {
       listeners.add(listener)
       return () => listeners.delete(listener)
     }),
+    onFailure: vi.fn((listener) => { failures.add(listener); return () => failures.delete(listener) }),
     prompt: vi.fn().mockResolvedValue({ model: undefined, stopReason: 'stop' }),
     start: vi.fn().mockResolvedValue({}),
     emit: (event: Record<string, unknown>) => { for (const listener of listeners) listener({ event, observedAt: 'now', sessionId: session.id }) },
+    fail: (failure: { kind: string; message: string }) => { for (const listener of failures) listener(failure) },
   }
 }
 
@@ -52,6 +56,83 @@ describe('PiRuntimeRegistry', () => {
     else process.env.PI_NEST_RUNTIME_UNLOAD_GRACE_MS = previous
   })
 
+  it('evicts the least recently used unwatched idle runtime before exceeding capacity', async () => {
+    const first = hostMock()
+    const second = hostMock()
+    const third = hostMock()
+    const createHost = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second).mockReturnValueOnce(third)
+    const registry = new PiRuntimeRegistry({ createHost: createHost as never, maxLoadedRuntimes: 2 })
+
+    await registry.resume(sessionFor('one'))
+    await registry.resume(sessionFor('two'))
+    await registry.resume(sessionFor('three'))
+
+    expect(first.close).toHaveBeenCalledOnce()
+    expect(second.close).not.toHaveBeenCalled()
+    expect(createHost).toHaveBeenCalledTimes(3)
+    await registry.close()
+  })
+
+  it('does not evict a watched idle runtime and returns an explicit capacity error', async () => {
+    const first = hostMock()
+    const registry = new PiRuntimeRegistry({ createHost: () => first as unknown as PiRuntimeHost, maxLoadedRuntimes: 1 })
+    await registry.resume(sessionFor('one'))
+    await registry.watch('one', 'socket-a', 0, () => undefined, () => undefined)
+
+    await expect(registry.resume(sessionFor('two'))).rejects.toBeInstanceOf(PiRuntimeCapacityError)
+    expect(first.close).not.toHaveBeenCalled()
+    await registry.close()
+  })
+
+  it('serializes concurrent admissions so loading runtimes cannot exceed capacity', async () => {
+    const starting = deferred<{}>()
+    const first = hostMock()
+    first.start.mockReturnValueOnce(starting.promise)
+    const registry = new PiRuntimeRegistry({ createHost: () => first as unknown as PiRuntimeHost, maxLoadedRuntimes: 1 })
+
+    const firstResume = registry.resume(sessionFor('one'))
+    await vi.waitFor(() => expect(first.start).toHaveBeenCalledOnce())
+    await expect(registry.resume(sessionFor('two'))).rejects.toBeInstanceOf(PiRuntimeCapacityError)
+    starting.resolve({})
+    await firstResume
+    await registry.close()
+  })
+
+  it('preserves the existing event-cache deadline when LRU evicts a host', async () => {
+    vi.useFakeTimers()
+    const registry = new PiRuntimeRegistry({
+      createHost: () => hostMock() as unknown as PiRuntimeHost,
+      maxLoadedRuntimes: 1,
+      runtimeUnloadGraceMs: 10,
+    })
+    await registry.resume(sessionFor('one'))
+    await vi.advanceTimersByTimeAsync(5)
+    await registry.resume(sessionFor('two'))
+    await vi.advanceTimersByTimeAsync(5)
+
+    await expect(registry.watch('one', 'socket-a', 1, () => undefined, () => undefined)).rejects.toMatchObject({ code: 'RESUME_GAP' })
+    await registry.close()
+    vi.useRealTimers()
+  })
+
+  it('broadcasts a classified unexpected host failure and allows explicit recovery', async () => {
+    const failed = hostMock()
+    const recovered = hostMock()
+    const createHost = vi.fn().mockReturnValueOnce(failed).mockReturnValueOnce(recovered)
+    const registry = new PiRuntimeRegistry({ createHost: createHost as never })
+    const statuses: Array<{ failureKind?: string; lifecycle: string }> = []
+    await registry.watch(session.id, 'socket-a', 0, () => undefined, () => undefined, undefined, (status) => statuses.push(status))
+    await registry.resume(session)
+
+    failed.fail({ kind: 'process_exit', message: 'Pi process exited unexpectedly' })
+    await vi.waitFor(() => expect(statuses.map((status) => status.lifecycle)).toContain('failed'))
+    expect(statuses.find((status) => status.lifecycle === 'failed')).toMatchObject({ failureKind: 'process_exit' })
+    expect(failed.close).toHaveBeenCalledOnce()
+    await registry.resume(session)
+    expect(createHost).toHaveBeenCalledTimes(2)
+    await registry.close()
+  })
+
   it('enforces one prompt or mutation per native session and releases the prompt lock', async () => {
     const host = hostMock()
     const running = deferred<{ model: undefined; stopReason: string }>()
@@ -62,6 +143,7 @@ describe('PiRuntimeRegistry', () => {
     expect(first).toBeDefined()
     expect(registry.startPrompt(session, 'second')).toBeUndefined()
     expect(registry.beginMutation(session.id)).toBeUndefined()
+    await vi.waitFor(() => expect(host.prompt).toHaveBeenCalledWith('first'))
     expect(await registry.abort(session.id)).toBe(true)
 
     running.resolve({ model: undefined, stopReason: 'stop' })
