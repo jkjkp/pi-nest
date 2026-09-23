@@ -178,6 +178,26 @@ describe('RuntimeWebSocketClient', () => {
     vi.unstubAllGlobals()
   })
 
+  it('retains restored projection semantics until a newer live UI update arrives', async () => {
+    vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+    const socket = new FakeSocket()
+    const socketFactory = vi.fn(() => socket as never)
+    const client = new RuntimeWebSocketClient({
+      fetchFn: vi.fn().mockResolvedValue(new Response(JSON.stringify({ runtimeId: 'runtime-1', token: 'token', websocketPath: '/api/runtime' }))),
+      socketFactory,
+    })
+    const watch = client.watch('session-a')
+    await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledOnce())
+    socket.open()
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
+    socket.receive({ atSequence: 0, extensionUi: { freshness: 'restored', statuses: { agent: 'previous' }, widgets: {} }, runtime: { lifecycle: 'notLoaded', revision: 0 }, sessionId: 'session-a', type: 'session_snapshot' })
+    socket.receive({ event: { method: 'setStatus', statusKey: 'agent', statusText: 'live', type: 'extension_ui_request' }, observedAt: 'now', sequence: 1, sessionId: 'session-a', type: 'pi_event' })
+    socket.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
+    await watch
+    expect(client.extensionUiFreshness('session-a')).toBe('known')
+    vi.unstubAllGlobals()
+  })
+
   it('only applies strictly newer runtime lifecycle revisions', async () => {
     vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
     const socket = new FakeSocket()

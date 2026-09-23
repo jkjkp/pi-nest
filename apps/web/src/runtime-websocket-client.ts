@@ -12,7 +12,7 @@ export type RuntimeFailureKind = 'process_error' | 'process_exit' | 'protocol_er
 export type RuntimeStatus = { error?: string; failureKind?: RuntimeFailureKind; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
 export type SessionSnapshot = {
   atSequence: number
-  extensionUi: { freshness: 'known' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
+  extensionUi: { freshness: 'known' | 'restored' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
   runtime: Omit<RuntimeStatus, 'sessionId'>
   sessionId: string
 }
@@ -59,6 +59,12 @@ function runtimeUrl(path: string, token: string) {
 
 function errorMessage(value: unknown) {
   return value instanceof Error ? value.message : 'Pi runtime connection failed'
+}
+
+function isProjectionEvent(event: Record<string, unknown>) {
+  const method = event.type === 'extension_ui_request' ? event.method : event.type
+  if (method === 'setStatus') return typeof event.statusKey === 'string' && event.statusKey.length > 0
+  return method === 'setWidget' && typeof event.widgetKey === 'string' && event.widgetKey.length > 0
 }
 
 function reconnectDelay(attempt: number) {
@@ -113,7 +119,7 @@ export class RuntimeWebSocketClient {
   private readonly resyncRequired = new Set<(message: ResyncRequired) => void>()
   private readonly runtimeStates = new Map<string, RuntimeStatus>()
   private readonly sessionSnapshots = new Set<(snapshot: SessionSnapshot) => void>()
-  private readonly uiFreshness = new Map<string, 'known' | 'unknown'>()
+  private readonly uiFreshness = new Map<string, 'known' | 'restored' | 'unknown'>()
   private runtimeId: string | undefined
   private socket: RuntimeSocket | undefined
   private readonly options: RuntimeWebSocketClientOptions
@@ -277,6 +283,7 @@ export class RuntimeWebSocketClient {
     watch.after = message.sequence
     this.saveWatches()
     const { type: _type, ...event } = message
+    if (this.shouldApplyExtensionUi(event) && isProjectionEvent(event.event)) this.uiFreshness.set(event.sessionId, 'known')
     for (const listener of this.piEvents) listener(event)
   }
 
