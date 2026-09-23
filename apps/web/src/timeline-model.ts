@@ -15,18 +15,27 @@ export type TimelineEvent = {
   raw: Record<string, unknown>
 }
 
+export type TimelineDiagnostic = {
+  event: TimelineEvent
+  reason: 'metadata' | 'unrenderable_message' | 'unknown'
+}
+
 export type TimelinePart =
   | { events: TimelineEvent[]; kind: 'assistant_text'; text: string }
   | { events: TimelineEvent[]; kind: 'bash' }
   | { events: TimelineEvent[]; kind: 'file_change' }
-  | { events: TimelineEvent[]; kind: 'native' }
-  | { events: TimelineEvent[]; kind: 'system' }
   | { events: TimelineEvent[]; kind: 'thinking'; text: string }
   | { events: TimelineEvent[]; kind: 'tool'; toolCallId: string | undefined; toolName: string }
 
-export type TimelineItem =
-  | { id: string; kind: 'system'; part: TimelinePart }
-  | { id: string; kind: 'turn'; parts: TimelinePart[]; prompt: string | undefined; startedAt: string }
+export type TimelineItem = {
+  diagnostics: TimelineDiagnostic[]
+  events: TimelineEvent[]
+  id: string
+  kind: 'turn'
+  parts: TimelinePart[]
+  prompt: string | undefined
+  startedAt: string
+}
 
 function record(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
@@ -54,7 +63,7 @@ function update(event: TimelineEvent) {
   return record(event.event.assistantMessageEvent)
 }
 
-function pushText(parts: TimelinePart[], kind: 'assistant_text' | 'thinking', event: TimelineEvent, text: string) {
+function pushDelta(parts: TimelinePart[], kind: 'assistant_text' | 'thinking', event: TimelineEvent, text: string) {
   const previous = parts.at(-1)
   if (previous?.kind === kind) {
     previous.events.push(event)
@@ -62,6 +71,22 @@ function pushText(parts: TimelinePart[], kind: 'assistant_text' | 'thinking', ev
     return
   }
   parts.push({ events: [event], kind, text })
+}
+
+function pushAssistantMessage(parts: TimelinePart[], event: TimelineEvent, text: string) {
+  const previous = [...parts].reverse().find((part): part is Extract<TimelinePart, { kind: 'assistant_text' }> => part.kind === 'assistant_text')
+  if (previous) {
+    if (text === previous.text) {
+      previous.events.push(event)
+      return
+    }
+    if (text.startsWith(previous.text)) {
+      previous.events.push(event)
+      previous.text = text
+      return
+    }
+  }
+  parts.push({ events: [event], kind: 'assistant_text', text })
 }
 
 function pushTool(parts: TimelinePart[], event: TimelineEvent) {
@@ -83,75 +108,72 @@ function runtimeEvent(event: PiRuntimeEvent): TimelineEvent {
   return { event: event.event, id: `${event.sessionId}:${event.sequence}`, observedAt: event.observedAt, raw: event.event }
 }
 
-function partFor(event: TimelineEvent, parts: TimelinePart[]) {
+function diagnostic(item: TimelineItem, event: TimelineEvent, reason: TimelineDiagnostic['reason']) {
+  item.diagnostics.push({ event, reason })
+}
+
+function isMetadata(type: string) {
+  return type === 'model_change' || type === 'thinking_level_change' || type === 'thinking_level_changed' || type.startsWith('compaction') || type === 'turn_start' || type === 'turn_end' || type === 'agent_start' || type === 'agent_end' || type === 'agent_settled' || type === 'aborted' || type === 'message_end'
+}
+
+function projectEvent(item: TimelineItem, event: TimelineEvent) {
+  item.events.push(event)
   const type = eventType(event)
   const assistantUpdate = update(event)
   if (type === 'message_update' && assistantUpdate?.type === 'text_delta' && typeof assistantUpdate.delta === 'string') {
-    pushText(parts, 'assistant_text', event, assistantUpdate.delta)
+    pushDelta(item.parts, 'assistant_text', event, assistantUpdate.delta)
     return
   }
   if (type === 'message_update' && typeof assistantUpdate?.type === 'string' && assistantUpdate.type.includes('thinking') && typeof assistantUpdate.delta === 'string') {
-    pushText(parts, 'thinking', event, assistantUpdate.delta)
+    pushDelta(item.parts, 'thinking', event, assistantUpdate.delta)
     return
   }
+  if (type === 'message_update') return diagnostic(item, event, 'unrenderable_message')
+
   const nativeMessage = message(event)
   if (type === 'message' && nativeMessage?.role === 'assistant') {
     const text = textContent(nativeMessage.content)
-    if (text) {
-      pushText(parts, 'assistant_text', event, text)
-      return
-    }
+    if (text) return pushAssistantMessage(item.parts, event, text)
+    return diagnostic(item, event, 'unrenderable_message')
   }
-  if (type.startsWith('tool_execution_')) return pushTool(parts, event)
-  if (type.startsWith('bash_execution_')) return parts.push({ events: [event], kind: 'bash' })
-  if (type === 'file_change' || type === 'file_changes' || Array.isArray(event.event.changes)) return parts.push({ events: [event], kind: 'file_change' })
-  if (type === 'model_change' || type === 'thinking_level_change' || type === 'thinking_level_changed' || type.startsWith('compaction') || type === 'turn_start' || type === 'turn_end' || type === 'agent_start' || type === 'agent_end' || type === 'agent_settled' || type === 'aborted') {
-    return parts.push({ events: [event], kind: 'system' })
-  }
-  parts.push({ events: [event], kind: 'native' })
+  if (type === 'message' && nativeMessage?.role === 'user') return
+  if (type === 'message') return diagnostic(item, event, 'unrenderable_message')
+  if (type.startsWith('tool_execution_')) return pushTool(item.parts, event)
+  if (type.startsWith('bash_execution_')) return item.parts.push({ events: [event], kind: 'bash' })
+  if (type === 'file_change' || type === 'file_changes' || Array.isArray(event.event.changes)) return item.parts.push({ events: [event], kind: 'file_change' })
+  if (isMetadata(type)) return diagnostic(item, event, 'metadata')
+  diagnostic(item, event, 'unknown')
+}
+
+function newTurn(id: string, prompt: string | undefined, startedAt: string): TimelineItem {
+  return { diagnostics: [], events: [], id, kind: 'turn', parts: [], prompt, startedAt }
 }
 
 function historyItems(entries: PiSessionHistoryEntry[]): TimelineItem[] {
   const items: TimelineItem[] = []
-  let active: Extract<TimelineItem, { kind: 'turn' }> | undefined
+  let active: TimelineItem | undefined
   for (const entry of entries) {
     const event = historyEvent(entry)
     const nativeMessage = message(event)
     if (entry.type === 'message' && nativeMessage?.role === 'user') {
       if (active) items.push(active)
-      active = { id: entry.id, kind: 'turn', parts: [], prompt: textContent(nativeMessage.content), startedAt: entry.timestamp }
+      active = newTurn(entry.id, textContent(nativeMessage.content), entry.timestamp)
+      projectEvent(active, event)
       continue
     }
-    if (active) partFor(event, active.parts)
-    else items.push({ id: entry.id, kind: 'system', part: partFrom(event) })
+    if (active) projectEvent(active, event)
   }
   if (active) items.push(active)
   return items
 }
 
-function partFrom(event: TimelineEvent) {
-  const parts: TimelinePart[] = []
-  partFor(event, parts)
-  return parts[0] ?? { events: [event], kind: 'native' }
-}
-
-export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turns: RuntimeTurn[], systemEvents: PiRuntimeEvent[]) {
+export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turns: RuntimeTurn[], _systemEvents: PiRuntimeEvent[]): TimelineItem[] {
   if (history) return historyItems(history)
-  const runtimeItems = turns.map((turn) => {
-    const parts: TimelinePart[] = []
-    for (const event of turn.events) partFor(runtimeEvent(event), parts)
-    return {
-      item: { id: turn.id, kind: 'turn' as const, parts, prompt: turn.prompt ?? promptFrom(turn.events), startedAt: turn.startedAt },
-      sequence: turn.events[0]?.sequence ?? Number.MAX_SAFE_INTEGER,
-    }
+  return turns.map((turn) => {
+    const item = newTurn(turn.id, turn.prompt ?? promptFrom(turn.events), turn.startedAt)
+    for (const event of turn.events) projectEvent(item, runtimeEvent(event))
+    return item
   })
-  return [
-    ...systemEvents.map((event) => ({
-      item: { id: `${event.sessionId}:${event.sequence}`, kind: 'system' as const, part: partFrom(runtimeEvent(event)) },
-      sequence: event.sequence,
-    })),
-    ...runtimeItems,
-  ].sort((left, right) => left.sequence - right.sequence).map(({ item }) => item)
 }
 
 function promptFrom(events: PiRuntimeEvent[]) {
@@ -160,6 +182,13 @@ function promptFrom(events: PiRuntimeEvent[]) {
     if (candidate?.role === 'user') return textContent(candidate.content)
   }
   return undefined
+}
+
+export function diagnosticLabel(diagnostic: TimelineDiagnostic) {
+  const type = eventType(diagnostic.event)
+  if (diagnostic.reason === 'metadata') return `运行元数据：${type}`
+  if (diagnostic.reason === 'unrenderable_message') return `未展示的消息记录：${type}`
+  return `未识别的 Pi 事件：${type}`
 }
 
 export function rawJson(events: TimelineEvent[]) {

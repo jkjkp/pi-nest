@@ -1,0 +1,36 @@
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+
+import { SessionTimeline } from './session-timeline.js'
+
+const history = {
+  entries: [
+    { id: 'user-1', parentId: null, raw: { message: { content: 'question', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
+    { id: 'custom-1', parentId: 'user-1', raw: { type: 'custom' }, timestamp: '2026-09-22T00:00:01.000Z', type: 'custom' },
+    { id: 'thinking-1', parentId: 'user-1', raw: { assistantMessageEvent: { delta: 'reasoning', type: 'thinking_delta' }, type: 'message_update' }, timestamp: '2026-09-22T00:00:02.000Z', type: 'message_update' },
+    { id: 'assistant-1', parentId: 'user-1', raw: { message: { content: 'answer', role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:03.000Z', type: 'message' },
+  ],
+  hasEarlier: false,
+  session: { id: 'session-1' },
+}
+
+describe('SessionTimeline', () => {
+  it('keeps raw Pi records in one closed technical-details disclosure instead of the reading flow', () => {
+    const markup = renderToStaticMarkup(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
+
+    expect(markup).toContain('技术详情（4 条事件）')
+    expect(markup).toContain('本轮原始事件')
+    expect(markup).not.toContain('Pi 原生事件')
+    expect(markup).not.toContain('原始 JSON')
+    expect(markup).not.toMatch(/<details[^>]*open[^>]*>.*技术详情/)
+  })
+
+  it('expands thinking only while the turn is running', () => {
+    const complete = renderToStaticMarkup(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
+    const running = renderToStaticMarkup(<SessionTimeline error={false} history={history} isLoading={false} isRunning onRetry={() => undefined} />)
+
+    expect(complete).toContain('思考过程')
+    expect(complete).not.toMatch(/<details[^>]*open[^>]*><summary[^>]*>思考过程/)
+    expect(running).toMatch(/<details[^>]*open[^>]*><summary[^>]*>思考中/)
+  })
+})
