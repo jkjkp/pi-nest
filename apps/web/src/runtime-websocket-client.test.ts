@@ -30,17 +30,17 @@ describe('RuntimeWebSocketClient', () => {
     const events: unknown[] = []
     client.onPiEvent((event) => events.push(event))
 
-    const attach = client.attach('session-a')
+    const watch = client.watch('session-a')
     await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledOnce())
     socket.open()
-    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'attach' }))
-    socket.receive({ command: 'attach', id: 'web-1', sessionId: 'session-a', type: 'ack' })
-    await attach
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
+    socket.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
+    await watch
 
-    const attachSecond = client.attach('session-b')
-    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-2', resume: { after: 0 }, sessionId: 'session-b', type: 'attach' }))
-    socket.receive({ command: 'attach', id: 'web-2', sessionId: 'session-b', type: 'ack' })
-    await attachSecond
+    const watchSecond = client.watch('session-b')
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-2', resume: { after: 0 }, sessionId: 'session-b', type: 'watch' }))
+    socket.receive({ command: 'watch', id: 'web-2', sessionId: 'session-b', type: 'ack' })
+    await watchSecond
 
     const prompt = client.prompt('session-b', 'hello')
     await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-3', message: 'hello', sessionId: 'session-b', type: 'prompt' }))
@@ -64,27 +64,27 @@ describe('RuntimeWebSocketClient', () => {
     const sequences: number[] = []
     client.onPiEvent((event) => sequences.push(event.sequence))
 
-    const attach = client.attach('session-a')
+    const watch = client.watch('session-a')
     await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledOnce())
     first.open()
-    await vi.waitFor(() => expect(first.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'attach' }))
-    first.receive({ command: 'attach', id: 'web-1', sessionId: 'session-a', type: 'ack' })
-    await attach
+    await vi.waitFor(() => expect(first.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
+    first.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
+    await watch
     first.receive({ event: { type: 'one' }, observedAt: 'now', sequence: 1, sessionId: 'session-a', type: 'pi_event' })
     first.close()
 
     await new Promise((resolve) => setTimeout(resolve, 10))
     await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledTimes(2))
     second.open()
-    await vi.waitFor(() => expect(second.sent).toContainEqual({ id: 'web-2', resume: { after: 1 }, sessionId: 'session-a', type: 'attach' }))
-    second.receive({ command: 'attach', id: 'web-2', sessionId: 'session-a', type: 'ack' })
+    await vi.waitFor(() => expect(second.sent).toContainEqual({ id: 'web-2', resume: { after: 1 }, sessionId: 'session-a', type: 'watch' }))
+    second.receive({ command: 'watch', id: 'web-2', sessionId: 'session-a', type: 'ack' })
     second.receive({ event: { type: 'one' }, observedAt: 'now', sequence: 1, sessionId: 'session-a', type: 'pi_event' })
     second.receive({ event: { type: 'two' }, observedAt: 'now', sequence: 2, sessionId: 'session-a', type: 'pi_event' })
     expect(sequences).toEqual([1, 2])
     vi.unstubAllGlobals()
   })
 
-  it('keeps delivering live events after attach repeats for the same session', async () => {
+  it('keeps delivering live events after watch repeats for the same session', async () => {
     vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
     const socket = new FakeSocket()
     const socketFactory = vi.fn(() => socket as never)
@@ -95,23 +95,22 @@ describe('RuntimeWebSocketClient', () => {
     const sequences: number[] = []
     client.onPiEvent((event) => sequences.push(event.sequence))
 
-    const attach = client.attach('session-a')
+    const watch = client.watch('session-a')
     await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledOnce())
     socket.open()
-    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'attach' }))
-    socket.receive({ command: 'attach', id: 'web-1', sessionId: 'session-a', type: 'ack' })
-    await attach
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
+    socket.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
+    await watch
     socket.receive({ event: { type: 'one' }, observedAt: 'now', sequence: 1, sessionId: 'session-a', type: 'pi_event' })
 
-    // The run controller re-attaches before every prompt even though the stream is already consumed.
-    const repeated = client.attach('session-a')
-    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-2', resume: { after: 0 }, sessionId: 'session-a', type: 'attach' }))
-    socket.receive({ command: 'attach', id: 'web-2', sessionId: 'session-a', type: 'ack' })
+    const repeated = client.watch('session-a')
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-2', resume: { after: 1 }, sessionId: 'session-a', type: 'watch' }))
+    socket.receive({ command: 'watch', id: 'web-2', sessionId: 'session-a', type: 'ack' })
     await repeated
     socket.receive({ event: { type: 'two' }, observedAt: 'now', sequence: 2, sessionId: 'session-a', type: 'pi_event' })
 
     expect(sequences).toEqual([1, 2])
-    expect(socket.sent.filter((message) => message.type === 'attach')).toHaveLength(2)
+    expect(socket.sent.filter((message) => message.type === 'watch')).toHaveLength(2)
     vi.unstubAllGlobals()
   })
 
@@ -125,19 +124,80 @@ describe('RuntimeWebSocketClient', () => {
     })
     const sequences: number[] = []
     client.onPiEvent((event) => sequences.push(event.sequence))
-    const attach = client.attach('session-a')
+    const watch = client.watch('session-a')
     await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledOnce())
     socket.open()
-    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'attach' }))
-    socket.receive({ command: 'attach', id: 'web-1', sessionId: 'session-a', type: 'ack' })
-    await attach
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
+    socket.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
+    await watch
 
     socket.receive({ event: { type: 'two' }, observedAt: 'now', sequence: 2, sessionId: 'session-a', type: 'pi_event' })
-    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-2', resume: { after: 0 }, sessionId: 'session-a', type: 'attach' }))
-    socket.receive({ command: 'attach', id: 'web-2', sessionId: 'session-a', type: 'ack' })
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-2', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
+    socket.receive({ command: 'watch', id: 'web-2', sessionId: 'session-a', type: 'ack' })
     socket.receive({ event: { type: 'one' }, observedAt: 'now', sequence: 1, sessionId: 'session-a', type: 'pi_event' })
     socket.receive({ event: { type: 'two' }, observedAt: 'now', sequence: 2, sessionId: 'session-a', type: 'pi_event' })
     expect(sequences).toEqual([1, 2])
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps raw replay for turns while protecting a snapshot projection from older UI events', async () => {
+    vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+    const socket = new FakeSocket()
+    const socketFactory = vi.fn(() => socket as never)
+    const client = new RuntimeWebSocketClient({
+      fetchFn: vi.fn().mockResolvedValue(new Response(JSON.stringify({ runtimeId: 'runtime-1', token: 'token', websocketPath: '/api/runtime' }))),
+      socketFactory,
+    })
+    const snapshots: unknown[] = []
+    const statuses: unknown[] = []
+    const events: number[] = []
+    client.onSessionSnapshot((snapshot) => snapshots.push(snapshot))
+    client.onRuntimeStatus((status) => statuses.push(status))
+    client.onPiEvent((event) => events.push(event.sequence))
+    const watch = client.watch('session-a')
+    await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledOnce())
+    socket.open()
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
+    socket.receive({
+      atSequence: 3,
+      extensionUi: { freshness: 'known', statuses: { agent: 'fresh' }, widgets: { todo: ['one'] } },
+      runtime: { lifecycle: 'active', revision: 2 },
+      sessionId: 'session-a',
+      type: 'session_snapshot',
+    })
+    socket.receive({ event: { method: 'setStatus', statusKey: 'agent', statusText: 'stale', type: 'extension_ui_request' }, observedAt: 'old', sequence: 1, sessionId: 'session-a', type: 'pi_event' })
+    socket.receive({ event: { type: 'turn_start' }, observedAt: 'now', sequence: 2, sessionId: 'session-a', type: 'pi_event' })
+    socket.receive({ event: { method: 'setWidget', widgetKey: 'todo', widgetLines: ['freshest'], type: 'extension_ui_request' }, observedAt: 'new', sequence: 3, sessionId: 'session-a', type: 'pi_event' })
+    socket.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
+    await watch
+    expect(snapshots).toHaveLength(1)
+    expect(statuses).toEqual([{ lifecycle: 'active', revision: 2, sessionId: 'session-a' }])
+    expect(events).toEqual([1, 2, 3])
+    expect(client.shouldApplyExtensionUi({ event: {}, observedAt: 'old', sequence: 3, sessionId: 'session-a' })).toBe(false)
+    expect(client.shouldApplyExtensionUi({ event: {}, observedAt: 'new', sequence: 4, sessionId: 'session-a' })).toBe(true)
+    vi.unstubAllGlobals()
+  })
+
+  it('only applies strictly newer runtime lifecycle revisions', async () => {
+    vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+    const socket = new FakeSocket()
+    const socketFactory = vi.fn(() => socket as never)
+    const client = new RuntimeWebSocketClient({
+      fetchFn: vi.fn().mockResolvedValue(new Response(JSON.stringify({ runtimeId: 'runtime-1', token: 'token', websocketPath: '/api/runtime' }))),
+      socketFactory,
+    })
+    const states: unknown[] = []
+    client.onRuntimeStatus((status) => states.push(status))
+    const watch = client.watch('session-a')
+    await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledOnce())
+    socket.open()
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
+    socket.receive({ atSequence: 0, extensionUi: { freshness: 'unknown', statuses: {}, widgets: {} }, runtime: { lifecycle: 'idle', revision: 2 }, sessionId: 'session-a', type: 'session_snapshot' })
+    socket.receive({ lifecycle: 'active', revision: 2, sessionId: 'session-a', type: 'runtime_status' })
+    socket.receive({ lifecycle: 'failed', revision: 3, error: 'broken', sessionId: 'session-a', type: 'runtime_status' })
+    socket.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
+    await watch
+    expect(states).toEqual([{ lifecycle: 'idle', revision: 2, sessionId: 'session-a' }, { error: 'broken', lifecycle: 'failed', revision: 3, sessionId: 'session-a' }])
     vi.unstubAllGlobals()
   })
 })

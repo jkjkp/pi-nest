@@ -3,7 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 
 import type { NavigationOrder } from './navigation-order.js'
 import type { RuntimeTurn } from './timeline-model.js'
-import type { PiRuntimeEvent } from './runtime-websocket-client.js'
+import type { PiRuntimeEvent, RuntimeStatus } from './runtime-websocket-client.js'
 
 export type PromptStatus = 'idle' | 'running' | 'aborting' | 'aborted' | 'complete' | 'error'
 
@@ -25,23 +25,30 @@ const unavailableStorage = {
 type WorkspaceState = {
   collapsedProjectKeys: Record<string, boolean>
   drafts: Record<string, string>
-  extensionStatus: Record<string, string | undefined>
-  extensionWidgets: Record<string, string[]>
+  extensionStatuses: Record<string, Record<string, string>>
+  extensionWidgets: Record<string, Record<string, string[]>>
   inspectorOpen: boolean
   inspectorWidth: number
   navigationOpen: boolean
   navigationWidth: number
+  runtimeStates: Record<string, Omit<RuntimeStatus, 'sessionId'>>
+  watchStates: Record<string, 'ready' | 'watching'>
   appendRunEvent: (sessionId: string, event: PiRuntimeEvent) => void
   runs: Record<string, SessionRunSummary>
   navigationOrder: NavigationOrder
   setDraft: (sessionId: string, draft: string) => void
-  setExtensionStatus: (sessionId: string, status: string | undefined) => void
-  setExtensionWidget: (sessionId: string, lines: string[]) => void
+  clearExtensionUi: (sessionId: string) => void
+  clearRun: (sessionId: string) => void
+  replaceExtensionUi: (sessionId: string, projection: { statuses: Record<string, string>; widgets: Record<string, string[]> }) => void
+  setExtensionStatus: (sessionId: string, key: string, status: string | undefined) => void
+  setExtensionWidget: (sessionId: string, key: string, lines: string[] | undefined) => void
   setInspectorOpen: (open: boolean) => void
   setNavigationOpen: (open: boolean) => void
   setNavigationOrder: (order: NavigationOrder) => void
   setProjectCollapsed: (projectKey: string, collapsed: boolean) => void
   setRun: (sessionId: string, run: SessionRunSummary) => void
+  setRuntimeState: (sessionId: string, runtime: Omit<RuntimeStatus, 'sessionId'>) => void
+  setWatchState: (sessionId: string, state: 'ready' | 'watching') => void
   updateRun: (sessionId: string, update: Partial<SessionRunSummary>) => void
 }
 
@@ -49,12 +56,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist((set) => ({
   collapsedProjectKeys: {},
   drafts: {},
-  extensionStatus: {},
+  extensionStatuses: {},
   extensionWidgets: {},
   inspectorOpen: false,
   inspectorWidth: 300,
   navigationOpen: false,
   navigationWidth: 272,
+  runtimeStates: {},
+  watchStates: {},
   navigationOrder: { projectOrder: [], sessionOrderByProject: {} },
   runs: {},
   appendRunEvent: (sessionId, event) =>
@@ -90,14 +99,44 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       }
     }),
   setDraft: (sessionId, draft) => set((state) => ({ drafts: { ...state.drafts, [sessionId]: draft } })),
-  setExtensionStatus: (sessionId, status) => set((state) => ({ extensionStatus: { ...state.extensionStatus, [sessionId]: status } })),
-  setExtensionWidget: (sessionId, lines) => set((state) => ({ extensionWidgets: { ...state.extensionWidgets, [sessionId]: lines } })),
+  clearExtensionUi: (sessionId) => set((state) => ({
+    extensionStatuses: { ...state.extensionStatuses, [sessionId]: {} },
+    extensionWidgets: { ...state.extensionWidgets, [sessionId]: {} },
+  })),
+  clearRun: (sessionId) => set((state) => {
+    const { [sessionId]: _removed, ...runs } = state.runs
+    return { runs }
+  }),
+  replaceExtensionUi: (sessionId, projection) => set((state) => ({
+    extensionStatuses: { ...state.extensionStatuses, [sessionId]: { ...projection.statuses } },
+    extensionWidgets: { ...state.extensionWidgets, [sessionId]: Object.fromEntries(Object.entries(projection.widgets).map(([key, lines]) => [key, [...lines]])) },
+  })),
+  setExtensionStatus: (sessionId, key, status) => set((state) => {
+    if (!key) return state
+    const statuses = { ...(state.extensionStatuses[sessionId] ?? {}) }
+    if (typeof status === 'string') statuses[key] = status
+    else delete statuses[key]
+    return { extensionStatuses: { ...state.extensionStatuses, [sessionId]: statuses } }
+  }),
+  setExtensionWidget: (sessionId, key, lines) => set((state) => {
+    if (!key) return state
+    const widgets = { ...(state.extensionWidgets[sessionId] ?? {}) }
+    if (lines) widgets[key] = [...lines]
+    else delete widgets[key]
+    return { extensionWidgets: { ...state.extensionWidgets, [sessionId]: widgets } }
+  }),
   setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
   setNavigationOpen: (navigationOpen) => set({ navigationOpen }),
   setNavigationOrder: (navigationOrder) => set({ navigationOrder }),
   setProjectCollapsed: (projectKey, collapsed) =>
     set((state) => ({ collapsedProjectKeys: { ...state.collapsedProjectKeys, [projectKey]: collapsed } })),
   setRun: (sessionId, run) => set((state) => ({ runs: { ...state.runs, [sessionId]: run } })),
+  setRuntimeState: (sessionId, runtime) => set((state) => {
+    const current = state.runtimeStates[sessionId]
+    if (current && runtime.revision < current.revision) return state
+    return { runtimeStates: { ...state.runtimeStates, [sessionId]: { ...runtime } } }
+  }),
+  setWatchState: (sessionId, watchState) => set((state) => ({ watchStates: { ...state.watchStates, [sessionId]: watchState } })),
   updateRun: (sessionId, update) =>
     set((state) => ({
       runs: {
@@ -110,7 +149,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ extensionStatus: state.extensionStatus, navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ navigationOrder: state.navigationOrder }),
       storage: createJSONStorage(() => (typeof window === 'undefined' ? unavailableStorage : window.localStorage)),
     },
   ),

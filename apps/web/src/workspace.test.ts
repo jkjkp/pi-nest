@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import {
   groupSessionsByProject,
+  extensionStatusLine,
+  extensionWidgetText,
   filterProjectsByQuery,
   projectName,
   projectSessionGroupKey,
   runInspectorFields,
+  runtimeStatusLabel,
   sessionDisplayName,
   sessionStatusLabel,
 } from './workspace.js'
@@ -18,6 +21,18 @@ describe('workspace presentation helpers', () => {
     expect(sessionStatusLabel('complete')).toBe('✓ 已完成')
     expect(sessionStatusLabel('error')).toBe('× 请求失败')
     expect(sessionStatusLabel('aborted')).toBe('— 已中止')
+  })
+
+  it('renders extension projection deterministically and strips terminal control sequences', () => {
+    expect(extensionStatusLine({ zebra: '\u001B[31mZ\u001B[0m', alpha: ' A ' })).toBe('A Z')
+    expect(extensionWidgetText({ zebra: ['Z'], alpha: ['\u001B[32mA\u001B[0m', 'B'] })).toBe('A\nB\n\nZ')
+  })
+
+  it('only exposes non-silent server lifecycle state when no local turn is active', () => {
+    expect(runtimeStatusLabel({ lifecycle: 'idle', revision: 1 }, false)).toBeUndefined()
+    expect(runtimeStatusLabel({ lifecycle: 'active', revision: 2 }, true)).toBeUndefined()
+    expect(runtimeStatusLabel({ lifecycle: 'active', revision: 2 }, false)).toBe('Pi 正在运行')
+    expect(runtimeStatusLabel({ error: 'broken', lifecycle: 'failed', revision: 3 }, false)).toBe('Pi 运行时失败：broken')
   })
 
   it('derives compact navigation labels from safe session fields', () => {
@@ -55,6 +70,21 @@ describe('workspace presentation helpers', () => {
 
   it('keeps initial desktop panel widths in UI-only state', () => {
     expect(useWorkspaceStore.getState()).toMatchObject({ inspectorWidth: 300, navigationWidth: 272 })
+  })
+
+  it('keeps extension UI isolated by session and replaces snapshots as whole projections', () => {
+    useWorkspaceStore.setState({ extensionStatuses: {}, extensionWidgets: {}, runtimeStates: {} })
+    const store = useWorkspaceStore.getState()
+    store.replaceExtensionUi('one', { statuses: { agent: 'working' }, widgets: { todo: ['a'] } })
+    store.setExtensionStatus('one', 'agent', undefined)
+    store.setExtensionWidget('two', 'todo', ['b'])
+    store.setRuntimeState('one', { lifecycle: 'active', revision: 2 })
+    store.setRuntimeState('one', { lifecycle: 'idle', revision: 1 })
+    expect(useWorkspaceStore.getState()).toMatchObject({
+      extensionStatuses: { one: {} },
+      extensionWidgets: { one: { todo: ['a'] }, two: { todo: ['b'] } },
+      runtimeStates: { one: { lifecycle: 'active', revision: 2 } },
+    })
   })
 
   it('filters by project metadata or session display name without changing the source groups', () => {

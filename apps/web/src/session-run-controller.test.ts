@@ -5,17 +5,27 @@ import { createSessionRunController } from './session-run-controller.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
 function runtimeMock() {
-  const errors = new Set<(error: { message: string; sessionId?: string }) => void>()
+  const errors = new Set<(error: { code?: string; message: string; sessionId?: string }) => void>()
   const events = new Set<(event: PiRuntimeEvent) => void>()
+  const statuses = new Set<(status: { error?: string; lifecycle: any; revision: number; sessionId: string }) => void>()
+  const snapshots = new Set<(snapshot: any) => void>()
+  const watches = new Map<string, { after: number; role: 'background' | 'foreground' }>()
   return {
     abort: vi.fn().mockResolvedValue(undefined),
-    attach: vi.fn().mockResolvedValue(undefined),
+    watch: vi.fn().mockImplementation(async (sessionId: string, role: 'background' | 'foreground' = 'foreground', after = watches.get(sessionId)?.after ?? 0) => { watches.set(sessionId, { after, role }) }),
+    unwatch: vi.fn().mockImplementation(async (sessionId: string) => { watches.delete(sessionId) }),
+    watchedSessions: vi.fn(() => [...watches].map(([sessionId, watch]) => ({ sessionId, ...watch }))),
+    resumeRuntime: vi.fn().mockResolvedValue(undefined),
     getRuntimeState: vi.fn().mockResolvedValue({ isCompacting: false, isStreaming: false }),
-    onError: vi.fn((listener: (error: { message: string; sessionId?: string }) => void) => { errors.add(listener); return () => errors.delete(listener) }),
+    onError: vi.fn((listener: (error: { code?: string; message: string; sessionId?: string }) => void) => { errors.add(listener); return () => errors.delete(listener) }),
     onPiEvent: vi.fn((listener: (event: PiRuntimeEvent) => void) => { events.add(listener); return () => events.delete(listener) }),
+    onRuntimeStatus: vi.fn((listener: (status: { error?: string; lifecycle: any; revision: number; sessionId: string }) => void) => { statuses.add(listener); return () => statuses.delete(listener) }),
+    onSessionSnapshot: vi.fn((listener: (snapshot: any) => void) => { snapshots.add(listener); return () => snapshots.delete(listener) }),
     prompt: vi.fn().mockResolvedValue(undefined),
     emit: (event: PiRuntimeEvent) => { for (const listener of events) listener(event) },
     fail: (error: { message: string; sessionId?: string }) => { for (const listener of errors) listener(error) },
+    snapshot: (snapshot: any) => { for (const listener of snapshots) listener(snapshot) },
+    status: (status: { error?: string; lifecycle: any; revision: number; sessionId: string }) => { for (const listener of statuses) listener(status) },
   }
 }
 
@@ -25,7 +35,7 @@ describe('session run controller', () => {
   beforeEach(() => useWorkspaceStore.setState({ runs: {} }))
   afterEach(() => vi.unstubAllGlobals())
 
-  it('attaches before prompting and completes from native Pi events', async () => {
+  it('watches, resumes, then prompts and completes from native Pi events', async () => {
     const runtime = runtimeMock()
     const invalidateHistory = vi.fn()
     const controller = createSessionRunController({ invalidateHistory, runtime: runtime as never })
@@ -33,7 +43,8 @@ describe('session run controller', () => {
     expect(controller.start({ prompt: 'hello', sessionId: 'session-a' })).toBe(true)
     expect(controller.start({ prompt: 'again', sessionId: 'session-a' })).toBe(false)
     await tick()
-    expect(runtime.attach).toHaveBeenCalledWith('session-a')
+    expect(runtime.watch).toHaveBeenCalledWith('session-a', 'foreground')
+    expect(runtime.resumeRuntime).toHaveBeenCalledWith('session-a')
     expect(runtime.prompt).toHaveBeenCalledWith('session-a', 'hello')
 
     runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Hi' } }, observedAt: 'now', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
@@ -48,24 +59,37 @@ describe('session run controller', () => {
     expect(invalidateHistory).toHaveBeenCalledWith('session-a')
   })
 
-  it('opens a session by subscribing and warming the native runtime for extension UI', async () => {
+  it('opens a historical session by watching only, without resuming Pi', async () => {
     const runtime = runtimeMock()
     const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
 
     controller.openSession('session-a')
     await tick()
 
-    expect(runtime.attach).toHaveBeenCalledWith('session-a')
-    expect(runtime.getRuntimeState).toHaveBeenCalledWith('session-a')
+    expect(runtime.watch).toHaveBeenCalledWith('session-a', 'foreground')
+    expect(runtime.resumeRuntime).not.toHaveBeenCalled()
+    expect(runtime.getRuntimeState).not.toHaveBeenCalled()
     expect(useWorkspaceStore.getState().runs['session-a']).toBeUndefined()
 
-    runtime.getRuntimeState.mockRejectedValueOnce(new Error('Pi session is busy'))
     controller.openSession('session-b')
     await tick()
-    expect(runtime.attach).toHaveBeenCalledWith('session-b')
+    expect(runtime.unwatch).toHaveBeenCalledWith('session-a')
+    expect(runtime.watch).toHaveBeenCalledWith('session-b', 'foreground')
   })
 
-  it('aborts only the requested attached session and handles runtime errors', async () => {
+  it('keeps an active old foreground session as a background watch', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.openSession('running')
+    await tick()
+    useWorkspaceStore.getState().setRuntimeState('running', { lifecycle: 'active', revision: 1 })
+    controller.openSession('other')
+    await tick()
+    expect(runtime.watch).toHaveBeenCalledWith('running', 'background')
+    expect(runtime.unwatch).not.toHaveBeenCalledWith('running')
+  })
+
+  it('aborts only the requested watched session and handles runtime errors', async () => {
     const runtime = runtimeMock()
     const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: 'A', sessionId: 'session-a' })
@@ -79,27 +103,15 @@ describe('session run controller', () => {
     expect(useWorkspaceStore.getState().runs['session-b']).toMatchObject({ error: 'prompt failed', status: 'error' })
   })
 
-  it('restores an active turn after refresh and clears its session-only marker when Pi settles', async () => {
-    const storage = new Map<string, string>([['pi-nest-active-runtime-sessions', JSON.stringify(['session-a'])]])
-    vi.stubGlobal('window', {
-      sessionStorage: {
-        getItem: (key: string) => storage.get(key) ?? null,
-        setItem: (key: string, value: string) => storage.set(key, value),
-      },
-    })
+  it('restores foreground and active background watches after refresh', async () => {
     const runtime = runtimeMock()
+    runtime.watch.mockImplementationOnce(async (sessionId: string) => { runtime.watchedSessions.mockReturnValueOnce([{ after: 3, role: 'foreground', sessionId }, { after: 4, role: 'background', sessionId: 'session-b' }]) })
+    runtime.watchedSessions.mockReturnValue([{ after: 3, role: 'foreground', sessionId: 'session-a' }, { after: 4, role: 'background', sessionId: 'session-b' }])
     const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
 
     controller.resume()
     await tick()
-    expect(runtime.attach).toHaveBeenCalledWith('session-a', 0)
-    runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Recovered' } }, observedAt: 'now', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
-    runtime.emit({ event: { type: 'turn_end' }, observedAt: 'now', sequence: 2, sessionId: 'session-a', turnId: 'turn-1' })
-    runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', sequence: 3, sessionId: 'session-a' })
-    const recovered = useWorkspaceStore.getState().runs['session-a']
-    expect(recovered?.status).toBe('complete')
-    expect(recovered?.turns[0]?.events.map((event) => event.event.type)).toEqual(['message_update', 'turn_end'])
-    expect(recovered?.systemEvents.map((event) => event.event.type)).toEqual(['agent_settled'])
-    expect(storage.get('pi-nest-active-runtime-sessions')).toBe('[]')
+    expect(runtime.watch).toHaveBeenCalledWith('session-a', 'foreground', 3)
+    expect(runtime.watch).toHaveBeenCalledWith('session-b', 'background', 4)
   })
 })

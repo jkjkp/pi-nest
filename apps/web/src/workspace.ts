@@ -1,4 +1,6 @@
 import type { PromptStatus, SessionRunSummary } from './workspace-store.js'
+import type { RuntimeStatus } from './runtime-websocket-client.js'
+import { stripAnsiLine } from './ansi-text.js'
 
 export type PiSessionSummary = {
   cwd?: string
@@ -108,6 +110,30 @@ export function sessionDisplayName(session: Pick<PiSessionSummary, 'name' | 'fir
 
 export function sessionStatusLabel(status: PromptStatus = 'idle') {
   return sessionStatusLabels[status]
+}
+
+export function extensionStatusLine(statuses: Record<string, string> | undefined) {
+  return Object.keys(statuses ?? {})
+    .sort()
+    .map((key) => stripAnsiLine(statuses?.[key] ?? '').trim())
+    .filter(Boolean)
+    .join(' ')
+}
+
+export function extensionWidgetText(widgets: Record<string, string[]> | undefined) {
+  return Object.keys(widgets ?? {})
+    .sort()
+    .map((key) => (widgets?.[key] ?? []).map(stripAnsiLine).join('\n').trim())
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+export function runtimeStatusLabel(runtime: Omit<RuntimeStatus, 'sessionId'> | undefined, localRunActive: boolean) {
+  if (!runtime || localRunActive) return undefined
+  if (runtime.lifecycle === 'loading') return '正在加载 Pi 运行时'
+  if (runtime.lifecycle === 'active') return 'Pi 正在运行'
+  if (runtime.lifecycle === 'failed') return runtime.error ? `Pi 运行时失败：${stripAnsiLine(runtime.error)}` : 'Pi 运行时失败'
+  return undefined
 }
 
 export function runInspectorFields(run: SessionRunSummary | undefined) {

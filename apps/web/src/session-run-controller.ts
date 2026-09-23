@@ -16,32 +16,14 @@ export type SessionRunController = {
   getAvailableThinkingLevels: (sessionId: string) => Promise<string[]>
   getRuntimeState: (sessionId: string) => Promise<PiRuntimeState>
   openSession: (sessionId: string) => void
+  releaseForeground: () => void
   resume: () => void
+  resumeRuntime: (sessionId: string) => Promise<void>
   setModel: (sessionId: string, provider: string, modelId: string) => Promise<void>
   setThinkingLevel: (sessionId: string, level: string) => Promise<void>
   start: (options: StartSessionRunOptions) => boolean
   steer: (sessionId: string, message: string) => Promise<void>
   stop: (sessionId: string) => Promise<boolean>
-}
-
-const recoveryKey = 'pi-nest-active-runtime-sessions'
-
-function savedActiveSessions() {
-  if (typeof window === 'undefined') return [] as string[]
-  try {
-    const saved = JSON.parse(window.sessionStorage.getItem(recoveryKey) ?? '[]')
-    return Array.isArray(saved) ? saved.filter((sessionId): sessionId is string => typeof sessionId === 'string') : []
-  } catch {
-    return []
-  }
-}
-
-function saveActiveSessions(sessionIds: Iterable<string>) {
-  try {
-    if (typeof window !== 'undefined') window.sessionStorage.setItem(recoveryKey, JSON.stringify([...sessionIds]))
-  } catch {
-    // sessionStorage is only a recovery hint; Pi keeps running without it.
-  }
 }
 
 function assistantStopReason(event: PiRuntimeEvent) {
@@ -54,11 +36,10 @@ function assistantStopReason(event: PiRuntimeEvent) {
 
 export function createSessionRunController({ invalidateHistory, runtime }: SessionRunControllerOptions): SessionRunController {
   const activeRuns = new Map<string, ActiveRun>()
-  const save = () => saveActiveSessions(activeRuns.keys())
+  let foregroundSessionId: string | undefined
 
   function fail(sessionId: string, message: string) {
     if (!activeRuns.delete(sessionId)) return
-    save()
     useWorkspaceStore.getState().updateRun(sessionId, { error: message, status: 'error' })
     void invalidateHistory(sessionId)
   }
@@ -71,7 +52,6 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     if (event.event.type !== 'agent_settled') return
 
     activeRuns.delete(event.sessionId)
-    save()
     useWorkspaceStore.getState().updateRun(event.sessionId, {
       status: activeRun.stopReason === 'aborted' ? 'aborted' : 'complete',
       stopReason: activeRun.stopReason ?? 'stop',
@@ -80,41 +60,79 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   })
 
   runtime.onError((error) => {
+    if ((error.code === 'RESUME_GAP' || error.code === 'RUNTIME_RESTARTED') && error.sessionId) {
+      activeRuns.delete(error.sessionId)
+      useWorkspaceStore.getState().clearRun(error.sessionId)
+      useWorkspaceStore.getState().setWatchState(error.sessionId, 'watching')
+      void invalidateHistory(error.sessionId)
+      return
+    }
     const sessionIds = error.sessionId ? [error.sessionId] : [...activeRuns.keys()]
     for (const sessionId of sessionIds) fail(sessionId, error.message)
   })
 
+  runtime.onSessionSnapshot((snapshot) => {
+    useWorkspaceStore.getState().setWatchState(snapshot.sessionId, 'ready')
+  })
+
+  runtime.onRuntimeStatus((status) => {
+    if (status.lifecycle === 'active' && !activeRuns.has(status.sessionId)) {
+      activeRuns.set(status.sessionId, { stopReason: undefined })
+      useWorkspaceStore.getState().setRun(status.sessionId, { status: 'running', systemEvents: [], turns: [] })
+    }
+    if (status.lifecycle === 'failed') fail(status.sessionId, status.error ?? 'Pi runtime failed')
+    if (status.lifecycle === 'idle' && runtime.watchedSessions().some((watch) => watch.sessionId === status.sessionId && watch.role === 'background')) {
+      void runtime.unwatch(status.sessionId)
+      void invalidateHistory(status.sessionId)
+    }
+  })
+
   return {
-    compact: (sessionId) => runtime.compact(sessionId),
+    compact: async (sessionId) => { await runtime.resumeRuntime(sessionId); await runtime.compact(sessionId) },
     followUp: (sessionId, message) => runtime.followUp(sessionId, message),
     getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,
     getAvailableThinkingLevels: async (sessionId) => (await runtime.getAvailableThinkingLevels(sessionId)).levels,
     getRuntimeState: (sessionId) => runtime.getRuntimeState(sessionId),
     openSession: (sessionId) => {
       void (async () => {
-        await runtime.attach(sessionId)
-        // Reading the runtime state starts the native Pi process for this session, which re-emits
-        // extension UI such as the status line. A busy session has already started one.
-        await runtime.getRuntimeState(sessionId)
+        const previous = foregroundSessionId
+        foregroundSessionId = sessionId
+        useWorkspaceStore.getState().setWatchState(sessionId, 'watching')
+        if (previous && previous !== sessionId) {
+          const lifecycle = useWorkspaceStore.getState().runtimeStates[previous]?.lifecycle
+          if (lifecycle === 'active' || lifecycle === 'loading') await runtime.watch(previous, 'background')
+          else await runtime.unwatch(previous)
+        }
+        await runtime.watch(sessionId, 'foreground')
+        useWorkspaceStore.getState().setWatchState(sessionId, 'ready')
       })().catch(() => undefined)
     },
+    releaseForeground: () => {
+      const sessionId = foregroundSessionId
+      foregroundSessionId = undefined
+      if (!sessionId) return
+      const lifecycle = useWorkspaceStore.getState().runtimeStates[sessionId]?.lifecycle
+      if (lifecycle === 'active' || lifecycle === 'loading') {
+        void runtime.watch(sessionId, 'background')
+      } else {
+        void runtime.unwatch(sessionId)
+      }
+    },
     resume: () => {
-      for (const sessionId of savedActiveSessions()) {
-        if (activeRuns.has(sessionId)) continue
-        activeRuns.set(sessionId, { stopReason: undefined })
-        useWorkspaceStore.getState().setRun(sessionId, { status: 'running', systemEvents: [], turns: [] })
-        void runtime.attach(sessionId, 0).catch((cause) => {
-          if (!isRuntimeConnectionError(cause)) fail(sessionId, cause instanceof Error ? cause.message : 'Pi session replay failed')
+      for (const watch of runtime.watchedSessions()) {
+        if (watch.role === 'foreground') foregroundSessionId = watch.sessionId
+        useWorkspaceStore.getState().setWatchState(watch.sessionId, 'watching')
+        void runtime.watch(watch.sessionId, watch.role, watch.after).then(() => useWorkspaceStore.getState().setWatchState(watch.sessionId, 'ready')).catch((cause) => {
+          if (!isRuntimeConnectionError(cause)) fail(watch.sessionId, cause instanceof Error ? cause.message : 'Pi session replay failed')
         })
       }
-      save()
     },
-    setModel: (sessionId, provider, modelId) => runtime.setModel(sessionId, provider, modelId),
-    setThinkingLevel: (sessionId, level) => runtime.setThinkingLevel(sessionId, level),
+    resumeRuntime: async (sessionId) => { await runtime.resumeRuntime(sessionId) },
+    setModel: async (sessionId, provider, modelId) => { await runtime.resumeRuntime(sessionId); await runtime.setModel(sessionId, provider, modelId) },
+    setThinkingLevel: async (sessionId, level) => { await runtime.resumeRuntime(sessionId); await runtime.setThinkingLevel(sessionId, level) },
     start: ({ prompt, sessionId }) => {
       if (activeRuns.has(sessionId)) return false
       activeRuns.set(sessionId, { stopReason: undefined })
-      save()
       useWorkspaceStore.getState().setRun(sessionId, {
         status: 'running',
         systemEvents: [],
@@ -122,7 +140,10 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       })
       void (async () => {
         try {
-          await runtime.attach(sessionId)
+          useWorkspaceStore.getState().setWatchState(sessionId, 'watching')
+          await runtime.watch(sessionId, 'foreground')
+          useWorkspaceStore.getState().setWatchState(sessionId, 'ready')
+          await runtime.resumeRuntime(sessionId)
           await runtime.prompt(sessionId, prompt)
         } catch (cause) {
           if (!isRuntimeConnectionError(cause)) fail(sessionId, cause instanceof Error ? cause.message : 'Pi session prompt failed')

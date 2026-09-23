@@ -7,8 +7,16 @@ export type PiRuntimeEvent = {
 }
 
 export type RuntimeError = { code: string; id?: string; message: string; sessionId?: string; type: 'error' }
+export type RuntimeLifecycle = 'notLoaded' | 'loading' | 'idle' | 'active' | 'failed'
+export type RuntimeStatus = { error?: string; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
+export type SessionSnapshot = {
+  atSequence: number
+  extensionUi: { freshness: 'known' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
+  runtime: Omit<RuntimeStatus, 'sessionId'>
+  sessionId: string
+}
 type RuntimeAck = { command: string; data?: unknown; id: string; sessionId: string; type: 'ack' }
-type RuntimeMessage = RuntimeAck | RuntimeError | ({ type: 'pi_event' } & PiRuntimeEvent)
+type RuntimeMessage = RuntimeAck | RuntimeError | ({ type: 'pi_event' } & PiRuntimeEvent) | ({ type: 'session_snapshot' } & SessionSnapshot) | ({ type: 'runtime_status' } & RuntimeStatus)
 type RuntimeSocket = Pick<WebSocket, 'close' | 'readyState' | 'send'> & { addEventListener: WebSocket['addEventListener'] }
 
 type RuntimeWebSocketClientOptions = {
@@ -30,6 +38,9 @@ export type PiRuntimeState = {
 export type PiRuntimeModel = { id: string; name?: string; provider: string }
 
 const runtimeIdStorageKey = 'pi-nest-runtime-instance'
+const watchStorageKey = 'pi-nest-runtime-watches'
+export type WatchRole = 'background' | 'foreground'
+type Watch = { after: number; role: WatchRole }
 
 export class RuntimeConnectionError extends Error {}
 
@@ -69,23 +80,44 @@ function saveRuntimeId(runtimeId: string) {
   }
 }
 
+function savedWatches(): Array<[string, Watch]> {
+  if (typeof window === 'undefined') return []
+  try {
+    const value = JSON.parse(window.sessionStorage?.getItem(watchStorageKey) ?? '{}')
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+    return Object.entries(value).flatMap(([sessionId, watch]) => {
+      if (!watch || typeof watch !== 'object' || Array.isArray(watch)) return []
+      const value = watch as Record<string, unknown>
+      return typeof value.after === 'number' && Number.isInteger(value.after) && (value.role === 'foreground' || value.role === 'background') ? [[sessionId, { after: value.after, role: value.role }]] : []
+    })
+  } catch {
+    return []
+  }
+}
+
 /** One browser-owned WebSocket with ordered per-session replay after disconnects. */
 export class RuntimeWebSocketClient {
-  private readonly attached = new Map<string, number>()
+  private readonly watched = new Map<string, Watch>()
   private connectPromise: Promise<RuntimeSocket> | undefined
   private readonly errors = new Set<(error: RuntimeError) => void>()
   private nextId = 0
   private readonly pending = new Map<string, PendingCommand>()
   private readonly piEvents = new Set<(event: PiRuntimeEvent) => void>()
+  private readonly projectionFloors = new Map<string, number>()
   private reconnectAttempt = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined
   private readonly recovering = new Set<string>()
+  private readonly runtimeStatuses = new Set<(status: RuntimeStatus) => void>()
+  private readonly runtimeStates = new Map<string, RuntimeStatus>()
+  private readonly sessionSnapshots = new Set<(snapshot: SessionSnapshot) => void>()
+  private readonly uiFreshness = new Map<string, 'known' | 'unknown'>()
   private runtimeId: string | undefined
   private socket: RuntimeSocket | undefined
   private readonly options: RuntimeWebSocketClientOptions
 
   constructor(options: RuntimeWebSocketClientOptions = {}) {
     this.options = options
+    for (const [sessionId, watch] of savedWatches()) this.watched.set(sessionId, watch)
   }
 
   onError(listener: (error: RuntimeError) => void) {
@@ -98,12 +130,42 @@ export class RuntimeWebSocketClient {
     return () => { this.piEvents.delete(listener) }
   }
 
-  attach(sessionId: string, after = 0) {
-    // Never move the cursor backwards: callers re-attach before every prompt, and a lower
-    // cursor would make every following event look out of order.
-    this.attached.set(sessionId, Math.max(this.attached.get(sessionId) ?? 0, after))
-    return this.command('attach', sessionId, undefined, after)
+  onSessionSnapshot(listener: (snapshot: SessionSnapshot) => void) {
+    this.sessionSnapshots.add(listener)
+    return () => { this.sessionSnapshots.delete(listener) }
   }
+
+  onRuntimeStatus(listener: (status: RuntimeStatus) => void) {
+    this.runtimeStatuses.add(listener)
+    return () => { this.runtimeStatuses.delete(listener) }
+  }
+
+  extensionUiFreshness(sessionId: string) {
+    return this.uiFreshness.get(sessionId)
+  }
+
+  shouldApplyExtensionUi(event: PiRuntimeEvent) {
+    return event.sequence > (this.projectionFloors.get(event.sessionId) ?? 0)
+  }
+
+  watchedSessions() {
+    return [...this.watched].map(([sessionId, watch]) => ({ sessionId, ...watch }))
+  }
+
+  watch(sessionId: string, role: WatchRole = 'foreground', after = this.watched.get(sessionId)?.after ?? 0) {
+    this.watched.set(sessionId, { after, role })
+    this.saveWatches()
+    return this.sendWatch(sessionId, after)
+  }
+
+  async unwatch(sessionId: string) {
+    if (!this.watched.has(sessionId)) return
+    this.watched.delete(sessionId)
+    this.saveWatches()
+    await this.command('unwatch', sessionId)
+  }
+
+  resumeRuntime(sessionId: string) { return this.command('resume', sessionId) }
 
   prompt(sessionId: string, message: string) { return this.command('prompt', sessionId, message) }
   abort(sessionId: string) { return this.command('abort', sessionId) }
@@ -160,7 +222,11 @@ export class RuntimeWebSocketClient {
       socket.addEventListener('message', (event) => this.handleMessage(event.data))
       socket.addEventListener('close', () => this.handleClose(socket))
       if (changedRuntime) {
-        for (const sessionId of this.attached.keys()) this.notify({ code: 'RUNTIME_RESTARTED', message: 'Pi runtime server restarted', sessionId, type: 'error' })
+        for (const [sessionId, watch] of this.watched) {
+          watch.after = 0
+          this.notify({ code: 'RUNTIME_RESTARTED', message: 'Pi runtime server restarted', sessionId, type: 'error' })
+        }
+        this.saveWatches()
       }
       return socket
     } catch (cause) {
@@ -177,6 +243,8 @@ export class RuntimeWebSocketClient {
       return
     }
     if (message.type === 'pi_event') return this.handleEvent(message)
+    if (message.type === 'session_snapshot') return this.handleSnapshot(message)
+    if (message.type === 'runtime_status') return this.handleRuntimeStatus(message)
     if (message.type === 'ack') {
       const pending = this.pending.get(message.id)
       this.pending.delete(message.id)
@@ -185,21 +253,52 @@ export class RuntimeWebSocketClient {
     }
     const pending = message.id ? this.pending.get(message.id) : undefined
     if (message.id) this.pending.delete(message.id)
-    pending?.reject(new Error(message.message))
+    pending?.reject(Object.assign(new Error(message.message), { code: message.code }))
     this.notify(message)
   }
 
   private handleEvent(message: { type: 'pi_event' } & PiRuntimeEvent) {
-    const last = this.attached.get(message.sessionId)
-    if (last === undefined || !Number.isInteger(message.sequence) || message.sequence < 1) return
-    if (message.sequence <= last) return
-    if (message.sequence !== last + 1) {
-      this.resume(message.sessionId, last)
+    const watch = this.watched.get(message.sessionId)
+    if (!watch || !Number.isInteger(message.sequence) || message.sequence < 1) return
+    if (message.sequence <= watch.after) return
+    if (message.sequence !== watch.after + 1) {
+      this.recoverWatch(message.sessionId, watch.after)
       return
     }
-    this.attached.set(message.sessionId, message.sequence)
+    watch.after = message.sequence
+    this.saveWatches()
     const { type: _type, ...event } = message
     for (const listener of this.piEvents) listener(event)
+  }
+
+  private handleSnapshot(message: { type: 'session_snapshot' } & SessionSnapshot) {
+    if (!Number.isInteger(message.atSequence) || message.atSequence < 0) return
+    this.projectionFloors.set(message.sessionId, message.atSequence)
+    this.uiFreshness.set(message.sessionId, message.extensionUi.freshness)
+    const snapshot: SessionSnapshot = {
+      atSequence: message.atSequence,
+      extensionUi: {
+        freshness: message.extensionUi.freshness,
+        statuses: { ...message.extensionUi.statuses },
+        widgets: Object.fromEntries(Object.entries(message.extensionUi.widgets).map(([key, lines]) => [key, [...lines]])),
+      },
+      runtime: { ...message.runtime },
+      sessionId: message.sessionId,
+    }
+    for (const listener of this.sessionSnapshots) listener(snapshot)
+    this.applyRuntimeStatus({ ...snapshot.runtime, sessionId: snapshot.sessionId })
+  }
+
+  private handleRuntimeStatus(message: { type: 'runtime_status' } & RuntimeStatus) {
+    this.applyRuntimeStatus({ ...(message.error ? { error: message.error } : {}), lifecycle: message.lifecycle, revision: message.revision, sessionId: message.sessionId })
+  }
+
+  private applyRuntimeStatus(status: RuntimeStatus) {
+    if (!Number.isInteger(status.revision) || status.revision < 0) return
+    const current = this.runtimeStates.get(status.sessionId)
+    if (current && status.revision <= current.revision) return
+    this.runtimeStates.set(status.sessionId, status)
+    for (const listener of this.runtimeStatuses) listener(status)
   }
 
   private handleClose(socket: RuntimeSocket) {
@@ -211,7 +310,7 @@ export class RuntimeWebSocketClient {
   }
 
   private scheduleReconnect() {
-    if (this.attached.size === 0 || this.reconnectTimer) return
+    if (this.watched.size === 0 || this.reconnectTimer) return
     const delay = (this.options.reconnectDelay ?? reconnectDelay)(this.reconnectAttempt++)
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined
@@ -222,19 +321,40 @@ export class RuntimeWebSocketClient {
   private async reconnect() {
     try {
       await this.connect()
-      await Promise.all([...this.attached].map(([sessionId, after]) => this.command('attach', sessionId, undefined, after)))
+      await Promise.all([...this.watched].map(([sessionId, watch]) => this.sendWatch(sessionId, watch.after)))
       this.reconnectAttempt = 0
     } catch {
       this.scheduleReconnect()
     }
   }
 
-  private resume(sessionId: string, after: number) {
+  private async sendWatch(sessionId: string, after: number) {
+    try {
+      await this.command('watch', sessionId, undefined, after)
+    } catch (cause) {
+      if ((cause as { code?: unknown }).code !== 'RESUME_GAP' || after === 0) throw cause
+      const watch = this.watched.get(sessionId)
+      if (!watch) return
+      watch.after = 0
+      this.saveWatches()
+      await this.command('watch', sessionId, undefined, 0)
+    }
+  }
+
+  private recoverWatch(sessionId: string, after: number) {
     if (this.recovering.has(sessionId)) return
     this.recovering.add(sessionId)
-    void this.command('attach', sessionId, undefined, after)
+    void this.sendWatch(sessionId, after)
       .catch(() => undefined)
       .finally(() => this.recovering.delete(sessionId))
+  }
+
+  private saveWatches() {
+    try {
+      if (typeof window !== 'undefined') window.sessionStorage.setItem(watchStorageKey, JSON.stringify(Object.fromEntries(this.watched)))
+    } catch {
+      // sessionStorage is only a recovery hint.
+    }
   }
 
   private notify(error: RuntimeError) {

@@ -16,7 +16,7 @@ import type { SessionRunController } from './session-run-controller.js'
 import { SessionTimeline } from './session-timeline.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { deleteSession, fetchSessionHistory, fetchSessions, renameSession } from './workspace-api.js'
-import { groupSessionsByProject, sessionDisplayName, sessionStatusLabel } from './workspace.js'
+import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, runtimeStatusLabel, sessionDisplayName, sessionStatusLabel } from './workspace.js'
 
 const emptySessions: Awaited<ReturnType<typeof fetchSessions>> = []
 
@@ -25,7 +25,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const queryClient = useQueryClient()
   const selectedSessionId = searchParams.get('session') ?? ''
   const drafts = useWorkspaceStore((state) => state.drafts)
-  const extensionStatus = useWorkspaceStore((state) => state.extensionStatus)
+  const extensionStatuses = useWorkspaceStore((state) => state.extensionStatuses)
   const extensionWidgets = useWorkspaceStore((state) => state.extensionWidgets)
   const collapsedProjectKeys = useWorkspaceStore((state) => state.collapsedProjectKeys)
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
@@ -33,6 +33,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
   const runs = useWorkspaceStore((state) => state.runs)
+  const runtimeStates = useWorkspaceStore((state) => state.runtimeStates)
+  const watchStates = useWorkspaceStore((state) => state.watchStates)
   const setDraft = useWorkspaceStore((state) => state.setDraft)
   const navigationOrder = useWorkspaceStore((state) => state.navigationOrder)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
@@ -53,8 +55,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const modelLabel = currentRun?.model ?? '当前模型不可用'
   const status = currentRun?.status ?? 'idle'
   const isActive = status === 'running' || status === 'aborting'
+  const extensionStatus = extensionStatusLine(extensionStatuses[selectedSessionId])
+  const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
+  const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
   const historyQuery = useQuery({
-    enabled: Boolean(selectedSession) && !isActive,
+    enabled: Boolean(selectedSession) && watchStates[selectedSessionId] === 'ready' && !isActive && runtimeStates[selectedSessionId]?.lifecycle !== 'active' && runtimeStates[selectedSessionId]?.lifecycle !== 'loading',
     queryKey: sessionHistoryQueryKey(selectedSessionId),
     queryFn: () => fetchSessionHistory(selectedSessionId),
     retry: false,
@@ -88,6 +93,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     sessionRuns.openSession(selectedSessionId)
   }, [selectedSessionId, sessionRuns])
 
+  useEffect(() => () => sessionRuns.releaseForeground(), [sessionRuns])
+
   function selectSession(sessionId: string) {
     setSearchParams({ session: sessionId })
     setNavigationOpen(false)
@@ -111,6 +118,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     setControlError(undefined)
     setControlOpen(true)
     try {
+      await sessionRuns.resumeRuntime(selectedSessionId)
       const [state, availableModels, levels] = await Promise.all([
         sessionRuns.getRuntimeState(selectedSessionId), sessionRuns.getAvailableModels(selectedSessionId), sessionRuns.getAvailableThinkingLevels(selectedSessionId),
       ])
@@ -222,7 +230,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   turns={currentRun?.turns}
                 />
                 <section className="space-y-3">
-                  {extensionWidgets[selectedSessionId]?.length ? <pre className="rounded border bg-muted p-2 text-xs">{extensionWidgets[selectedSessionId]?.join('\n')}</pre> : null}
+                  {extensionWidget ? <pre className="rounded border bg-muted p-2 text-xs">{extensionWidget}</pre> : null}
                   {isActive && (
                     <div aria-live="polite">
                       <p className="text-xs font-medium text-warning">{sessionStatusLabel(status)}</p>
@@ -234,6 +242,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                       {currentRun.error}
                     </p>
                   )}
+                  {!currentRun?.error && runtimeStatus && <p className="text-xs text-muted-foreground" role={runtimeStates[selectedSessionId]?.lifecycle === 'failed' ? 'alert' : undefined}>{runtimeStatus}</p>}
                   {controlError && <p className="text-xs text-destructive" role="alert">{controlError}</p>}
                 </section>
               </div>
@@ -258,7 +267,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 value={prompt}
               />
               <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-2">
-                {extensionStatus[selectedSessionId] && <span className="text-xs text-muted-foreground">{extensionStatus[selectedSessionId]}</span>}
+                {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
                 {isActive && <div className="flex gap-1 text-xs"><Button onClick={() => setQueueMode('steer')} size="sm" type="button" variant={queueMode === 'steer' ? 'secondary' : 'ghost'}>Steer</Button><Button onClick={() => setQueueMode('follow_up')} size="sm" type="button" variant={queueMode === 'follow_up' ? 'secondary' : 'ghost'}>Follow-up</Button></div>}
                 <div className="ml-auto flex items-center gap-2">
                   <Button aria-label="Pi 运行控制" className="hidden max-w-48 text-foreground sm:inline-flex" disabled={!selectedSession || isActive} onClick={() => void openControls()} size="sm" type="button" variant="ghost">

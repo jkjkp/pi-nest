@@ -21,21 +21,32 @@ export function RuntimeExtensionUi({ runtime }: { runtime: RuntimeWebSocketClien
   const [value, setValue] = useState('')
   const [notice, setNotice] = useState<string>()
   const setDraft = useWorkspaceStore((state) => state.setDraft)
+  const clearExtensionUi = useWorkspaceStore((state) => state.clearExtensionUi)
+  const replaceExtensionUi = useWorkspaceStore((state) => state.replaceExtensionUi)
   const setExtensionStatus = useWorkspaceStore((state) => state.setExtensionStatus)
   const setExtensionWidget = useWorkspaceStore((state) => state.setExtensionWidget)
+  const setRuntimeState = useWorkspaceStore((state) => state.setRuntimeState)
   useEffect(() => {
-    const unsubscribe = runtime.onPiEvent((event) => {
-    const dialog = dialogFrom(event)
-    if (dialog) { setDialogs((current) => current.some((item) => item.id === dialog.id) ? current : [...current, dialog]); setValue(dialog.prefill ?? ''); return }
-    const raw = event.event
-    if (raw.type === 'extension_ui_request' && raw.method === 'set_editor_text' && typeof raw.text === 'string') setDraft(event.sessionId, stripAnsiText(raw.text))
-    if (raw.type === 'extension_ui_request' && raw.method === 'setStatus') setExtensionStatus(event.sessionId, typeof raw.statusText === 'string' ? stripAnsiLine(raw.statusText) : undefined)
-    if (raw.type === 'extension_ui_request' && raw.method === 'setWidget') setExtensionWidget(event.sessionId, Array.isArray(raw.widgetLines) ? raw.widgetLines.filter((line): line is string => typeof line === 'string').map(stripAnsiLine) : [])
-    if (raw.type === 'extension_ui_request' && raw.method === 'setTitle' && typeof raw.title === 'string') document.title = stripAnsiLine(raw.title)
-    if (raw.type === 'extension_ui_request' && raw.method === 'notify' && typeof raw.message === 'string') setNotice(stripAnsiLine(raw.message))
+    const unsubscribeEvents = runtime.onPiEvent((event) => {
+      const dialog = dialogFrom(event)
+      if (dialog) { setDialogs((current) => current.some((item) => item.id === dialog.id) ? current : [...current, dialog]); setValue(dialog.prefill ?? ''); return }
+      const raw = event.event
+      if (raw.type === 'extension_ui_request' && raw.method === 'set_editor_text' && typeof raw.text === 'string') setDraft(event.sessionId, stripAnsiText(raw.text))
+      if (raw.type === 'extension_ui_request' && raw.method === 'setStatus' && runtime.shouldApplyExtensionUi(event) && typeof raw.statusKey === 'string' && raw.statusKey) setExtensionStatus(event.sessionId, raw.statusKey, typeof raw.statusText === 'string' ? raw.statusText : undefined)
+      if (raw.type === 'extension_ui_request' && raw.method === 'setWidget' && runtime.shouldApplyExtensionUi(event) && typeof raw.widgetKey === 'string' && raw.widgetKey) setExtensionWidget(event.sessionId, raw.widgetKey, Array.isArray(raw.widgetLines) && raw.widgetLines.every((line) => typeof line === 'string') ? raw.widgetLines : undefined)
+      if (raw.type === 'extension_ui_request' && raw.method === 'setTitle' && typeof raw.title === 'string') document.title = stripAnsiLine(raw.title)
+      if (raw.type === 'extension_ui_request' && raw.method === 'notify' && typeof raw.message === 'string') setNotice(stripAnsiLine(raw.message))
     })
-    return unsubscribe
-  }, [runtime, setDraft, setExtensionStatus, setExtensionWidget])
+    const unsubscribeSnapshots = runtime.onSessionSnapshot((snapshot) => {
+      replaceExtensionUi(snapshot.sessionId, snapshot.extensionUi)
+      setRuntimeState(snapshot.sessionId, snapshot.runtime)
+    })
+    const unsubscribeStatus = runtime.onRuntimeStatus((status) => {
+      setRuntimeState(status.sessionId, status)
+      if (status.lifecycle === 'failed') clearExtensionUi(status.sessionId)
+    })
+    return () => { unsubscribeEvents(); unsubscribeSnapshots(); unsubscribeStatus() }
+  }, [runtime, clearExtensionUi, replaceExtensionUi, setDraft, setExtensionStatus, setExtensionWidget, setRuntimeState])
   const dialog = dialogs[0]
   async function reply(response: { cancelled?: boolean; confirmed?: boolean; value?: unknown }) {
     if (!dialog) return
