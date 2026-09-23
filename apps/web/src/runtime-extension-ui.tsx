@@ -45,7 +45,8 @@ export function RuntimeExtensionUi({ runtime }: { runtime: RuntimeWebSocketClien
       setRuntimeState(status.sessionId, status)
       if (status.lifecycle === 'failed') clearExtensionUi(status.sessionId)
     })
-    return () => { unsubscribeEvents(); unsubscribeSnapshots(); unsubscribeStatus() }
+    const unsubscribeResync = runtime.onResyncRequired((message) => clearExtensionUi(message.sessionId))
+    return () => { unsubscribeEvents(); unsubscribeSnapshots(); unsubscribeStatus(); unsubscribeResync() }
   }, [runtime, clearExtensionUi, replaceExtensionUi, setDraft, setExtensionStatus, setExtensionWidget, setRuntimeState])
   const dialog = dialogs[0]
   async function reply(response: { cancelled?: boolean; confirmed?: boolean; value?: unknown }) {

@@ -9,6 +9,7 @@ function runtimeMock() {
   const events = new Set<(event: PiRuntimeEvent) => void>()
   const statuses = new Set<(status: { error?: string; lifecycle: any; revision: number; sessionId: string }) => void>()
   const snapshots = new Set<(snapshot: any) => void>()
+  const resyncs = new Set<(message: { sessionId: string }) => void>()
   const watches = new Map<string, { after: number; role: 'background' | 'foreground' }>()
   return {
     abort: vi.fn().mockResolvedValue(undefined),
@@ -20,11 +21,13 @@ function runtimeMock() {
     onError: vi.fn((listener: (error: { code?: string; message: string; sessionId?: string }) => void) => { errors.add(listener); return () => errors.delete(listener) }),
     onPiEvent: vi.fn((listener: (event: PiRuntimeEvent) => void) => { events.add(listener); return () => events.delete(listener) }),
     onRuntimeStatus: vi.fn((listener: (status: { error?: string; lifecycle: any; revision: number; sessionId: string }) => void) => { statuses.add(listener); return () => statuses.delete(listener) }),
+    onResyncRequired: vi.fn((listener: (message: { sessionId: string }) => void) => { resyncs.add(listener); return () => resyncs.delete(listener) }),
     onSessionSnapshot: vi.fn((listener: (snapshot: any) => void) => { snapshots.add(listener); return () => snapshots.delete(listener) }),
     prompt: vi.fn().mockResolvedValue(undefined),
     emit: (event: PiRuntimeEvent) => { for (const listener of events) listener(event) },
     fail: (error: { message: string; sessionId?: string }) => { for (const listener of errors) listener(error) },
     snapshot: (snapshot: any) => { for (const listener of snapshots) listener(snapshot) },
+    resync: (message: { sessionId: string }) => { for (const listener of resyncs) listener(message) },
     status: (status: { error?: string; lifecycle: any; revision: number; sessionId: string }) => { for (const listener of statuses) listener(status) },
   }
 }

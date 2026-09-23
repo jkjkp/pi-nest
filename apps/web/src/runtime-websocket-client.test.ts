@@ -200,4 +200,30 @@ describe('RuntimeWebSocketClient', () => {
     expect(states).toEqual([{ lifecycle: 'idle', revision: 2, sessionId: 'session-a' }, { error: 'broken', lifecycle: 'failed', revision: 3, sessionId: 'session-a' }])
     vi.unstubAllGlobals()
   })
+
+  it('clears the replay cursor before applying the snapshot required by a resync', async () => {
+    vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+    const socket = new FakeSocket()
+    const socketFactory = vi.fn(() => socket as never)
+    const client = new RuntimeWebSocketClient({
+      fetchFn: vi.fn().mockResolvedValue(new Response(JSON.stringify({ runtimeId: 'runtime-1', token: 'token', websocketPath: '/api/runtime' }))),
+      socketFactory,
+    })
+    const resyncs: unknown[] = []
+    client.onResyncRequired((message) => resyncs.push(message))
+    const watch = client.watch('session-a')
+    await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledOnce())
+    socket.open()
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
+    socket.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
+    await watch
+    socket.receive({ event: { type: 'one' }, observedAt: 'now', sequence: 1, sessionId: 'session-a', type: 'pi_event' })
+    socket.receive({ reason: 'event_buffer_expired', sessionId: 'session-a', type: 'resync_required' })
+    socket.receive({ atSequence: 0, extensionUi: { freshness: 'unknown', statuses: {}, widgets: {} }, runtime: { lifecycle: 'notLoaded', revision: 0 }, sessionId: 'session-a', type: 'session_snapshot' })
+
+    expect(resyncs).toEqual([{ reason: 'event_buffer_expired', sessionId: 'session-a', type: 'resync_required' }])
+    socket.receive({ event: { type: 'replacement' }, observedAt: 'now', sequence: 1, sessionId: 'session-a', type: 'pi_event' })
+    expect(client.watchedSessions()).toEqual([{ after: 1, role: 'foreground', sessionId: 'session-a' }])
+    vi.unstubAllGlobals()
+  })
 })

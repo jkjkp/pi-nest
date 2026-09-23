@@ -8,7 +8,8 @@ export type PiRuntimeEvent = {
 
 export type RuntimeError = { code: string; id?: string; message: string; sessionId?: string; type: 'error' }
 export type RuntimeLifecycle = 'notLoaded' | 'loading' | 'idle' | 'active' | 'failed'
-export type RuntimeStatus = { error?: string; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
+export type RuntimeFailureKind = 'process_error' | 'process_exit' | 'protocol_error' | 'rpc_error' | 'rpc_timeout' | 'startup_timeout'
+export type RuntimeStatus = { error?: string; failureKind?: RuntimeFailureKind; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
 export type SessionSnapshot = {
   atSequence: number
   extensionUi: { freshness: 'known' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
@@ -16,7 +17,8 @@ export type SessionSnapshot = {
   sessionId: string
 }
 type RuntimeAck = { command: string; data?: unknown; id: string; sessionId: string; type: 'ack' }
-type RuntimeMessage = RuntimeAck | RuntimeError | ({ type: 'pi_event' } & PiRuntimeEvent) | ({ type: 'session_snapshot' } & SessionSnapshot) | ({ type: 'runtime_status' } & RuntimeStatus)
+export type ResyncRequired = { reason: 'event_buffer_expired' | 'sequence_gap'; sessionId: string; type: 'resync_required' }
+type RuntimeMessage = RuntimeAck | RuntimeError | ResyncRequired | ({ type: 'pi_event' } & PiRuntimeEvent) | ({ type: 'session_snapshot' } & SessionSnapshot) | ({ type: 'runtime_status' } & RuntimeStatus)
 type RuntimeSocket = Pick<WebSocket, 'close' | 'readyState' | 'send'> & { addEventListener: WebSocket['addEventListener'] }
 
 type RuntimeWebSocketClientOptions = {
@@ -108,6 +110,7 @@ export class RuntimeWebSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined
   private readonly recovering = new Set<string>()
   private readonly runtimeStatuses = new Set<(status: RuntimeStatus) => void>()
+  private readonly resyncRequired = new Set<(message: ResyncRequired) => void>()
   private readonly runtimeStates = new Map<string, RuntimeStatus>()
   private readonly sessionSnapshots = new Set<(snapshot: SessionSnapshot) => void>()
   private readonly uiFreshness = new Map<string, 'known' | 'unknown'>()
@@ -138,6 +141,11 @@ export class RuntimeWebSocketClient {
   onRuntimeStatus(listener: (status: RuntimeStatus) => void) {
     this.runtimeStatuses.add(listener)
     return () => { this.runtimeStatuses.delete(listener) }
+  }
+
+  onResyncRequired(listener: (message: ResyncRequired) => void) {
+    this.resyncRequired.add(listener)
+    return () => { this.resyncRequired.delete(listener) }
   }
 
   extensionUiFreshness(sessionId: string) {
@@ -245,6 +253,7 @@ export class RuntimeWebSocketClient {
     if (message.type === 'pi_event') return this.handleEvent(message)
     if (message.type === 'session_snapshot') return this.handleSnapshot(message)
     if (message.type === 'runtime_status') return this.handleRuntimeStatus(message)
+    if (message.type === 'resync_required') return this.handleResyncRequired(message)
     if (message.type === 'ack') {
       const pending = this.pending.get(message.id)
       this.pending.delete(message.id)
@@ -290,7 +299,18 @@ export class RuntimeWebSocketClient {
   }
 
   private handleRuntimeStatus(message: { type: 'runtime_status' } & RuntimeStatus) {
-    this.applyRuntimeStatus({ ...(message.error ? { error: message.error } : {}), lifecycle: message.lifecycle, revision: message.revision, sessionId: message.sessionId })
+    this.applyRuntimeStatus({ ...(message.error ? { error: message.error } : {}), ...(message.failureKind ? { failureKind: message.failureKind } : {}), lifecycle: message.lifecycle, revision: message.revision, sessionId: message.sessionId })
+  }
+
+  private handleResyncRequired(message: ResyncRequired) {
+    const watch = this.watched.get(message.sessionId)
+    if (!watch) return
+    watch.after = 0
+    this.projectionFloors.delete(message.sessionId)
+    this.runtimeStates.delete(message.sessionId)
+    this.uiFreshness.delete(message.sessionId)
+    this.saveWatches()
+    for (const listener of this.resyncRequired) listener(message)
   }
 
   private applyRuntimeStatus(status: RuntimeStatus) {
@@ -329,16 +349,7 @@ export class RuntimeWebSocketClient {
   }
 
   private async sendWatch(sessionId: string, after: number) {
-    try {
-      await this.command('watch', sessionId, undefined, after)
-    } catch (cause) {
-      if ((cause as { code?: unknown }).code !== 'RESUME_GAP' || after === 0) throw cause
-      const watch = this.watched.get(sessionId)
-      if (!watch) return
-      watch.after = 0
-      this.saveWatches()
-      await this.command('watch', sessionId, undefined, 0)
-    }
+    await this.command('watch', sessionId, undefined, after)
   }
 
   private recoverWatch(sessionId: string, after: number) {

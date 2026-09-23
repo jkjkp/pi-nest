@@ -71,6 +71,13 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     for (const sessionId of sessionIds) fail(sessionId, error.message)
   })
 
+  runtime.onResyncRequired((message) => {
+    activeRuns.delete(message.sessionId)
+    useWorkspaceStore.getState().clearRun(message.sessionId)
+    useWorkspaceStore.getState().setWatchState(message.sessionId, 'watching')
+    void invalidateHistory(message.sessionId)
+  })
+
   runtime.onSessionSnapshot((snapshot) => {
     useWorkspaceStore.getState().setWatchState(snapshot.sessionId, 'ready')
   })
