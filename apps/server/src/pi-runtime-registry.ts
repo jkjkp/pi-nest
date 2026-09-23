@@ -7,16 +7,49 @@ import { PiRuntimeResumeError, type PiRuntimeStreamError, SessionEventStream } f
 
 type HostFactory = (session: PiRuntimeSession) => PiRuntimeHost
 type Lock = 'mutation' | 'prompt'
-type RegistryEntry = { host: PiRuntimeHost; idleTimer: NodeJS.Timeout | undefined; unsubscribe: () => void }
-type StreamEntry = { idleTimer: NodeJS.Timeout | undefined; stream: SessionEventStream }
+type RegistryEntry = { host: PiRuntimeHost; unsubscribe: () => void }
+type StreamEntry = { stream: SessionEventStream }
 type StreamListener = (event: PiRuntimeEvent) => void
 type StreamErrorListener = (error: PiRuntimeStreamError) => void
+type UnloadReason = 'deleted' | 'failed' | 'idleExpired' | 'mutation' | 'settingsReload' | 'shutdown'
+type ExtensionUiProjection = { statuses: Map<string, string>; widgets: Map<string, string[]> }
+type RuntimeState = {
+  error?: string
+  extensionUi?: ExtensionUiProjection
+  lifecycle: PiRuntimeLifecycle
+  listeners: Set<RuntimeStatusListener>
+  revision: number
+  subscribers: Map<string, () => void>
+  unloadGeneration: number
+  unloadTimer: NodeJS.Timeout | undefined
+}
+
+export type PiRuntimeLifecycle = 'notLoaded' | 'loading' | 'idle' | 'active' | 'failed'
+export type PiRuntimeStatus = { error?: string; lifecycle: PiRuntimeLifecycle; revision: number; sessionId: string }
+export type PiRuntimeExtensionUi = {
+  freshness: 'known' | 'unknown'
+  statuses: Record<string, string>
+  widgets: Record<string, string[]>
+}
+export type PiRuntimeSessionSnapshot = {
+  atSequence: number
+  extensionUi: PiRuntimeExtensionUi
+  runtime: Omit<PiRuntimeStatus, 'sessionId'>
+  sessionId: string
+}
+type RuntimeStatusListener = (status: PiRuntimeStatus) => void
+
+function configuredUnloadGraceMs() {
+  const value = process.env.PI_NEST_RUNTIME_UNLOAD_GRACE_MS
+  if (value === undefined) return 30 * 60_000
+  if (!/^\d+$/.test(value) || Number(value) < 1) throw new Error('PI_NEST_RUNTIME_UNLOAD_GRACE_MS must be a positive integer')
+  return Number(value)
+}
 
 export type PiRuntimeRegistryOptions = {
   createHost?: HostFactory
   eventBufferDirectory?: string
-  eventRetentionMs?: number
-  idleTimeoutMs?: number
+  runtimeUnloadGraceMs?: number
 }
 
 /** Single-process ownership and lifecycle manager for native Pi sessions. */
@@ -24,20 +57,20 @@ export class PiRuntimeRegistry {
   private readonly createHost: HostFactory
   private readonly entries = new Map<string, RegistryEntry>()
   private readonly eventBufferDirectory: Promise<string>
-  private readonly eventRetentionMs: number
   private readonly expiredStreams = new Set<string>()
-  private readonly idleTimeoutMs: number
   private readonly locks = new Map<string, Lock>()
   private readonly pendingExtensionDialogs = new Map<string, Set<string>>()
+  private readonly states = new Map<string, RuntimeState>()
   private settingsUpdating = false
   private readonly streams = new Map<string, StreamEntry>()
 
   constructor(options: PiRuntimeRegistryOptions = {}) {
     this.createHost = options.createHost ?? ((session) => new PiRuntimeHost(session))
-    this.idleTimeoutMs = options.idleTimeoutMs ?? 60_000
-    this.eventRetentionMs = options.eventRetentionMs ?? 600_000
+    this.runtimeUnloadGraceMs = options.runtimeUnloadGraceMs ?? configuredUnloadGraceMs()
     this.eventBufferDirectory = this.createBufferDirectory(options.eventBufferDirectory)
   }
+
+  private readonly runtimeUnloadGraceMs: number
 
   isPromptActive(sessionId: string) {
     return this.locks.get(sessionId) === 'prompt'
@@ -57,20 +90,24 @@ export class PiRuntimeRegistry {
 
   /** Serializes an idle-only RPC control command with other session mutations. */
   commandWhenIdle(session: PiRuntimeSession, command: Record<string, unknown>): Promise<Record<string, unknown> | undefined> | undefined {
-    if (this.settingsUpdating || this.locks.has(session.id)) return undefined
-    this.expiredStreams.delete(session.id)
-    this.streamFor(session.id)
+    if (this.settingsUpdating || this.locks.has(session.id) || !this.entries.has(session.id)) return undefined
+    this.cancelUnload(session.id)
     this.locks.set(session.id, 'mutation')
+    this.transition(session.id, 'loading')
     return this.getOrCreate(session)
       .then((entry) => entry.host.command(command))
-      .finally(() => {
-        this.locks.delete(session.id)
-        this.scheduleIdleClose(session.id)
-        this.scheduleStreamExpiry(session.id)
+      .then((result) => {
+        this.transition(session.id, 'idle')
+        return result
       })
       .catch(async (cause) => {
-        await this.remove(session.id)
+        this.fail(session.id, cause)
+        await this.remove(session.id, 'failed')
         throw cause
+      })
+      .finally(() => {
+        this.locks.delete(session.id)
+        this.scheduleUnload(session.id)
       })
   }
 
@@ -90,39 +127,110 @@ export class PiRuntimeRegistry {
     this.settingsUpdating = true
     return async (reload = false) => {
       try {
-        if (reload) await Promise.all([...this.entries.keys()].map((sessionId) => this.remove(sessionId)))
+        if (reload) await Promise.all([...this.entries.keys()].map((sessionId) => this.remove(sessionId, 'settingsReload')))
       } finally {
         this.settingsUpdating = false
       }
     }
   }
 
-  async subscribe(sessionId: string, after: number, listener: StreamListener, onError: StreamErrorListener) {
+  async watch(
+    sessionId: string,
+    subscriberId: string,
+    after: number,
+    listener: StreamListener,
+    onError: StreamErrorListener,
+    onSnapshot?: (snapshot: PiRuntimeSessionSnapshot) => void,
+    onStatus?: RuntimeStatusListener,
+  ) {
+    const state = this.stateFor(sessionId)
+    this.cancelUnload(sessionId)
     const entry = this.streamForSubscribe(sessionId, after)
-    this.cancelStreamExpiry(sessionId)
-    const unsubscribe = await entry.stream.subscribe(after, listener, onError)
-    return () => {
+    let unsubscribeStatus: (() => void) | undefined
+    const unsubscribe = await entry.stream.subscribeWithSnapshot(
+      after,
+      (atSequence) => this.snapshot(sessionId, atSequence),
+      (snapshot) => {
+        onSnapshot?.(snapshot)
+        if (onStatus) {
+          state.listeners.add(onStatus)
+          unsubscribeStatus = () => state.listeners.delete(onStatus)
+        }
+      },
+      listener,
+      onError,
+    )
+    const unwatch = () => {
       unsubscribe()
-      this.scheduleStreamExpiry(sessionId)
+      unsubscribeStatus?.()
+      if (state.subscribers.get(subscriberId) !== unwatch) return
+      state.subscribers.delete(subscriberId)
+      this.scheduleUnload(sessionId)
     }
+    const previous = state.subscribers.get(subscriberId)
+    previous?.()
+    state.subscribers.set(subscriberId, unwatch)
+    return unwatch
+  }
+
+  unwatch(sessionId: string, subscriberId: string) {
+    const unsubscribe = this.states.get(sessionId)?.subscribers.get(subscriberId)
+    if (!unsubscribe) return false
+    unsubscribe()
+    return true
+  }
+
+  /** Compatibility helper for direct Registry tests; production callers use watch/unwatch. */
+  async subscribe(sessionId: string, after: number, listener: StreamListener, onError: StreamErrorListener, onSnapshot?: (snapshot: PiRuntimeSessionSnapshot) => void, onStatus?: RuntimeStatusListener) {
+    return this.watch(sessionId, `legacy:${Math.random()}`, after, listener, onError, onSnapshot, onStatus)
+  }
+
+  resume(session: PiRuntimeSession): Promise<void> | undefined {
+    if (this.settingsUpdating || this.locks.has(session.id)) return undefined
+    this.cancelUnload(session.id)
+    this.expiredStreams.delete(session.id)
+    this.streamFor(session.id)
+    this.locks.set(session.id, 'mutation')
+    this.transition(session.id, 'loading')
+    return this.getOrCreate(session)
+      .then((entry) => entry.host.start())
+      .then(() => { this.transition(session.id, 'idle') })
+      .catch(async (cause) => {
+        this.fail(session.id, cause)
+        await this.remove(session.id, 'failed')
+        throw cause
+      })
+      .finally(() => {
+        this.locks.delete(session.id)
+        this.scheduleUnload(session.id)
+      })
   }
 
   startPrompt(session: PiRuntimeSession, message: string): Promise<PiRuntimePromptResult> | undefined {
     if (this.settingsUpdating || this.locks.has(session.id)) return undefined
+    this.cancelUnload(session.id)
     this.expiredStreams.delete(session.id)
     this.streamFor(session.id)
     this.locks.set(session.id, 'prompt')
+    this.transition(session.id, 'loading')
 
     return this.getOrCreate(session)
-      .then((entry) => entry.host.prompt(message))
-      .finally(() => {
-        this.locks.delete(session.id)
-        this.scheduleIdleClose(session.id)
-        this.scheduleStreamExpiry(session.id)
+      .then((entry) => {
+        this.transition(session.id, 'active')
+        return entry.host.prompt(message)
+      })
+      .then((result) => {
+        this.transition(session.id, 'idle')
+        return result
       })
       .catch(async (cause) => {
-        await this.remove(session.id)
+        this.fail(session.id, cause)
+        await this.remove(session.id, 'failed')
         throw cause
+      })
+      .finally(() => {
+        this.locks.delete(session.id)
+        this.scheduleUnload(session.id)
       })
   }
 
@@ -137,11 +245,11 @@ export class PiRuntimeRegistry {
 
     return (async () => {
       try {
-        await this.remove(sessionId)
+        await this.remove(sessionId, 'mutation')
         return () => {
           if (this.locks.get(sessionId) === 'mutation') {
             this.locks.delete(sessionId)
-            this.scheduleStreamExpiry(sessionId)
+            this.scheduleUnload(sessionId)
           }
         }
       } catch (cause) {
@@ -152,16 +260,41 @@ export class PiRuntimeRegistry {
   }
 
   async close() {
-    await Promise.all([...this.entries.keys()].map((sessionId) => this.remove(sessionId)))
+    await Promise.all([...this.entries.keys()].map((sessionId) => this.remove(sessionId, 'shutdown')))
     this.locks.clear()
     this.pendingExtensionDialogs.clear()
-    await Promise.all([...this.streams.values()].map(({ idleTimer, stream }) => {
-      clearTimeout(idleTimer)
-      return stream.close()
-    }))
+    for (const state of this.states.values()) clearTimeout(state.unloadTimer)
+    await Promise.all([...this.streams.values()].map(({ stream }) => stream.close()))
     this.streams.clear()
     this.expiredStreams.clear()
+    this.states.clear()
     await rm(await this.eventBufferDirectory, { force: true, recursive: true })
+  }
+
+  /** Clears daemon-only state after the persistent Pi session was deleted. */
+  async deleteSession(sessionId: string) {
+    await this.remove(sessionId, 'deleted')
+    const state = this.states.get(sessionId)
+    if (state) clearTimeout(state.unloadTimer)
+    const stream = this.streams.get(sessionId)
+    if (stream) {
+      this.streams.delete(sessionId)
+      await stream.stream.close()
+    }
+    this.expiredStreams.delete(sessionId)
+    this.states.delete(sessionId)
+  }
+
+  /** Returns a deep copy of the daemon-only extension UI projection. */
+  getExtensionUiSnapshot(sessionId: string): PiRuntimeExtensionUi {
+    const extensionUi = this.stateFor(sessionId).extensionUi
+    return extensionUi
+      ? {
+          freshness: 'known',
+          statuses: Object.fromEntries(extensionUi.statuses),
+          widgets: Object.fromEntries([...extensionUi.widgets].map(([key, lines]) => [key, [...lines]])),
+        }
+      : { freshness: 'unknown', statuses: {}, widgets: {} }
   }
 
   private async createBufferDirectory(directory: string | undefined) {
@@ -173,75 +306,73 @@ export class PiRuntimeRegistry {
 
   private async getOrCreate(session: PiRuntimeSession) {
     const current = this.entries.get(session.id)
-    if (current) {
-      clearTimeout(current.idleTimer)
-      current.idleTimer = undefined
-      return current
-    }
+    if (current) return current
 
     const host = this.createHost(session)
     const entry: RegistryEntry = {
       host,
-      idleTimer: undefined,
       unsubscribe: host.onEvent((event) => {
-        this.trackExtensionDialog(session.id, event.event)
-        void this.streamFor(session.id).stream.publish(event)
+        void this.streamFor(session.id).stream.publish(event, (published) => {
+          this.trackExtensionDialog(session.id, published.event)
+          this.trackExtensionUi(session.id, published.event)
+        })
       }),
     }
     this.entries.set(session.id, entry)
     return entry
   }
 
-  private scheduleIdleClose(sessionId: string) {
+  private async remove(sessionId: string, reason: UnloadReason) {
     const entry = this.entries.get(sessionId)
-    if (!entry || this.locks.has(sessionId)) return
-    clearTimeout(entry.idleTimer)
-    entry.idleTimer = setTimeout(() => {
-      if (this.locks.has(sessionId) || this.entries.get(sessionId) !== entry) return
-      void this.remove(sessionId)
-    }, this.idleTimeoutMs)
-    entry.idleTimer.unref()
-  }
-
-  private async remove(sessionId: string) {
-    const entry = this.entries.get(sessionId)
-    if (!entry) return
-    clearTimeout(entry.idleTimer)
-    this.entries.delete(sessionId)
-    this.pendingExtensionDialogs.delete(sessionId)
-    entry.unsubscribe()
-    await entry.host.close()
-    this.scheduleStreamExpiry(sessionId)
-  }
-
-  private scheduleStreamExpiry(sessionId: string) {
-    const entry = this.streams.get(sessionId)
-    if (!entry || this.entries.has(sessionId) || this.locks.has(sessionId) || entry.stream.hasSubscribers) return
-    clearTimeout(entry.idleTimer)
-    entry.idleTimer = setTimeout(() => {
-      if (this.entries.has(sessionId) || this.locks.has(sessionId) || entry.stream.hasSubscribers || this.streams.get(sessionId) !== entry) return
-      this.streams.delete(sessionId)
-      this.expiredStreams.add(sessionId)
-      void entry.stream.close()
-    }, this.eventRetentionMs)
-    entry.idleTimer.unref()
-  }
-
-  private cancelStreamExpiry(sessionId: string) {
-    const entry = this.streams.get(sessionId)
-    if (!entry) return
-    clearTimeout(entry.idleTimer)
-    entry.idleTimer = undefined
+    if (entry) {
+      this.entries.delete(sessionId)
+      this.pendingExtensionDialogs.delete(sessionId)
+      entry.unsubscribe()
+      await entry.host.close()
+    }
+    if (reason === 'failed' || reason === 'deleted') this.clearExtensionUi(sessionId)
+    if (reason !== 'shutdown') this.transition(sessionId, 'notLoaded')
+    if (reason !== 'shutdown') this.scheduleUnload(sessionId)
   }
 
   private streamFor(sessionId: string) {
     let entry = this.streams.get(sessionId)
     if (!entry) {
-      entry = { idleTimer: undefined, stream: new SessionEventStream(sessionId, this.eventBufferDirectory) }
+      entry = { stream: new SessionEventStream(sessionId, this.eventBufferDirectory) }
       this.streams.set(sessionId, entry)
     }
-    this.cancelStreamExpiry(sessionId)
     return entry
+  }
+
+  private cancelUnload(sessionId: string) {
+    const state = this.stateFor(sessionId)
+    clearTimeout(state.unloadTimer)
+    state.unloadTimer = undefined
+    state.unloadGeneration += 1
+  }
+
+  private scheduleUnload(sessionId: string) {
+    const state = this.stateFor(sessionId)
+    if (state.subscribers.size > 0 || this.locks.has(sessionId) || (state.lifecycle !== 'idle' && state.lifecycle !== 'notLoaded')) return
+    clearTimeout(state.unloadTimer)
+    const generation = ++state.unloadGeneration
+    state.unloadTimer = setTimeout(() => { void this.expire(sessionId, generation) }, this.runtimeUnloadGraceMs)
+    state.unloadTimer.unref()
+  }
+
+  private async expire(sessionId: string, generation: number) {
+    const state = this.stateFor(sessionId)
+    if (state.unloadGeneration !== generation || state.subscribers.size > 0 || this.locks.has(sessionId) || (state.lifecycle !== 'idle' && state.lifecycle !== 'notLoaded')) return
+    state.unloadTimer = undefined
+    if (state.lifecycle === 'idle') {
+      await this.remove(sessionId, 'idleExpired')
+      this.cancelUnload(sessionId)
+    }
+    const stream = this.streams.get(sessionId)
+    if (!stream) return
+    this.streams.delete(sessionId)
+    this.expiredStreams.add(sessionId)
+    await stream.stream.close()
   }
 
   private streamForSubscribe(sessionId: string, after: number) {
@@ -257,5 +388,65 @@ export class PiRuntimeRegistry {
     const pending = this.pendingExtensionDialogs.get(sessionId) ?? new Set<string>()
     pending.add(event.id)
     this.pendingExtensionDialogs.set(sessionId, pending)
+  }
+
+  private stateFor(sessionId: string) {
+    let state = this.states.get(sessionId)
+    if (!state) {
+      state = { lifecycle: 'notLoaded', listeners: new Set(), revision: 0, subscribers: new Map(), unloadGeneration: 0, unloadTimer: undefined }
+      this.states.set(sessionId, state)
+    }
+    return state
+  }
+
+  private snapshot(sessionId: string, atSequence: number): PiRuntimeSessionSnapshot {
+    const state = this.stateFor(sessionId)
+    return {
+      atSequence,
+      extensionUi: this.getExtensionUiSnapshot(sessionId),
+      runtime: { ...(state.error ? { error: state.error } : {}), lifecycle: state.lifecycle, revision: state.revision },
+      sessionId,
+    }
+  }
+
+  private transition(sessionId: string, lifecycle: PiRuntimeLifecycle, error?: string) {
+    const state = this.stateFor(sessionId)
+    if (state.lifecycle === lifecycle && state.error === error) return
+    state.lifecycle = lifecycle
+    state.error = error
+    state.revision += 1
+    const status: PiRuntimeStatus = { ...(error ? { error } : {}), lifecycle, revision: state.revision, sessionId }
+    for (const listener of state.listeners) listener(status)
+  }
+
+  private fail(sessionId: string, cause: unknown) {
+    const error = cause instanceof Error && cause.message ? cause.message : 'Pi runtime failed'
+    this.transition(sessionId, 'failed', error)
+  }
+
+  private clearExtensionUi(sessionId: string) {
+    const state = this.stateFor(sessionId)
+    state.extensionUi = { statuses: new Map(), widgets: new Map() }
+  }
+
+  private trackExtensionUi(sessionId: string, event: Record<string, unknown>) {
+    const state = this.stateFor(sessionId)
+    const type = event.type === 'extension_ui_request' ? event.method : event.type
+    if (type === 'setStatus') {
+      const key = event.statusKey
+      if (typeof key !== 'string' || !key) return
+      const projection = state.extensionUi ?? { statuses: new Map(), widgets: new Map() }
+      state.extensionUi = projection
+      if (typeof event.statusText === 'string') projection.statuses.set(key, event.statusText)
+      else projection.statuses.delete(key)
+      return
+    }
+    if (type !== 'setWidget') return
+    const key = event.widgetKey
+    if (typeof key !== 'string' || !key) return
+    const projection = state.extensionUi ?? { statuses: new Map(), widgets: new Map() }
+    state.extensionUi = projection
+    if (Array.isArray(event.widgetLines) && event.widgetLines.every((line) => typeof line === 'string')) projection.widgets.set(key, [...event.widgetLines])
+    else projection.widgets.delete(key)
   }
 }

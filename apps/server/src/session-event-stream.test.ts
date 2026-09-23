@@ -39,6 +39,23 @@ describe('SessionEventStream', () => {
     await (await import('node:fs/promises')).rm(directory, { force: true, recursive: true })
   })
 
+  it('captures a snapshot before replay at the identical event sequence boundary', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-nest-stream-test-'))
+    const stream = new SessionEventStream('session-1', Promise.resolve(directory))
+    await stream.publish(raw({ type: 'first' }))
+    const order: string[] = []
+    await stream.subscribeWithSnapshot(
+      0,
+      (atSequence) => ({ atSequence }),
+      (snapshot) => order.push(`snapshot:${snapshot.atSequence}`),
+      (event) => order.push(`event:${event.sequence}`),
+      () => undefined,
+    )
+    expect(order).toEqual(['snapshot:1', 'event:1'])
+    await stream.close()
+    await (await import('node:fs/promises')).rm(directory, { force: true, recursive: true })
+  })
+
   it('assigns a stable turn ID only between native turn boundaries and replays it unchanged', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'pi-nest-stream-test-'))
     const stream = new SessionEventStream('session-1', Promise.resolve(directory))

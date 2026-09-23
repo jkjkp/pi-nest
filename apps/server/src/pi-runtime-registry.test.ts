@@ -25,11 +25,33 @@ function hostMock() {
       return () => listeners.delete(listener)
     }),
     prompt: vi.fn().mockResolvedValue({ model: undefined, stopReason: 'stop' }),
+    start: vi.fn().mockResolvedValue({}),
     emit: (event: Record<string, unknown>) => { for (const listener of listeners) listener({ event, observedAt: 'now', sessionId: session.id }) },
   }
 }
 
 describe('PiRuntimeRegistry', () => {
+  it('watches a cold session without creating a Pi host, and only resume creates it', async () => {
+    const host = hostMock()
+    const createHost = vi.fn(() => host as unknown as PiRuntimeHost)
+    const registry = new PiRuntimeRegistry({ createHost })
+
+    await registry.watch(session.id, 'tab-a', 0, () => undefined, () => undefined)
+    expect(createHost).not.toHaveBeenCalled()
+    await registry.resume(session)
+    expect(createHost).toHaveBeenCalledOnce()
+    expect(host.start).toHaveBeenCalledOnce()
+    await registry.close()
+  })
+
+  it('rejects an invalid runtime unload grace configuration at startup', () => {
+    const previous = process.env.PI_NEST_RUNTIME_UNLOAD_GRACE_MS
+    process.env.PI_NEST_RUNTIME_UNLOAD_GRACE_MS = '0'
+    expect(() => new PiRuntimeRegistry()).toThrow('PI_NEST_RUNTIME_UNLOAD_GRACE_MS must be a positive integer')
+    if (previous === undefined) delete process.env.PI_NEST_RUNTIME_UNLOAD_GRACE_MS
+    else process.env.PI_NEST_RUNTIME_UNLOAD_GRACE_MS = previous
+  })
+
   it('enforces one prompt or mutation per native session and releases the prompt lock', async () => {
     const host = hostMock()
     const running = deferred<{ model: undefined; stopReason: string }>()
@@ -54,11 +76,29 @@ describe('PiRuntimeRegistry', () => {
   it('closes an idle host after its configured retention window', async () => {
     vi.useFakeTimers()
     const host = hostMock()
-    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost, idleTimeoutMs: 10 })
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost, runtimeUnloadGraceMs: 10 })
     await registry.startPrompt(session, 'done')
 
     await vi.advanceTimersByTimeAsync(10)
     expect(host.close).toHaveBeenCalledOnce()
+    vi.useRealTimers()
+  })
+
+  it('keeps an idle runtime loaded while another socket is still watching', async () => {
+    vi.useFakeTimers()
+    const host = hostMock()
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost, runtimeUnloadGraceMs: 10 })
+    await registry.startPrompt(session, 'done')
+    await registry.watch(session.id, 'socket-a', 0, () => undefined, () => undefined)
+    await registry.watch(session.id, 'socket-b', 0, () => undefined, () => undefined)
+
+    expect(registry.unwatch(session.id, 'socket-a')).toBe(true)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(host.close).not.toHaveBeenCalled()
+    expect(registry.unwatch(session.id, 'socket-b')).toBe(true)
+    await vi.advanceTimersByTimeAsync(10)
+    expect(host.close).toHaveBeenCalledOnce()
+    await registry.close()
     vi.useRealTimers()
   })
 
@@ -78,34 +118,105 @@ describe('PiRuntimeRegistry', () => {
     await registry.close()
   })
 
-  it('keeps sequence and replay records when an idle host is recreated', async () => {
+  it('captures per-key extension projection at the same sequence boundary as replay', async () => {
+    const host = hostMock()
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const snapshots: any[] = []
+    const replayed: number[] = []
+    await registry.subscribe(session.id, 0, (event) => replayed.push(event.sequence), () => undefined, (snapshot) => snapshots.push(snapshot))
+    await registry.startPrompt(session, 'start')
+
+    host.emit({ method: 'setStatus', statusKey: 'agent', statusText: 'thinking', type: 'extension_ui_request' })
+    host.emit({ method: 'setWidget', type: 'extension_ui_request', widgetKey: 'todo', widgetLines: ['one', 'two'] })
+    host.emit({ method: 'setStatus', statusKey: '', statusText: 'ignored', type: 'extension_ui_request' })
+    await vi.waitFor(() => expect(replayed).toEqual([1, 2, 3]))
+
+    const secondReplay: number[] = []
+    await registry.subscribe(session.id, 0, (event) => secondReplay.push(event.sequence), () => undefined, (snapshot) => snapshots.push(snapshot))
+    expect(snapshots[0]).toMatchObject({ atSequence: 0, extensionUi: { freshness: 'unknown', statuses: {}, widgets: {} } })
+    expect(snapshots[1]).toMatchObject({ atSequence: 3, extensionUi: { freshness: 'known', statuses: { agent: 'thinking' }, widgets: { todo: ['one', 'two'] } } })
+    expect(secondReplay).toEqual([1, 2, 3])
+    const copied = registry.getExtensionUiSnapshot(session.id)
+    copied.widgets.todo?.push('local mutation')
+    expect(registry.getExtensionUiSnapshot(session.id).widgets.todo).toEqual(['one', 'two'])
+
+    host.emit({ method: 'setStatus', statusKey: 'agent', type: 'extension_ui_request' })
+    host.emit({ method: 'setWidget', type: 'extension_ui_request', widgetKey: 'todo', widgetLines: [1] })
+    await vi.waitFor(() => expect(replayed).toEqual([1, 2, 3, 4, 5]))
+    const afterDelete: any[] = []
+    await registry.subscribe(session.id, 5, () => undefined, () => undefined, (snapshot) => afterDelete.push(snapshot))
+    expect(afterDelete[0]?.extensionUi).toEqual({ freshness: 'known', statuses: {}, widgets: {} })
+    await registry.close()
+  })
+
+  it('broadcasts failed then notLoaded, clearing projection while idle expiry preserves it', async () => {
+    const failed = hostMock()
+    failed.prompt.mockResolvedValueOnce({ model: undefined, stopReason: 'stop' }).mockRejectedValueOnce(new Error('broken RPC'))
+    const registry = new PiRuntimeRegistry({ createHost: () => failed as unknown as PiRuntimeHost, runtimeUnloadGraceMs: 10 })
+    const statuses: string[] = []
+    const events: number[] = []
+    await registry.subscribe(session.id, 0, (event) => events.push(event.sequence), () => undefined, undefined, (status) => statuses.push(status.lifecycle))
+    await registry.startPrompt(session, 'start')
+    failed.emit({ method: 'setStatus', statusKey: 'agent', statusText: 'thinking', type: 'extension_ui_request' })
+    await vi.waitFor(() => expect(events).toEqual([1]))
+    await expect(registry.startPrompt(session, 'first')).rejects.toThrow('broken RPC')
+    expect(statuses).toContain('failed')
+    expect(statuses.slice(-1)).toEqual(['notLoaded'])
+
+    const snapshots: any[] = []
+    await registry.subscribe(session.id, 1, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
+    expect(snapshots[0]?.extensionUi).toEqual({ freshness: 'known', statuses: {}, widgets: {} })
+    await registry.close()
+  })
+
+  it('expires the host and replay cache together after the last watcher leaves', async () => {
     vi.useFakeTimers()
     const first = hostMock()
     const second = hostMock()
     const createHost = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second)
-    const registry = new PiRuntimeRegistry({ createHost: createHost as never, eventRetentionMs: 100, idleTimeoutMs: 10 })
+    const registry = new PiRuntimeRegistry({ createHost: createHost as never, runtimeUnloadGraceMs: 10 })
     const received: number[] = []
-    const unsubscribe = await registry.subscribe(session.id, 0, (event) => received.push(event.sequence), () => undefined)
+    const unsubscribe = await registry.watch(session.id, 'tab-a', 0, (event) => received.push(event.sequence), () => undefined)
 
     await registry.startPrompt(session, 'first')
     first.emit({ type: 'first' })
     await vi.waitFor(() => expect(received).toEqual([1]))
+    unsubscribe()
     await vi.advanceTimersByTimeAsync(10)
+    expect(first.close).toHaveBeenCalledOnce()
+    await expect(registry.watch(session.id, 'tab-b', 1, () => undefined, () => undefined)).rejects.toMatchObject({ code: 'RESUME_GAP' })
+
+    const recreated: number[] = []
+    await registry.watch(session.id, 'tab-b', 0, (event) => recreated.push(event.sequence), () => undefined)
     await registry.startPrompt(session, 'second')
     second.emit({ type: 'second' })
-    await vi.waitFor(() => expect(received).toEqual([1, 2]))
+    await vi.waitFor(() => expect(recreated).toEqual([1]))
+    await registry.close()
+    vi.useRealTimers()
+  })
 
-    const replayed: number[] = []
-    await registry.subscribe(session.id, 1, (event) => replayed.push(event.sequence), () => undefined)
-    expect(replayed).toEqual([2])
+  it('keeps daemon projection through the existing idle unload', async () => {
+    vi.useFakeTimers()
+    const first = hostMock()
+    const registry = new PiRuntimeRegistry({ createHost: () => first as unknown as PiRuntimeHost, runtimeUnloadGraceMs: 10 })
+    const received: number[] = []
+    const unsubscribe = await registry.watch(session.id, 'tab-a', 0, (event) => received.push(event.sequence), () => undefined)
+    await registry.startPrompt(session, 'first')
+    first.emit({ method: 'setStatus', statusKey: 'agent', statusText: 'waiting', type: 'extension_ui_request' })
+    await vi.waitFor(() => expect(received).toEqual([1]))
     unsubscribe()
+    await vi.advanceTimersByTimeAsync(10)
+
+    const snapshots: any[] = []
+    await registry.watch(session.id, 'tab-b', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
+    expect(snapshots[0]).toMatchObject({ extensionUi: { freshness: 'known', statuses: { agent: 'waiting' } }, runtime: { lifecycle: 'notLoaded' } })
     await registry.close()
     vi.useRealTimers()
   })
 
   it('rejects a stale resume cursor after an unsubscribed stream expires', async () => {
     vi.useFakeTimers()
-    const registry = new PiRuntimeRegistry({ eventRetentionMs: 10 })
+    const registry = new PiRuntimeRegistry({ runtimeUnloadGraceMs: 10 })
     const unsubscribe = await registry.subscribe(session.id, 0, () => undefined, () => undefined)
     unsubscribe()
     await vi.advanceTimersByTimeAsync(10)

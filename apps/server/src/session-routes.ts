@@ -157,6 +157,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
           expectedSessionId: resolved.session.id,
           sessionFile: resolved.session.sessionFile,
         })
+        await runtime.deleteSession(sessionId)
         return context.body(null, 204)
       } catch {
         return context.json({ error: 'Failed to delete Pi session' }, 500)

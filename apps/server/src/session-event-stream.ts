@@ -34,13 +34,14 @@ export class SessionEventStream {
 
   get hasSubscribers() { return this.listeners.size > 0 }
 
-  publish(raw: PiRuntimeHostEvent) {
+  publish(raw: PiRuntimeHostEvent, beforePublish?: (event: PiRuntimeEvent) => void) {
     return this.serial(async () => {
       if (this.unavailable) return
       const sequence = ++this.sequence
       if (raw.event.type === 'turn_start') this.turnId = `${this.sessionId}:turn:${sequence}`
       const event: PiRuntimeEvent = { ...raw, sequence, ...(this.turnId ? { turnId: this.turnId } : {}) }
       try {
+        beforePublish?.(event)
         await this.append(event)
       } catch {
         this.unavailable = true
@@ -53,6 +54,16 @@ export class SessionEventStream {
   }
 
   subscribe(after: number, event: (event: PiRuntimeEvent) => void, error: (error: PiRuntimeStreamError) => void) {
+    return this.subscribeWithSnapshot(after, () => undefined, () => undefined, event, error)
+  }
+
+  subscribeWithSnapshot<T>(
+    after: number,
+    snapshot: (atSequence: number) => T,
+    receiveSnapshot: (snapshot: T) => void,
+    event: (event: PiRuntimeEvent) => void,
+    error: (error: PiRuntimeStreamError) => void,
+  ) {
     return this.serial(async () => {
       if (after > this.sequence) throw new PiRuntimeResumeError('RESUME_AHEAD')
       if (this.firstSequence !== undefined && after < this.firstSequence - 1) throw new PiRuntimeResumeError('RESUME_GAP')
@@ -60,6 +71,7 @@ export class SessionEventStream {
         error({ code: 'EVENT_BUFFER_FAILED', message: 'Pi runtime event buffer failed' })
         return () => undefined
       }
+      receiveSnapshot(snapshot(this.sequence))
       for (const replay of await this.readAfter(after)) event(replay)
       const listener = { error, event }
       this.listeners.add(listener)
