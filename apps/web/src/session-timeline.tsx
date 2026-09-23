@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 
+import { AssistantMarkdown } from './assistant-markdown.js'
 import type { PiSessionHistoryResponse } from './history.js'
 import { diagnosticLabel, duration, rawJson, timelineItems, toolStatus, type RuntimeTurn, type TimelineItem, type TimelinePart } from './timeline-model.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
@@ -56,7 +57,7 @@ function TurnItem({ isRunning, item }: { isRunning: boolean; item: TimelineItem 
 }
 
 function TimelinePartView({ isRunning, part }: { isRunning: boolean; part: TimelinePart }) {
-  if (part.kind === 'assistant_text') return <article className="max-w-3xl"><pre className="whitespace-pre-wrap break-words font-sans text-[15px] leading-7">{part.text}</pre></article>
+  if (part.kind === 'assistant_text') return <article className="max-w-3xl"><AssistantMarkdown isStreaming={isRunning} source={part.text} /></article>
   if (part.kind === 'thinking') return <details className="rounded-md border bg-muted/30 px-3 py-2 text-sm" open={isRunning}><summary className="cursor-pointer font-medium text-muted-foreground">{isRunning ? '思考中' : '思考过程'}</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-6">{part.text}</pre></details>
   if (part.kind === 'tool') return <ToolPart isRunning={isRunning} part={part} />
   if (part.kind === 'bash') return <BashPart isRunning={isRunning} part={part} />
