@@ -12,3 +12,4 @@ minimumReleaseAgeExclude:
   - '@earendil-works/pi-coding-agent@0.86.0'
   - '@earendil-works/pi-telemetry@0.86.0'
   - '@earendil-works/pi-tui@0.86.0'
+  - dompurify@3.4.16
