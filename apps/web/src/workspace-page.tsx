@@ -83,6 +83,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     return () => cancelAnimationFrame(frame)
   }, [currentRun?.error, currentRun?.systemEvents, currentRun?.turns, historyQuery.data, selectedSessionId])
 
+  useEffect(() => {
+    if (!selectedSessionId) return
+    sessionRuns.openSession(selectedSessionId)
+  }, [selectedSessionId, sessionRuns])
+
   function selectSession(sessionId: string) {
     setSearchParams({ session: sessionId })
     setNavigationOpen(false)

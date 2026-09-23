@@ -15,6 +15,7 @@ export type SessionRunController = {
   getAvailableModels: (sessionId: string) => Promise<PiRuntimeModel[]>
   getAvailableThinkingLevels: (sessionId: string) => Promise<string[]>
   getRuntimeState: (sessionId: string) => Promise<PiRuntimeState>
+  openSession: (sessionId: string) => void
   resume: () => void
   setModel: (sessionId: string, provider: string, modelId: string) => Promise<void>
   setThinkingLevel: (sessionId: string, level: string) => Promise<void>
@@ -89,6 +90,14 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,
     getAvailableThinkingLevels: async (sessionId) => (await runtime.getAvailableThinkingLevels(sessionId)).levels,
     getRuntimeState: (sessionId) => runtime.getRuntimeState(sessionId),
+    openSession: (sessionId) => {
+      void (async () => {
+        await runtime.attach(sessionId)
+        // Reading the runtime state starts the native Pi process for this session, which re-emits
+        // extension UI such as the status line. A busy session has already started one.
+        await runtime.getRuntimeState(sessionId)
+      })().catch(() => undefined)
+    },
     resume: () => {
       for (const sessionId of savedActiveSessions()) {
         if (activeRuns.has(sessionId)) continue

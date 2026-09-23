@@ -110,7 +110,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ extensionStatus: state.extensionStatus, navigationOrder: state.navigationOrder }),
       storage: createJSONStorage(() => (typeof window === 'undefined' ? unavailableStorage : window.localStorage)),
     },
   ),

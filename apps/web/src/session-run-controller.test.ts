@@ -10,6 +10,7 @@ function runtimeMock() {
   return {
     abort: vi.fn().mockResolvedValue(undefined),
     attach: vi.fn().mockResolvedValue(undefined),
+    getRuntimeState: vi.fn().mockResolvedValue({ isCompacting: false, isStreaming: false }),
     onError: vi.fn((listener: (error: { message: string; sessionId?: string }) => void) => { errors.add(listener); return () => errors.delete(listener) }),
     onPiEvent: vi.fn((listener: (event: PiRuntimeEvent) => void) => { events.add(listener); return () => events.delete(listener) }),
     prompt: vi.fn().mockResolvedValue(undefined),
@@ -45,6 +46,23 @@ describe('session run controller', () => {
     expect(completed?.turns[0]?.events.map((event) => event.event.type)).toEqual(['message_update', 'message_end', 'turn_end'])
     expect(completed?.systemEvents.map((event) => event.event.type)).toEqual(['agent_settled'])
     expect(invalidateHistory).toHaveBeenCalledWith('session-a')
+  })
+
+  it('opens a session by subscribing and warming the native runtime for extension UI', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+
+    controller.openSession('session-a')
+    await tick()
+
+    expect(runtime.attach).toHaveBeenCalledWith('session-a')
+    expect(runtime.getRuntimeState).toHaveBeenCalledWith('session-a')
+    expect(useWorkspaceStore.getState().runs['session-a']).toBeUndefined()
+
+    runtime.getRuntimeState.mockRejectedValueOnce(new Error('Pi session is busy'))
+    controller.openSession('session-b')
+    await tick()
+    expect(runtime.attach).toHaveBeenCalledWith('session-b')
   })
 
   it('aborts only the requested attached session and handles runtime errors', async () => {
