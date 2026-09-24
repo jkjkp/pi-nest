@@ -34,14 +34,15 @@ describe('SessionTimeline', () => {
     expect(running).toMatch(/<details[^>]*open[^>]*><summary[^>]*>思考中/)
   })
 
-  it('provides an overlay Turn rail without a narrow-screen Sheet entry', () => {
+  it('reserves a desktop gutter for the rail while keeping the outline as an overlay', () => {
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
 
     expect(markup).toContain('aria-label="对话轮次导航"')
     expect(markup).toContain('aria-label="第 1 轮：question"')
+    expect(markup).toContain('md:grid-cols-[2rem_minmax(0,1fr)]')
+    expect(markup).toContain('md:col-start-2')
     expect(markup).toContain('md:sticky')
     expect(markup).not.toContain('选择一轮并定位到对应的用户请求。')
-    expect(markup).not.toContain('grid-cols-1')
   })
 })
 

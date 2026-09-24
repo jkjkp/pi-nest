@@ -66,8 +66,8 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
   }
 
   return (
-    <aside aria-label="对话轮次导航" className="hidden h-[min(62vh,32rem)] w-0 shrink-0 overflow-visible md:sticky md:top-5 md:block">
-      <div className="relative h-full w-7" onBlurCapture={handleBlur} onFocusCapture={showOutline} onPointerEnter={showOutline} onPointerLeave={hideOutline}>
+    <aside aria-label="对话轮次导航" className="hidden h-[min(62vh,32rem)] w-full shrink-0 overflow-visible md:sticky md:top-5 md:block">
+      <div className="relative h-full w-full" onBlurCapture={handleBlur} onFocusCapture={showOutline} onPointerEnter={showOutline} onPointerLeave={hideOutline}>
         <div aria-hidden="true" className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border" />
         {entries.map((entry, index) => {
           const active = entry.id === currentTurnId
@@ -77,9 +77,9 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
             </button>
           )
         })}
-        <div aria-hidden={!open} className={`absolute left-0 top-0 z-20 flex h-full w-80 flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg transition-[opacity,transform] duration-150 ${open ? 'translate-x-0 opacity-100' : '-translate-x-2 pointer-events-none opacity-0'}`}>
+        <div aria-hidden={!open} className={`absolute left-full top-0 z-20 flex h-full w-80 flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg transition-[opacity,transform] duration-150 ${open ? 'translate-x-0 opacity-100' : '-translate-x-2 pointer-events-none opacity-0'}`}>
           <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">历史输入</div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-1" ref={outline}>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1" ref={outline}>
             {entries.map((entry) => {
               const active = entry.id === currentTurnId
               return (

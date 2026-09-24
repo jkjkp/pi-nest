@@ -26,4 +26,17 @@ describe('TurnNavigationRail', () => {
     expect((markup.match(/aria-current="location"/g) ?? [])).toHaveLength(2)
     expect(markup).toContain('bg-primary')
   })
+
+  it('keeps its collapsed width inside the gutter and opens the outline from its right edge', () => {
+    const markup = renderToStaticMarkup(<TurnNavigationRail entries={[{ id: 'turn-1', index: 1, promptPreview: 'question', startedAt: '2026-09-24T00:00:00.000Z' }]} onJump={() => undefined} scrollViewport={null} timelineRoot={createRef<HTMLElement>()} />)
+
+    expect(markup).toContain('class="hidden h-[min(62vh,32rem)] w-full shrink-0')
+    expect(markup).toContain('absolute left-full top-0')
+  })
+
+  it('contains scroll chaining within the history outline', () => {
+    const markup = renderToStaticMarkup(<TurnNavigationRail entries={[{ id: 'turn-1', index: 1, promptPreview: 'question', startedAt: '2026-09-24T00:00:00.000Z' }]} onJump={() => undefined} scrollViewport={null} timelineRoot={createRef<HTMLElement>()} />)
+
+    expect(markup).toContain('overflow-y-auto overscroll-contain')
+  })
 })
