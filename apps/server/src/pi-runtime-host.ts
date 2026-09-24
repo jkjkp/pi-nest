@@ -22,6 +22,11 @@ export type PiRuntimePromptResult = {
   stopReason: string | undefined
 }
 
+export type PiRuntimePrompt = {
+  accepted: Promise<void>
+  settled: Promise<PiRuntimePromptResult>
+}
+
 export type PiRuntimeFailureKind = PiRpcFailureKind | 'rpc_error' | 'startup_timeout'
 export type PiRuntimeHostFailure = { kind: PiRuntimeFailureKind; message: string }
 
@@ -131,7 +136,31 @@ export class PiRuntimeHost {
     }
   }
 
-  async prompt(message: string): Promise<PiRuntimePromptResult> {
+  prompt(message: string): Promise<PiRuntimePromptResult> {
+    const prompt = this.beginPrompt(message)
+    void prompt.accepted.catch(() => undefined)
+    return prompt.settled
+  }
+
+  beginPrompt(message: string): PiRuntimePrompt {
+    let accept: () => void = () => undefined
+    let rejectAcceptance: (cause: unknown) => void = () => undefined
+    let accepted = false
+    const acceptance = new Promise<void>((resolve, reject) => {
+      accept = () => {
+        accepted = true
+        resolve()
+      }
+      rejectAcceptance = reject
+    })
+    const settled = this.runPrompt(message, accept).catch((cause) => {
+      if (!accepted) rejectAcceptance(cause)
+      throw cause
+    })
+    return { accepted: acceptance, settled }
+  }
+
+  private async runPrompt(message: string, accept: () => void): Promise<PiRuntimePromptResult> {
     if (this.running) throw new Error('Pi runtime session is already running')
     await this.start()
     const process = this.process
@@ -151,6 +180,7 @@ export class PiRuntimeHost {
 
     try {
       await process.send({ type: 'prompt', message })
+      accept()
       const state = stateFrom(await process.send({ type: 'get_state' }))
       if (state.isStreaming === true) await settled
       const finalState = stateFrom(await process.send({ type: 'get_state' }))

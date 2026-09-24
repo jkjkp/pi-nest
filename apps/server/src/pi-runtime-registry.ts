@@ -28,6 +28,7 @@ type RuntimeState = {
 
 export type PiRuntimeLifecycle = 'notLoaded' | 'loading' | 'idle' | 'active' | 'failed'
 export type PiRuntimeStatus = { error?: string; failureKind?: PiRuntimeFailureKind; lifecycle: PiRuntimeLifecycle; revision: number; sessionId: string }
+export type PiRuntimePrompt = { accepted: Promise<void>; settled: Promise<PiRuntimePromptResult> }
 export type PiRuntimeExtensionUi = {
   freshness: 'known' | 'restored' | 'unknown'
   statuses: Record<string, string>
@@ -238,18 +239,34 @@ export class PiRuntimeRegistry {
   }
 
   startPrompt(session: PiRuntimeSession, message: string): Promise<PiRuntimePromptResult> | undefined {
+    const prompt = this.beginPrompt(session, message)
+    if (!prompt) return undefined
+    void prompt.accepted.catch(() => undefined)
+    return prompt.settled
+  }
+
+  /** Starts a prompt while exposing the RPC-admission boundary to callers that create a session. */
+  beginPrompt(session: PiRuntimeSession, message: string): PiRuntimePrompt | undefined {
     if (this.settingsUpdating || this.locks.has(session.id)) return undefined
     this.cancelUnload(session.id)
     this.locks.set(session.id, 'prompt')
 
-    return this.projectionsReady.then(() => this.getOrCreate(session))
+    let resolveAccepted: () => void = () => undefined
+    let rejectAccepted: (cause: unknown) => void = () => undefined
+    const accepted = new Promise<void>((resolve, reject) => {
+      resolveAccepted = resolve
+      rejectAccepted = reject
+    })
+    const settled = this.projectionsReady.then(() => this.getOrCreate(session))
       .then((entry) => {
         this.expiredStreams.delete(session.id)
         this.streamFor(session.id)
         this.transition(session.id, 'loading')
         this.transition(session.id, 'active')
         this.touch(session.id)
-        return entry.host.prompt(message)
+        const prompt = entry.host.beginPrompt(message)
+        void prompt.accepted.then(resolveAccepted, rejectAccepted)
+        return prompt.settled
       })
       .then((result) => {
         this.transition(session.id, 'idle')
@@ -265,6 +282,11 @@ export class PiRuntimeRegistry {
         this.locks.delete(session.id)
         this.scheduleUnload(session.id)
       })
+    void settled.catch(rejectAccepted)
+    return {
+      accepted,
+      settled,
+    }
   }
 
   async abort(sessionId: string) {

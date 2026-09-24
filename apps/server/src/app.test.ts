@@ -8,13 +8,15 @@ const adapter = vi.hoisted(() => {
   class PiSessionHistorySourceChangedError extends Error {}
   return {
     PiSessionHistorySourceChangedError,
+    createPiSession: vi.fn(),
     deletePiSession: vi.fn(),
     listPiSessions: vi.fn(),
     readPiSessionHistory: vi.fn(),
     renamePiSession: vi.fn(),
+    revealPiWorkspace: vi.fn(),
   }
 })
-const { deletePiSession, listPiSessions, readPiSessionHistory, renamePiSession } = adapter
+const { createPiSession, deletePiSession, listPiSessions, readPiSessionHistory, renamePiSession, revealPiWorkspace } = adapter
 
 vi.mock('@pi-nest/pi-adapter', () => ({
   ...adapter,
@@ -27,7 +29,9 @@ const nativeSession = {
 function runtimeMock() {
   return {
     abort: vi.fn().mockResolvedValue(false),
+    beginPrompt: vi.fn(),
     beginMutation: vi.fn().mockResolvedValue(() => undefined),
+    deleteSession: vi.fn().mockResolvedValue(undefined),
     isPromptActive: vi.fn().mockReturnValue(false),
     startPrompt: vi.fn(),
   }
@@ -37,10 +41,13 @@ describe('Pi Nest API', () => {
   let runtime: ReturnType<typeof runtimeMock>
 
   beforeEach(() => {
-    listPiSessions.mockReset(); deletePiSession.mockReset(); readPiSessionHistory.mockReset(); renamePiSession.mockReset()
+    createPiSession.mockReset(); deletePiSession.mockReset(); listPiSessions.mockReset(); readPiSessionHistory.mockReset(); renamePiSession.mockReset(); revealPiWorkspace.mockReset()
     runtime = runtimeMock()
     listPiSessions.mockResolvedValue([nativeSession])
     readPiSessionHistory.mockReturnValue({ entries: [], hasEarlier: false })
+    createPiSession.mockReturnValue({ cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' })
+    deletePiSession.mockResolvedValue({ method: 'trash' })
+    revealPiWorkspace.mockResolvedValue(undefined)
   })
 
   function app() { return createApp(runtime as unknown as PiRuntimeRegistry) }
@@ -84,6 +91,61 @@ describe('Pi Nest API', () => {
     runtime.beginMutation.mockReturnValueOnce(undefined)
     expect((await app().request('/api/sessions/session-1', { method: 'DELETE' })).status).toBe(409)
     expect(deletePiSession).not.toHaveBeenCalled()
+  })
+
+  it('creates a native session only when the first prompt is admitted, then exposes a safe summary', async () => {
+    runtime.beginPrompt.mockReturnValue({ accepted: Promise.resolve(), settled: new Promise(() => undefined) })
+
+    const response = await app().request('/api/sessions', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd: '/working', prompt: ' First prompt ' }),
+    })
+
+    expect(response.status).toBe(201)
+    expect(createPiSession).toHaveBeenCalledWith('/working')
+    expect(runtime.beginPrompt).toHaveBeenCalledWith({ cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' }, 'First prompt')
+    await expect(response.json()).resolves.toMatchObject({ session: { cwd: '/working', firstMessage: 'First prompt', id: 'created-session' } })
+  })
+
+  it('rolls back an unadmitted first prompt without exposing an empty session', async () => {
+    runtime.beginPrompt.mockReturnValue({ accepted: Promise.reject(new Error('startup failed')), settled: Promise.resolve({ model: undefined, stopReason: undefined }) })
+
+    const response = await app().request('/api/sessions', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd: '/working', prompt: 'First prompt' }),
+    })
+    expect(response.status).toBe(500)
+    await expect(response.json()).resolves.toEqual({ code: 'SESSION_INITIALIZATION_FAILED', error: 'Failed to initialize Pi session' })
+
+    expect(runtime.deleteSession).toHaveBeenCalledWith('created-session')
+    expect(deletePiSession).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'created-session', sessionFile: '/pi/created.jsonl' })
+  })
+
+  it('does not start a prompt when native session bootstrap fails', async () => {
+    createPiSession.mockImplementation(() => { throw new Error('/private/path should remain server-only') })
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    const response = await app().request('/api/sessions', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd: '/working', prompt: 'First prompt' }),
+    })
+
+    expect(response.status).toBe(500)
+    await expect(response.json()).resolves.toEqual({ code: 'SESSION_INITIALIZATION_FAILED', error: 'Failed to initialize Pi session' })
+    expect(runtime.beginPrompt).not.toHaveBeenCalled()
+    expect(runtime.deleteSession).not.toHaveBeenCalled()
+    expect(deletePiSession).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith('Failed to initialize Pi session', { cause: expect.any(Error) })
+    log.mockRestore()
+  })
+
+  it('reveals only a cwd that still belongs to a discovered Pi project', async () => {
+    expect((await app().request('/api/projects/reveal', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd: '/working' }),
+    })).status).toBe(204)
+    expect(revealPiWorkspace).toHaveBeenCalledWith('/working')
+
+    expect((await app().request('/api/projects/reveal', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd: '/unknown' }),
+    })).status).toBe(404)
+    expect(revealPiWorkspace).toHaveBeenCalledTimes(1)
   })
 
 })

@@ -19,7 +19,7 @@ function deferred<T>() {
 function hostMock() {
   const failures = new Set<(failure: { kind: string; message: string }) => void>()
   const listeners = new Set<(event: { event: Record<string, unknown>; observedAt: string; sessionId: string }) => void>()
-  return {
+  const host = {
     abort: vi.fn().mockResolvedValue(true),
     close: vi.fn().mockResolvedValue(undefined),
     onEvent: vi.fn((listener) => {
@@ -32,6 +32,7 @@ function hostMock() {
     emit: (event: Record<string, unknown>) => { for (const listener of listeners) listener({ event, observedAt: 'now', sessionId: session.id }) },
     fail: (failure: { kind: string; message: string }) => { for (const listener of failures) listener(failure) },
   }
+  return { ...host, beginPrompt: vi.fn((message: string) => ({ accepted: Promise.resolve(), settled: host.prompt(message) })) }
 }
 
 describe('PiRuntimeRegistry', () => {

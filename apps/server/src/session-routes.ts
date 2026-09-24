@@ -1,10 +1,12 @@
 import {
+  createPiSession,
   deletePiSession,
   listPiSessions,
   readPiSettings,
   PiSessionHistorySourceChangedError,
   readPiSessionHistory,
   renamePiSession,
+  revealPiWorkspace,
   updatePiSettings,
   type PiSessionSummary,
 } from '@pi-nest/pi-adapter'
@@ -16,6 +18,13 @@ import { PiRuntimeRegistry } from './pi-runtime-registry.js'
 const sessionNameSchema = z
   .object({ name: z.string().trim().min(1).max(120) })
   .strict()
+
+const createSessionSchema = z.object({
+  cwd: z.string().trim().min(1).max(4_096),
+  prompt: z.string().trim().min(1).max(20_000),
+}).strict()
+
+const projectCwdSchema = z.object({ cwd: z.string().trim().min(1).max(4_096) }).strict()
 
 const settingsSchema = z.object({
   compactionEnabled: z.boolean().optional(),
@@ -41,6 +50,14 @@ async function resolveSession(sessionId: string): Promise<SessionResolution> {
   }
 }
 
+async function resolveWorkspace(cwd: string) {
+  try {
+    return (await listPiSessions()).some((session) => session.cwd === cwd)
+  } catch {
+    return undefined
+  }
+}
+
 export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
   return new Hono()
     .get('/sessions', async (context) => {
@@ -52,6 +69,59 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
         })
       } catch {
         return context.json({ error: 'Failed to list Pi sessions' }, 500)
+      }
+    })
+    .post('/sessions', async (context) => {
+      const parsed = createSessionSchema.safeParse(await context.req.json().catch(() => undefined))
+      if (!parsed.success) return context.json({ error: 'Invalid session creation request' }, 400)
+
+      const workspace = await resolveWorkspace(parsed.data.cwd)
+      if (workspace === undefined) return context.json({ error: 'Failed to resolve Pi workspace' }, 500)
+      if (!workspace) return context.json({ error: 'Pi workspace not found' }, 404)
+
+      let created: ReturnType<typeof createPiSession> | undefined
+      let busy = false
+      try {
+        created = createPiSession(parsed.data.cwd)
+        const prompt = runtime.beginPrompt(created, parsed.data.prompt)
+        if (!prompt) {
+          busy = true
+          throw new Error('Pi runtime is busy')
+        }
+        await prompt.accepted
+        return context.json({
+          session: {
+            cwd: created.cwd,
+            firstMessage: parsed.data.prompt.replace(/\s+/g, ' ').trim(),
+            id: created.id,
+            updatedAt: new Date().toISOString(),
+          },
+        }, 201)
+      } catch (cause) {
+        if (created) {
+          await runtime.deleteSession(created.id).catch(() => undefined)
+          await deletePiSession({ expectedCwd: created.cwd, expectedSessionId: created.id, sessionFile: created.sessionFile }).catch(() => undefined)
+        }
+        if (!busy) console.error('Failed to initialize Pi session', { cause })
+        return context.json(
+          busy
+            ? { error: 'Pi runtime is busy' }
+            : { code: 'SESSION_INITIALIZATION_FAILED', error: 'Failed to initialize Pi session' },
+          busy ? 409 : 500,
+        )
+      }
+    })
+    .post('/projects/reveal', async (context) => {
+      const parsed = projectCwdSchema.safeParse(await context.req.json().catch(() => undefined))
+      if (!parsed.success) return context.json({ error: 'Invalid Pi workspace request' }, 400)
+      const workspace = await resolveWorkspace(parsed.data.cwd)
+      if (workspace === undefined) return context.json({ error: 'Failed to resolve Pi workspace' }, 500)
+      if (!workspace) return context.json({ error: 'Pi workspace not found' }, 404)
+      try {
+        await revealPiWorkspace(parsed.data.cwd)
+        return context.body(null, 204)
+      } catch {
+        return context.json({ error: 'Failed to reveal Pi workspace in Finder' }, 500)
       }
     })
     .get('/sessions/:sessionId/history', async (context) => {

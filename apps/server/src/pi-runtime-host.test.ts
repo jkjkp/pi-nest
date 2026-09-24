@@ -47,6 +47,17 @@ function hostFor(process: FakeProcess) {
 }
 
 describe('PiRuntimeHost', () => {
+  it('separates prompt admission from agent settlement for first-session creation', async () => {
+    const process = new FakeProcess()
+    const host = hostFor(process)
+    const prompt = host.beginPrompt('hello')
+
+    await expect(prompt.accepted).resolves.toBeUndefined()
+    expect(process.commands).toContainEqual({ type: 'prompt', message: 'hello' })
+    process.emit({ type: 'agent_settled' })
+    await expect(prompt.settled).resolves.toMatchObject({ stopReason: 'stop' })
+  })
+
   it('preserves every raw Pi event, including unknown types, for the registry event stream', async () => {
     const process = new FakeProcess()
     const host = hostFor(process)
