@@ -6,10 +6,11 @@ type SessionRunControllerOptions = {
   runtime: RuntimeWebSocketClient
 }
 
-type StartSessionRunOptions = { prompt: string; sessionId: string }
+type StartSessionRunOptions = { historyTurnCount?: number; prompt: string; sessionId: string }
 type ActiveRun = { stopReason: string | undefined }
 
 export type SessionRunController = {
+  adopt: (options: StartSessionRunOptions) => void
   compact: (sessionId: string) => Promise<void>
   followUp: (sessionId: string, message: string) => Promise<void>
   getAvailableModels: (sessionId: string) => Promise<PiRuntimeModel[]>
@@ -42,6 +43,15 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     if (!activeRuns.delete(sessionId)) return
     useWorkspaceStore.getState().updateRun(sessionId, { error: message, status: 'error' })
     void invalidateHistory(sessionId)
+  }
+
+  function beginRun({ historyTurnCount, prompt, sessionId }: StartSessionRunOptions) {
+    activeRuns.set(sessionId, { stopReason: undefined })
+    useWorkspaceStore.getState().setRun(sessionId, {
+      status: 'running',
+      systemEvents: [],
+      turns: [{ events: [], ...(historyTurnCount === undefined ? {} : { historyTurnCount }), id: `pending:${sessionId}`, prompt, startedAt: new Date().toISOString() }],
+    })
   }
 
   runtime.onPiEvent((event) => {
@@ -95,6 +105,9 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   })
 
   return {
+    adopt: (options) => {
+      if (!activeRuns.has(options.sessionId)) beginRun(options)
+    },
     compact: async (sessionId) => { await runtime.resumeRuntime(sessionId); await runtime.compact(sessionId) },
     followUp: (sessionId, message) => runtime.followUp(sessionId, message),
     getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,
@@ -137,14 +150,10 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     resumeRuntime: async (sessionId) => { await runtime.resumeRuntime(sessionId) },
     setModel: async (sessionId, provider, modelId) => { await runtime.resumeRuntime(sessionId); await runtime.setModel(sessionId, provider, modelId) },
     setThinkingLevel: async (sessionId, level) => { await runtime.resumeRuntime(sessionId); await runtime.setThinkingLevel(sessionId, level) },
-    start: ({ prompt, sessionId }) => {
+    start: (options) => {
+      const { prompt, sessionId } = options
       if (activeRuns.has(sessionId)) return false
-      activeRuns.set(sessionId, { stopReason: undefined })
-      useWorkspaceStore.getState().setRun(sessionId, {
-        status: 'running',
-        systemEvents: [],
-        turns: [{ events: [], id: `pending:${sessionId}`, prompt, startedAt: new Date().toISOString() }],
-      })
+      beginRun(options)
       void (async () => {
         try {
           useWorkspaceStore.getState().setWatchState(sessionId, 'watching')

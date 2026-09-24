@@ -42,6 +42,7 @@ describe('timelineItems', () => {
         runtime(4, { type: 'message', message: { content: [{ text: 'Next', type: 'text' }], role: 'assistant' } }),
       ],
       id: 'turn-1',
+      prompt: 'go',
       startedAt: '2026-09-22T00:00:00.000Z',
     }], [])
 
@@ -67,27 +68,50 @@ describe('timelineItems', () => {
     expect(timelineItems(undefined, [], [runtime(1, { type: 'model_change' }, undefined)])).toEqual([])
   })
 
+  it('keeps persisted turns while adding only the explicitly submitted live user turn', () => {
+    const history = [
+      { id: 'user-1', parentId: null, raw: { message: { content: 'old one', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
+      { id: 'user-2', parentId: 'user-1', raw: { message: { content: 'old two', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:01:00.000Z', type: 'message' },
+    ]
+    const items = timelineItems(history, [{
+      events: [runtime(1, { type: 'message_update', assistantMessageEvent: { delta: 'live', type: 'text_delta' } }, 'runtime-turn-a')],
+      historyTurnCount: 2,
+      id: 'pending:session-1',
+      prompt: 'new prompt',
+      startedAt: '2026-09-22T00:02:00.000Z',
+    }, {
+      events: [runtime(2, { type: 'tool_execution_start' }, 'runtime-turn-b')],
+      id: 'runtime-only',
+      startedAt: '2026-09-22T00:02:01.000Z',
+    }], [])
+
+    expect(items.map((item) => item.id)).toEqual(['user-1', 'user-2', 'pending:session-1'])
+    expect(items.at(-1)).toMatchObject({ prompt: 'new prompt' })
+  })
+
+  it('drops the provisional live turn once its persisted user entry is present', () => {
+    const items = timelineItems([
+      { id: 'user-1', parentId: null, raw: { message: { content: 'old', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
+      { id: 'user-2', parentId: 'user-1', raw: { message: { content: 'new', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:01:00.000Z', type: 'message' },
+    ], [{ events: [runtime(1, { type: 'message_update' })], historyTurnCount: 1, id: 'pending:session-1', prompt: 'new', startedAt: '2026-09-22T00:01:00.000Z' }], [])
+
+    expect(items.map((item) => item.id)).toEqual(['user-1', 'user-2'])
+  })
+
   it('derives a bounded, whitespace-normalized first-line navigation label from Turns', () => {
     const items = timelineItems(undefined, [{
       events: [],
       id: 'turn-1',
       prompt: `  first line\n${'x'.repeat(120)} `,
       startedAt: '2026-09-22T00:00:00.000Z',
-    }, {
-      events: [],
-      id: 'turn-2',
-      startedAt: '2026-09-22T00:01:00.000Z',
     }], [])
 
     expect(timelineNavigationEntries(items)).toEqual([
       expect.objectContaining({ id: 'turn-1', index: 1, promptPreview: 'first line' }),
-      expect.objectContaining({ id: 'turn-2', index: 2, promptPreview: '无用户正文' }),
     ])
   })
 
-  it('uses the no-content label when a prompt contains only whitespace', () => {
-    const [item] = timelineItems(undefined, [{ events: [], id: 'turn-1', prompt: ' '.repeat(120), startedAt: '2026-09-22T00:00:00.000Z' }], [])
-
-    expect(timelineNavigationEntries([item!])[0]?.promptPreview).toBe('无用户正文')
+  it('does not turn a runtime-only blank prompt into a navigation node', () => {
+    expect(timelineItems(undefined, [{ events: [], id: 'turn-1', prompt: ' '.repeat(120), startedAt: '2026-09-22T00:00:00.000Z' }], [])).toEqual([])
   })
 })

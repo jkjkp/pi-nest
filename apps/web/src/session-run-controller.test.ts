@@ -56,7 +56,7 @@ describe('session run controller', () => {
     runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', sequence: 4, sessionId: 'session-a' })
     const completed = useWorkspaceStore.getState().runs['session-a']
     expect(completed).toMatchObject({ status: 'complete', stopReason: 'stop' })
-    expect(completed?.turns[0]).toMatchObject({ id: 'turn-1', prompt: 'hello' })
+    expect(completed?.turns[0]).toMatchObject({ id: 'pending:session-a', prompt: 'hello' })
     expect(completed?.turns[0]?.events.map((event) => event.event.type)).toEqual(['message_update', 'message_end', 'turn_end'])
     expect(completed?.systemEvents.map((event) => event.event.type)).toEqual(['agent_settled'])
     expect(invalidateHistory).toHaveBeenCalledWith('session-a')
@@ -78,6 +78,20 @@ describe('session run controller', () => {
     await tick()
     expect(runtime.unwatch).toHaveBeenCalledWith('session-a')
     expect(runtime.watch).toHaveBeenCalledWith('session-b', 'foreground')
+  })
+
+  it('adopts an already admitted first prompt and never lets later runtime turn IDs add timeline nodes', () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+
+    controller.adopt({ historyTurnCount: 0, prompt: 'first prompt', sessionId: 'session-a' })
+    runtime.emit({ event: { type: 'turn_start' }, observedAt: 'now', sequence: 1, sessionId: 'session-a', turnId: 'runtime-turn-1' })
+    runtime.emit({ event: { type: 'tool_execution_start' }, observedAt: 'now', sequence: 2, sessionId: 'session-a', turnId: 'runtime-turn-2' })
+
+    const run = useWorkspaceStore.getState().runs['session-a']
+    expect(run?.turns).toHaveLength(1)
+    expect(run?.turns[0]).toMatchObject({ id: 'pending:session-a', prompt: 'first prompt' })
+    expect(run?.turns[0]?.events.map((event) => event.turnId)).toEqual(['runtime-turn-1', 'runtime-turn-2'])
   })
 
   it('keeps an active old foreground session as a background watch', async () => {

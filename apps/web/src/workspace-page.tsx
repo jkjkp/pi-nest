@@ -9,15 +9,15 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from 
 import { Textarea } from '@/components/ui/textarea'
 
 import { useComposerTextarea } from './composer-textarea.js'
-import { sessionHistoryQueryKey } from './history.js'
+import { historyUserTurnCount, sessionHistoryQueryKey } from './history.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import { SessionInspector } from './session-inspector.js'
 import { SessionNavigation } from './session-navigation.js'
 import type { SessionRunController } from './session-run-controller.js'
 import { SessionTimeline } from './session-timeline.js'
 import { useWorkspaceStore } from './workspace-store.js'
-import { deleteSession, fetchSessionHistory, fetchSessions, renameSession } from './workspace-api.js'
-import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, runtimeStatusLabel, sessionDisplayName, sessionStatusLabel, shouldFollowLatest } from './workspace.js'
+import { createSession, deleteSession, fetchSessionHistory, fetchSessions, renameSession, revealProjectInFinder } from './workspace-api.js'
+import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, runtimeStatusLabel, sessionDisplayName, sessionStatusLabel, shouldFollowLatest, type ProjectSessionGroup } from './workspace.js'
 
 const emptySessions: Awaited<ReturnType<typeof fetchSessions>> = []
 
@@ -25,10 +25,12 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const selectedSessionId = searchParams.get('session') ?? ''
+  const draftProjectKey = searchParams.get('draftProject') ?? ''
   const drafts = useWorkspaceStore((state) => state.drafts)
   const extensionStatuses = useWorkspaceStore((state) => state.extensionStatuses)
   const extensionWidgets = useWorkspaceStore((state) => state.extensionWidgets)
   const collapsedProjectKeys = useWorkspaceStore((state) => state.collapsedProjectKeys)
+  const hiddenProjectCwds = useWorkspaceStore((state) => state.hiddenProjectCwds)
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
   const inspectorWidth = useWorkspaceStore((state) => state.inspectorWidth)
   const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
@@ -39,12 +41,17 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const setDraft = useWorkspaceStore((state) => state.setDraft)
   const navigationOrder = useWorkspaceStore((state) => state.navigationOrder)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
+  const hideProject = useWorkspaceStore((state) => state.hideProject)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
   const setNavigationOrder = useWorkspaceStore((state) => state.setNavigationOrder)
   const setProjectCollapsed = useWorkspaceStore((state) => state.setProjectCollapsed)
+  const restoreProject = useWorkspaceStore((state) => state.restoreProject)
   const [mutatingSessionId, setMutatingSessionId] = useState<string>()
   const [controlOpen, setControlOpen] = useState(false)
   const [controlError, setControlError] = useState<string>()
+  const [draftError, setDraftError] = useState<string>()
+  const [draftPrompt, setDraftPrompt] = useState('')
+  const [creatingDraft, setCreatingDraft] = useState(false)
   const [models, setModels] = useState<{ id: string; name?: string; provider: string }[]>([])
   const [thinkingLevels, setThinkingLevels] = useState<string[]>([])
   const [queueMode, setQueueMode] = useState<'follow_up' | 'steer'>('steer')
@@ -73,16 +80,23 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     queryFn: () => fetchSessionHistory(selectedSessionId),
     retry: false,
   })
-  const prompt = drafts[selectedSessionId] ?? ''
-  const promptTextareaRef = useComposerTextarea(prompt)
+  const historyTurnCount = historyQuery.data ? historyUserTurnCount(historyQuery.data.entries) : undefined
   const sourceProjects = useMemo(() => groupSessionsByProject(sessions), [sessions])
-  const projects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
+  const orderedProjects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
+  const projects = useMemo(() => orderedProjects.filter((project) => !project.cwd || !hiddenProjectCwds[project.cwd]), [hiddenProjectCwds, orderedProjects])
+  const removedProjects = useMemo(() => orderedProjects.filter((project) => Boolean(project.cwd && hiddenProjectCwds[project.cwd])), [hiddenProjectCwds, orderedProjects])
+  const draftProject = !selectedSessionId ? projects.find((project) => project.key === draftProjectKey) : undefined
+  const isDraft = Boolean(draftProject)
+  const prompt = isDraft ? draftPrompt : drafts[selectedSessionId] ?? ''
+  const promptTextareaRef = useComposerTextarea(prompt)
 
   useEffect(() => {
-    if (sessions.length === 0 || sessions.some((session) => session.id === selectedSessionId)) return
-
-    setSearchParams({ session: sessions[0].id }, { replace: true })
-  }, [selectedSessionId, sessions, setSearchParams])
+    if (isDraft || sessions.length === 0) return
+    const visibleSessions = projects.flatMap((project) => project.sessions)
+    if (visibleSessions.some((session) => session.id === selectedSessionId)) return
+    const fallback = visibleSessions[0]
+    setSearchParams(fallback ? { session: fallback.id } : {}, { replace: true })
+  }, [isDraft, projects, selectedSessionId, sessions.length, setSearchParams])
 
   useEffect(() => {
     const reconciled = reconcileNavigationOrder(navigationOrder, sourceProjects)
@@ -130,9 +144,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   }, [currentRun?.error, currentRun?.systemEvents, currentRun?.turns, followLatest, historyQuery.data, scrollViewport, selectedSessionId])
 
   useEffect(() => {
-    if (!selectedSessionId) return
+    if (!selectedSession) return
     sessionRuns.openSession(selectedSessionId)
-  }, [selectedSessionId, sessionRuns])
+  }, [selectedSession, selectedSessionId, sessionRuns])
 
   useEffect(() => () => sessionRuns.releaseForeground(), [sessionRuns])
 
@@ -156,8 +170,46 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   function selectSession(sessionId: string) {
     setFollowLatest(true)
+    setDraftPrompt('')
+    setDraftError(undefined)
     setSearchParams({ session: sessionId })
     setNavigationOpen(false)
+  }
+
+  function startDraft(project: ProjectSessionGroup) {
+    if (!project.cwd) return
+    setDraftPrompt('')
+    setDraftError(undefined)
+    setProjectCollapsed(project.key, false)
+    setSearchParams({ draftProject: project.key })
+    setNavigationOpen(false)
+  }
+
+  function removeProject(project: ProjectSessionGroup) {
+    if (!project.cwd) return
+    const next = projects.flatMap((candidate) => candidate.cwd === project.cwd ? [] : candidate.sessions)[0]
+    hideProject(project.cwd)
+    if (draftProject?.cwd === project.cwd || selectedSession?.cwd === project.cwd) setSearchParams(next ? { session: next.id } : {})
+  }
+
+  async function submitDraft() {
+    if (!draftProject?.cwd || draftPrompt.trim().length === 0 || creatingDraft) return
+    setCreatingDraft(true)
+    setDraftError(undefined)
+    setFollowLatest(true)
+    try {
+      const firstPrompt = draftPrompt.trim()
+      const created = await createSession(draftProject.cwd, firstPrompt)
+      sessionRuns.adopt({ historyTurnCount: 0, prompt: firstPrompt, sessionId: created.id })
+      queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => [created, ...(current ?? []).filter((session) => session.id !== created.id)])
+      setDraftPrompt('')
+      setSearchParams({ session: created.id })
+      setNavigationOpen(false)
+    } catch (cause) {
+      setDraftError(cause instanceof Error ? cause.message : '创建 Pi 会话失败，请重试。')
+    } finally {
+      setCreatingDraft(false)
+    }
   }
 
   function toggleInspector() {
@@ -166,10 +218,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   }
 
   function submitPrompt() {
+    if (isDraft) return void submitDraft()
     if (!selectedSessionId || prompt.trim().length === 0) return
     setFollowLatest(true)
     if (!isActive) {
-      if (sessionRuns.start({ prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
+      if (sessionRuns.start({ historyTurnCount, prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
     }
     else void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败'))
   }
@@ -236,8 +289,12 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       isLoading={sessionsQuery.isPending}
       mutationSessionId={mutatingSessionId}
       onDelete={handleDelete}
+      onNewConversation={startDraft}
       onProjectOrderChange={(projectOrder) => setNavigationOrder({ ...navigationOrder, projectOrder })}
+      onRemoveProject={removeProject}
       onRename={handleRename}
+      onRestoreProject={restoreProject}
+      onRevealProject={revealProjectInFinder}
       onSelect={selectSession}
       onSessionOrderChange={(projectKey, sessionOrder) =>
         setNavigationOrder({
@@ -247,6 +304,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       }
       onToggleProject={setProjectCollapsed}
       projects={projects}
+      removedProjects={removedProjects}
       runs={runs}
       selectedSessionId={selectedSessionId}
     />
@@ -309,7 +367,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           <header className="min-h-14 shrink-0 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-6">
             <div className="conversation-stage min-h-14">
               <div className="conversation-stage-content flex min-w-0 items-center py-2 pr-12">
-                <h1 className="truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : '选择一个会话'}</h1>
+                <h1 className="truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : draftProject ? `新对话 · ${draftProject.name}` : '选择一个会话'}</h1>
                 {selectedSession && <Button asChild className="ml-auto" size="sm" variant="ghost"><Link to={`/settings?session=${encodeURIComponent(selectedSession.id)}`}><Settings aria-hidden="true" />设置</Link></Button>}
               </div>
             </div>
@@ -317,9 +375,15 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           <div className="min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="h-full">
               <div className="w-full space-y-4 px-4 py-6 sm:px-6">
-                <SessionTimeline
+                {isDraft ? (
+                  <div className="conversation-stage py-16">
+                    <section className="conversation-stage-content grid min-h-56 place-items-center rounded-2xl border border-dashed bg-muted/20 p-8 text-center">
+                      <div className="space-y-2"><h2 className="text-lg font-semibold">在 {draftProject?.name} 开始新对话</h2><p className="text-sm text-muted-foreground">发送第一条消息后才会创建 Pi 会话。</p></div>
+                    </section>
+                  </div>
+                ) : selectedSession ? <SessionTimeline
                   error={historyQuery.isError}
-                  history={isActive ? undefined : historyQuery.data}
+                  history={historyQuery.data}
                   isLoading={!isActive && historyQuery.isPending}
                   isRunning={isActive}
                   onJumpToTurn={jumpToTurn}
@@ -327,10 +391,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   scrollViewport={scrollViewport}
                   systemEvents={currentRun?.systemEvents}
                   turns={currentRun?.turns}
-                />
+                /> : <div className="conversation-stage py-16"><p className="conversation-stage-content text-center text-sm text-muted-foreground">从左侧选择一个会话，或在项目中创建新对话。</p></div>}
                 <div className="conversation-stage">
                   <section className="conversation-stage-content space-y-3">
-                    {extensionWidget ? <pre className="rounded border bg-muted p-2 text-xs">{extensionWidget}</pre> : null}
+                    {!isDraft && extensionWidget ? <pre className="rounded border bg-muted p-2 text-xs">{extensionWidget}</pre> : null}
                     {isActive && (
                       <div aria-live="polite">
                         <p className="text-xs font-medium text-warning">{sessionStatusLabel(status)}</p>
@@ -344,6 +408,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                     )}
                     {!currentRun?.error && runtimeStatus && <p className="text-xs text-muted-foreground" role={runtimeStates[selectedSessionId]?.lifecycle === 'failed' ? 'alert' : undefined}>{runtimeStatus}</p>}
                     {controlError && <p className="text-xs text-destructive" role="alert">{controlError}</p>}
+                    {draftError && <p className="text-xs text-destructive" role="alert">{draftError}</p>}
                   </section>
                 </div>
               </div>
@@ -353,20 +418,20 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             <div className="conversation-stage mb-4">
               <div className="conversation-stage-content">
                 <div className="flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:px-6">
-              <label className="sr-only" htmlFor="prompt">向当前 Pi 会话发送提示词</label>
+              <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
               <Textarea
                 className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
-                disabled={!selectedSession}
+                disabled={(!selectedSession && !isDraft) || creatingDraft}
                 id="prompt"
                 maxLength={20_000}
-                onChange={(event) => selectedSessionId && setDraft(selectedSessionId, event.target.value)}
+                onChange={(event) => isDraft ? setDraftPrompt(event.target.value) : selectedSessionId && setDraft(selectedSessionId, event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
 
                   event.preventDefault()
                   submitPrompt()
                 }}
-                placeholder="Enter 发送，Shift + Enter 换行"
+                placeholder={isDraft ? '随心输入…' : 'Enter 发送，Shift + Enter 换行'}
                 ref={promptTextareaRef}
                 rows={1}
                 style={{ lineHeight: '1.75rem' }}
@@ -384,7 +449,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
                   {status === 'running' && <Button aria-label={queueMode === 'steer' ? '发送 Steer' : '发送 Follow-up'} className="rounded-full" disabled={prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>}
                   {status !== 'running' && status !== 'aborting' && (
-                    <Button aria-label="发送提示词" className="rounded-full" disabled={!selectedSession || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
+                    <Button aria-label="发送提示词" className="rounded-full" disabled={(!selectedSession && !isDraft) || creatingDraft || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
                   )}
                 </div>
                 </div>

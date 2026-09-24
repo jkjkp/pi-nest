@@ -10,12 +10,13 @@ import {
   useSensors,
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { ChevronRight, Pencil, Search, Trash2 } from 'lucide-react'
+import { ChevronRight, Ellipsis, Folder, FolderOpen, Pencil, Search, SquarePen, Trash2 } from 'lucide-react'
 
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -31,9 +32,14 @@ export function SessionNavigation({
   onSelect,
   onRename,
   onProjectOrderChange,
+  onNewConversation,
+  onRemoveProject,
+  onRestoreProject,
+  onRevealProject,
   onSessionOrderChange,
   onToggleProject,
   projects,
+  removedProjects,
   runs,
   selectedSessionId,
 }: {
@@ -45,9 +51,14 @@ export function SessionNavigation({
   onSelect: (sessionId: string) => void
   onRename: (sessionId: string, name: string) => Promise<void>
   onProjectOrderChange: (projectOrder: string[]) => void
+  onNewConversation: (project: ProjectSessionGroup) => void
+  onRemoveProject: (project: ProjectSessionGroup) => void
+  onRestoreProject: (cwd: string) => void
+  onRevealProject: (cwd: string) => Promise<void>
   onSessionOrderChange: (projectKey: string, sessionOrder: string[]) => void
   onToggleProject: (projectKey: string, collapsed: boolean) => void
   projects: ProjectSessionGroup[]
+  removedProjects: ProjectSessionGroup[]
   runs: Record<string, SessionRunSummary>
   selectedSessionId: string
 }) {
@@ -59,6 +70,7 @@ export function SessionNavigation({
   const [renaming, setRenaming] = useState<PiSessionSummary>()
   const [renameValue, setRenameValue] = useState('')
   const [deleting, setDeleting] = useState<PiSessionSummary>()
+  const [removingProject, setRemovingProject] = useState<ProjectSessionGroup>()
   const [actionError, setActionError] = useState<string>()
   const [searchValue, setSearchValue] = useState('')
   const visibleProjects = useMemo(() => filterProjectsByQuery(projects, searchValue), [projects, searchValue])
@@ -135,6 +147,7 @@ export function SessionNavigation({
         <div className="space-y-1 p-2">
           {isLoading && Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-16" />)}
           {error && <p className="p-3 text-sm text-destructive">会话列表不可用</p>}
+          {actionError && !renaming && !deleting && !removingProject && <p className="px-3 py-1 text-xs text-destructive" role="alert">{actionError}</p>}
           {!isLoading && !error && projects.length === 0 && <p className="p-3 text-sm text-muted-foreground">未发现本机 Pi 会话</p>}
           {!isLoading && !error && projects.length > 0 && visibleProjects.length === 0 && <p className="p-3 text-sm text-muted-foreground">未找到匹配的项目或会话</p>}
           <DndContext collisionDetection={closestCenter} onDragEnd={reorder} sensors={sensors}>
@@ -150,6 +163,18 @@ export function SessionNavigation({
                     setActionError(undefined)
                     setDeleting(session)
                   }}
+                  onNewConversation={onNewConversation}
+                  onRemove={(project) => {
+                    setActionError(undefined)
+                    setRemovingProject(project)
+                  }}
+                  onReveal={async (cwd) => {
+                    try {
+                      await onRevealProject(cwd)
+                    } catch {
+                      setActionError('无法在 Finder 中显示项目，请确认目录仍可访问。')
+                    }
+                  }}
                   onRename={requestRename}
                   onSelect={onSelect}
                   onToggle={onToggleProject}
@@ -160,6 +185,14 @@ export function SessionNavigation({
               ))}
             </SortableContext>
           </DndContext>
+          {removedProjects.length > 0 && !isFiltering && (
+            <details className="mt-3 border-t pt-3">
+              <summary className="cursor-pointer px-2 text-xs text-muted-foreground">已移除项目（{removedProjects.length}）</summary>
+              <div className="mt-1 space-y-1">
+                {removedProjects.map((project) => <Button className="h-8 w-full justify-between px-2 text-xs" key={project.key} onClick={() => project.cwd && onRestoreProject(project.cwd)} type="button" variant="ghost"><span className="truncate">{project.name}</span><span>恢复</span></Button>)}
+              </div>
+            </details>
+          )}
         </div>
       </ScrollArea>
       <Dialog onOpenChange={(open) => !open && setRenaming(undefined)} open={Boolean(renaming)}>
@@ -201,6 +234,17 @@ export function SessionNavigation({
           </div>
         </AlertDialogContent>
       </AlertDialog>
+      <AlertDialog onOpenChange={(open) => !open && setRemovingProject(undefined)} open={Boolean(removingProject)}>
+        <AlertDialogContent>
+          <AlertDialogTitle>从 Pi Nest 移除项目？</AlertDialogTitle>
+          <AlertDialogDescription>仅从此浏览器的项目列表隐藏“{removingProject?.name}”。不会删除目录、Pi 原生会话或正在运行的任务，之后可在“已移除项目”中恢复。</AlertDialogDescription>
+          {actionError && <p className="mt-3 text-sm text-destructive" role="alert">{actionError}</p>}
+          <div className="mt-5 flex justify-end gap-2">
+            <AlertDialogCancel asChild><Button type="button" variant="secondary">取消</Button></AlertDialogCancel>
+            <Button onClick={() => { if (removingProject) onRemoveProject(removingProject); setRemovingProject(undefined) }} type="button" variant="destructive">移除项目</Button>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -211,6 +255,9 @@ function SortableProject({
   index,
   mutationSessionId,
   onDelete,
+  onNewConversation,
+  onRemove,
+  onReveal,
   onRename,
   onSelect,
   onToggle,
@@ -223,6 +270,9 @@ function SortableProject({
   index: number
   mutationSessionId: string | undefined
   onDelete: (session: PiSessionSummary) => void
+  onNewConversation: (project: ProjectSessionGroup) => void
+  onRemove: (project: ProjectSessionGroup) => void
+  onReveal: (cwd: string) => Promise<void>
   onRename: (session: PiSessionSummary) => void
   onSelect: (sessionId: string) => void
   onToggle: (projectKey: string, collapsed: boolean) => void
@@ -238,14 +288,21 @@ function SortableProject({
   const expanded = !collapsed
   const sessionListId = `project-sessions-${index}`
   const projectDescription = project.cwd ?? '工作目录不可用'
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const actionsVisible = hovered || focused || menuOpen
+  const actionsClass = actionsVisible ? 'opacity-100' : 'pointer-events-none opacity-0 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100'
+  const stopProjectInteraction = (event: React.SyntheticEvent) => event.stopPropagation()
 
   return (
-    <section className="space-y-1" ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
+    <section className="space-y-1" onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false) }} onFocusCapture={() => setFocused(true)} onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
+      <div className="flex items-center rounded-md transition-colors hover:bg-muted">
       <button
         aria-controls={sessionListId}
         aria-expanded={expanded}
         aria-label={`项目 ${project.name}，目录 ${projectDescription}，${project.sessions.length} 个会话，${expanded ? '已展开' : '已折叠'}`}
-        className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-semibold outline-none transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 motion-reduce:transition-none"
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         onClick={() => onToggle(project.key, !collapsed)}
         ref={setActivatorNodeRef}
         title={project.cwd}
@@ -254,9 +311,22 @@ function SortableProject({
         {...listeners}
       >
         <ChevronRight aria-hidden="true" className={`size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`} />
+        <Folder aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate">{project.name}</span>
-        <span className="shrink-0 font-mono text-xs font-normal tabular-nums text-muted-foreground">{project.sessions.length}</span>
       </button>
+      <div className="flex w-[4.5rem] shrink-0 items-center justify-end gap-0.5 pr-1">
+        <DropdownMenu onOpenChange={setMenuOpen} open={menuOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button aria-label={`${project.name} 更多操作`} className={`size-7 transition-opacity motion-reduce:transition-none ${actionsClass}`} disabled={!project.cwd} onClick={stopProjectInteraction} onPointerDown={stopProjectInteraction} size="icon-sm" type="button" variant="ghost"><Ellipsis aria-hidden="true" /></Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem disabled={!project.cwd} onSelect={() => { if (project.cwd) void onReveal(project.cwd) }}><FolderOpen aria-hidden="true" className="mr-2 size-3.5" />在 Finder 中显示</DropdownMenuItem>
+            <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={!project.cwd} onSelect={() => onRemove(project)}><Trash2 aria-hidden="true" className="mr-2 size-3.5" />移除项目</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Button aria-label={`在 ${project.name} 新建对话`} className={`size-7 transition-opacity motion-reduce:transition-none ${actionsClass}`} disabled={!project.cwd} onClick={(event) => { stopProjectInteraction(event); onNewConversation(project) }} onPointerDown={stopProjectInteraction} size="icon-sm" type="button" variant="ghost"><SquarePen aria-hidden="true" /></Button>
+      </div>
+      </div>
       {expanded && (
         <div className="space-y-1 pl-2" id={sessionListId}>
           <SortableContext items={project.sessions.map((session) => `session:${session.id}`)} strategy={verticalListSortingStrategy}>

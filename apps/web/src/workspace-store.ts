@@ -27,6 +27,7 @@ type WorkspaceState = {
   drafts: Record<string, string>
   extensionStatuses: Record<string, Record<string, string>>
   extensionWidgets: Record<string, Record<string, string[]>>
+  hiddenProjectCwds: Record<string, true>
   inspectorOpen: boolean
   inspectorWidth: number
   navigationOpen: boolean
@@ -43,9 +44,11 @@ type WorkspaceState = {
   setExtensionStatus: (sessionId: string, key: string, status: string | undefined) => void
   setExtensionWidget: (sessionId: string, key: string, lines: string[] | undefined) => void
   setInspectorOpen: (open: boolean) => void
+  hideProject: (cwd: string) => void
   setNavigationOpen: (open: boolean) => void
   setNavigationOrder: (order: NavigationOrder) => void
   setProjectCollapsed: (projectKey: string, collapsed: boolean) => void
+  restoreProject: (cwd: string) => void
   setRun: (sessionId: string, run: SessionRunSummary) => void
   setRuntimeState: (sessionId: string, runtime: Omit<RuntimeStatus, 'sessionId'>) => void
   setWatchState: (sessionId: string, state: 'ready' | 'watching') => void
@@ -58,6 +61,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   drafts: {},
   extensionStatuses: {},
   extensionWidgets: {},
+  hiddenProjectCwds: {},
   inspectorOpen: false,
   inspectorWidth: 300,
   navigationOpen: false,
@@ -80,16 +84,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }
       }
 
-      const existingIndex = run.turns.findIndex((turn) => turn.id === event.turnId)
-      const pendingIndex = run.turns.findIndex((turn) => turn.id === `pending:${sessionId}`)
-      const index = existingIndex >= 0 ? existingIndex : pendingIndex
-      const turns = [...run.turns]
-      if (index >= 0) {
-        const current = turns[index]!
-        turns[index] = { ...current, events: [...current.events, event], id: existingIndex >= 0 ? current.id : event.turnId }
-      } else {
-        turns.push({ events: [event], id: event.turnId, startedAt: event.observedAt })
+      const current = run.turns.at(-1)
+      if (!current?.prompt?.trim()) {
+        return {
+          runs: {
+            ...state.runs,
+            [sessionId]: { ...run, systemEvents: [...run.systemEvents, event] },
+          },
+        }
       }
+      const turns = [...run.turns.slice(0, -1), { ...current, events: [...current.events, event] }]
 
       return {
         runs: {
@@ -126,10 +130,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     return { extensionWidgets: { ...state.extensionWidgets, [sessionId]: widgets } }
   }),
   setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
+  hideProject: (cwd) => set((state) => ({ hiddenProjectCwds: { ...state.hiddenProjectCwds, [cwd]: true } })),
   setNavigationOpen: (navigationOpen) => set({ navigationOpen }),
   setNavigationOrder: (navigationOrder) => set({ navigationOrder }),
   setProjectCollapsed: (projectKey, collapsed) =>
     set((state) => ({ collapsedProjectKeys: { ...state.collapsedProjectKeys, [projectKey]: collapsed } })),
+  restoreProject: (cwd) => set((state) => {
+    const { [cwd]: _hidden, ...hiddenProjectCwds } = state.hiddenProjectCwds
+    return { hiddenProjectCwds }
+  }),
   setRun: (sessionId, run) => set((state) => ({ runs: { ...state.runs, [sessionId]: run } })),
   setRuntimeState: (sessionId, runtime) => set((state) => {
     const current = state.runtimeStates[sessionId]
@@ -149,7 +158,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
       storage: createJSONStorage(() => (typeof window === 'undefined' ? unavailableStorage : window.localStorage)),
     },
   ),

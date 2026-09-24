@@ -75,6 +75,16 @@ describe('workspace presentation helpers', () => {
     expect(useWorkspaceStore.getState().collapsedProjectKeys[projectKey]).toBe(true)
   })
 
+  it('hides projects only in persisted browser navigation preferences', () => {
+    useWorkspaceStore.setState({ hiddenProjectCwds: {} })
+    const store = useWorkspaceStore.getState()
+
+    store.hideProject('/work/alpha')
+    expect(useWorkspaceStore.getState().hiddenProjectCwds).toEqual({ '/work/alpha': true })
+    store.restoreProject('/work/alpha')
+    expect(useWorkspaceStore.getState().hiddenProjectCwds).toEqual({})
+  })
+
   it('keeps initial desktop panel widths in UI-only state', () => {
     expect(useWorkspaceStore.getState()).toMatchObject({ inspectorWidth: 300, navigationWidth: 272 })
   })
@@ -108,7 +118,7 @@ describe('workspace presentation helpers', () => {
   it('appends native events to only the matching session turn', () => {
     useWorkspaceStore.setState({
       runs: {
-        first: { status: 'running', systemEvents: [], turns: [{ events: [], id: 'turn-1', startedAt: 'now' }] },
+        first: { status: 'running', systemEvents: [], turns: [{ events: [], id: 'turn-1', prompt: 'known user input', startedAt: 'now' }] },
         second: { status: 'running', systemEvents: [], turns: [{ events: [], id: 'turn-2', startedAt: 'now' }] },
       },
     })
@@ -119,6 +129,16 @@ describe('workspace presentation helpers', () => {
       first: { turns: [{ events: [{ event: { type: 'unknown_event' } }] }] },
       second: { turns: [{ events: [] }] },
     })
+  })
+
+  it('keeps unowned runtime events out of the timeline turn collection', () => {
+    useWorkspaceStore.setState({
+      runs: { first: { status: 'running', systemEvents: [], turns: [] } },
+    })
+
+    useWorkspaceStore.getState().appendRunEvent('first', { event: { type: 'tool_execution_start' }, observedAt: 'now', sequence: 1, sessionId: 'first', turnId: 'runtime-turn-1' })
+
+    expect(useWorkspaceStore.getState().runs.first).toMatchObject({ systemEvents: [{ event: { type: 'tool_execution_start' } }], turns: [] })
   })
 
   it('reconciles persisted navigation order while appending newly discovered sessions', () => {

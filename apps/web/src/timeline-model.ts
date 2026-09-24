@@ -3,6 +3,7 @@ import type { PiRuntimeEvent } from './runtime-websocket-client.js'
 
 export type RuntimeTurn = {
   events: PiRuntimeEvent[]
+  historyTurnCount?: number
   id: string
   prompt?: string
   startedAt: string
@@ -175,12 +176,16 @@ function historyItems(entries: PiSessionHistoryEntry[]): TimelineItem[] {
 }
 
 export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turns: RuntimeTurn[], _systemEvents: PiRuntimeEvent[]): TimelineItem[] {
-  if (history) return historyItems(history)
-  return turns.map((turn) => {
+  const items = history ? historyItems(history) : []
+  for (const turn of turns) {
+    // A local turn exists only after an explicit user prompt has been accepted.
+    // Runtime events may enrich it, but cannot create another conversation node.
+    if (!turn.prompt?.trim() || (turn.historyTurnCount !== undefined && items.length > turn.historyTurnCount)) continue
     const item = newTurn(turn.id, turn.prompt ?? promptFrom(turn.events), turn.startedAt)
     for (const event of turn.events) projectEvent(item, runtimeEvent(event))
-    return item
-  })
+    items.push(item)
+  }
+  return items
 }
 
 export function timelineNavigationEntries(items: TimelineItem[]): TimelineNavigationEntry[] {

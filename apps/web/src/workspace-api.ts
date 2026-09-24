@@ -32,6 +32,27 @@ export async function fetchSessions() {
   return body.sessions
 }
 
+export async function createSession(cwd: string, prompt: string) {
+  const response = await fetch('/api/sessions', {
+    body: JSON.stringify({ cwd, prompt }),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  })
+  if (!response.ok) throw new Error('Failed to create Pi session')
+  const body = await response.json() as { session?: PiSessionSummary }
+  if (!body.session?.id || !body.session.cwd) throw new Error('Invalid Pi session creation response')
+  return body.session
+}
+
+export async function revealProjectInFinder(cwd: string) {
+  const response = await fetch('/api/projects/reveal', {
+    body: JSON.stringify({ cwd }),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  })
+  if (!response.ok) throw new Error('Failed to reveal Pi workspace in Finder')
+}
+
 export async function deleteSession(sessionId: string) {
   const response = await fetch(sessionUrl(sessionId), { method: 'DELETE' })
   if (!response.ok) throw new Error('Failed to delete Pi session')

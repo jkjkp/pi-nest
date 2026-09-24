@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { sessionHistoryQueryKey, type PiSessionHistoryResponse } from './history.js'
+import { historyUserTurnCount, sessionHistoryQueryKey, type PiSessionHistoryResponse } from './history.js'
 
 describe('session history presentation contract', () => {
   it('keeps history cache isolated by session ID', () => {
@@ -24,5 +24,13 @@ describe('session history presentation contract', () => {
     }
 
     expect(response.entries[0]?.raw).toMatchObject({ nested: { value: true } })
+  })
+
+  it('counts only persisted user messages as conversation turns', () => {
+    expect(historyUserTurnCount([
+      { id: 'user', parentId: null, raw: { message: { role: 'user' }, type: 'message' }, timestamp: 'now', type: 'message' },
+      { id: 'assistant', parentId: 'user', raw: { message: { role: 'assistant' }, type: 'message' }, timestamp: 'now', type: 'message' },
+      { id: 'tool', parentId: 'user', raw: { type: 'tool_execution_start' }, timestamp: 'now', type: 'tool_execution_start' },
+    ])).toBe(1)
   })
 })
