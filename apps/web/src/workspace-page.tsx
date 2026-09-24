@@ -8,6 +8,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
 
+import { useComposerTextarea } from './composer-textarea.js'
 import { sessionHistoryQueryKey } from './history.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import { SessionInspector } from './session-inspector.js'
@@ -68,6 +69,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     retry: false,
   })
   const prompt = drafts[selectedSessionId] ?? ''
+  const promptTextareaRef = useComposerTextarea(prompt)
   const sourceProjects = useMemo(() => groupSessionsByProject(sessions), [sessions])
   const projects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
 
@@ -279,10 +281,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               </div>
             </ScrollArea>
           </div>
-            <div className="mx-auto mb-4 flex h-[100px] w-[calc(100%-2rem)] max-w-[920px] shrink-0 flex-col gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:w-[calc(100%-3rem)] sm:px-6">
+            <div className="mx-auto mb-4 flex min-h-[100px] w-[calc(100%-2rem)] max-w-[920px] shrink-0 flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:w-[calc(100%-3rem)] sm:px-6">
               <label className="sr-only" htmlFor="prompt">向当前 Pi 会话发送提示词</label>
               <Textarea
-                className="min-h-0! flex-1 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
+                className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
                 disabled={!selectedSession}
                 id="prompt"
                 maxLength={20_000}
@@ -294,7 +296,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   submitPrompt()
                 }}
                 placeholder="Enter 发送，Shift + Enter 换行"
-                rows={3}
+                ref={promptTextareaRef}
+                rows={1}
+                style={{ lineHeight: '1.75rem' }}
                 value={prompt}
               />
               <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-2">
