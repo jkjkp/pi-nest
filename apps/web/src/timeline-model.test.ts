@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { diagnosticLabel, timelineItems } from './timeline-model.js'
+import { diagnosticLabel, timelineItems, timelineNavigationEntries } from './timeline-model.js'
 
 const runtime = (sequence: number, event: Record<string, unknown>, turnId = 'turn-1') => ({ event, observedAt: `2026-09-22T00:00:${String(sequence).padStart(2, '0')}.000Z`, sequence, sessionId: 'session-1', turnId })
 
@@ -65,5 +65,23 @@ describe('timelineItems', () => {
 
   it('does not turn unowned session metadata into a chat row', () => {
     expect(timelineItems(undefined, [], [runtime(1, { type: 'model_change' }, undefined)])).toEqual([])
+  })
+
+  it('derives bounded, whitespace-normalized navigation labels from Turns', () => {
+    const items = timelineItems(undefined, [{
+      events: [],
+      id: 'turn-1',
+      prompt: `  first line\n${'x'.repeat(120)} `,
+      startedAt: '2026-09-22T00:00:00.000Z',
+    }, {
+      events: [],
+      id: 'turn-2',
+      startedAt: '2026-09-22T00:01:00.000Z',
+    }], [])
+
+    expect(timelineNavigationEntries(items)).toEqual([
+      expect.objectContaining({ id: 'turn-1', index: 1, promptPreview: `first line ${'x'.repeat(85)}` }),
+      expect.objectContaining({ id: 'turn-2', index: 2, promptPreview: '无用户正文' }),
+    ])
   })
 })

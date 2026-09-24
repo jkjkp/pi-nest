@@ -37,6 +37,13 @@ export type TimelineItem = {
   startedAt: string
 }
 
+export type TimelineNavigationEntry = {
+  id: string
+  index: number
+  promptPreview: string
+  startedAt: string
+}
+
 function record(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 }
@@ -174,6 +181,15 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
     for (const event of turn.events) projectEvent(item, runtimeEvent(event))
     return item
   })
+}
+
+export function timelineNavigationEntries(items: TimelineItem[]): TimelineNavigationEntry[] {
+  return items.map((item, index) => ({
+    id: item.id,
+    index: index + 1,
+    promptPreview: (item.prompt ?? '无用户正文').replace(/\s+/g, ' ').trim().slice(0, 96),
+    startedAt: item.startedAt,
+  }))
 }
 
 function promptFrom(events: PiRuntimeEvent[]) {

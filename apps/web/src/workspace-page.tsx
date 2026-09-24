@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, CircleX, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
@@ -47,7 +47,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const [models, setModels] = useState<{ id: string; name?: string; provider: string }[]>([])
   const [thinkingLevels, setThinkingLevels] = useState<string[]>([])
   const [queueMode, setQueueMode] = useState<'follow_up' | 'steer'>('steer')
+  const [followLatest, setFollowLatest] = useState(true)
+  const [scrollViewport, setScrollViewport] = useState<HTMLElement | null>(null)
   const messageScrollAreaRef = useRef<HTMLDivElement>(null)
+  const previouslyScrolledSessionId = useRef(selectedSessionId)
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
   const sessions = sessionsQuery.data ?? emptySessions
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
@@ -79,14 +82,28 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     if (!navigationOrdersEqual(navigationOrder, reconciled)) setNavigationOrder(reconciled)
   }, [navigationOrder, setNavigationOrder, sourceProjects])
 
+  const setMessageScrollArea = useCallback((node: HTMLDivElement | null) => {
+    messageScrollAreaRef.current = node
+    setScrollViewport(node?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null)
+  }, [setScrollViewport])
+
+  useEffect(() => {
+    if (!scrollViewport) return
+    const updateFollowLatest = () => setFollowLatest(scrollViewport.scrollHeight - scrollViewport.scrollTop - scrollViewport.clientHeight <= 80)
+    scrollViewport.addEventListener('scroll', updateFollowLatest, { passive: true })
+    return () => scrollViewport.removeEventListener('scroll', updateFollowLatest)
+  }, [scrollViewport])
+
   useLayoutEffect(() => {
+    const selectedSessionChanged = previouslyScrolledSessionId.current !== selectedSessionId
+    previouslyScrolledSessionId.current = selectedSessionId
+    if (!followLatest && !selectedSessionChanged) return
     const frame = requestAnimationFrame(() => {
-      const viewport = messageScrollAreaRef.current?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')
-      if (viewport) viewport.scrollTop = viewport.scrollHeight
+      if (scrollViewport) scrollViewport.scrollTop = scrollViewport.scrollHeight
     })
 
     return () => cancelAnimationFrame(frame)
-  }, [currentRun?.error, currentRun?.systemEvents, currentRun?.turns, historyQuery.data, selectedSessionId])
+  }, [currentRun?.error, currentRun?.systemEvents, currentRun?.turns, followLatest, historyQuery.data, scrollViewport, selectedSessionId])
 
   useEffect(() => {
     if (!selectedSessionId) return
@@ -96,16 +113,28 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   useEffect(() => () => sessionRuns.releaseForeground(), [sessionRuns])
 
   function selectSession(sessionId: string) {
+    setFollowLatest(true)
     setSearchParams({ session: sessionId })
     setNavigationOpen(false)
   }
 
   function submitPrompt() {
     if (!selectedSessionId || prompt.trim().length === 0) return
+    setFollowLatest(true)
     if (!isActive) {
       if (sessionRuns.start({ prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
     }
     else void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败'))
+  }
+
+  function jumpToTurn(turnId: string) {
+    if (!scrollViewport) return
+    const target = [...(messageScrollAreaRef.current?.querySelectorAll<HTMLElement>('[data-turn-id]') ?? [])].find((element) => element.dataset.turnId === turnId)
+    if (!target) return
+    setFollowLatest(false)
+    const offset = target.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top
+    const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    scrollViewport.scrollTo({ behavior, top: Math.max(0, scrollViewport.scrollTop + offset - 16) })
   }
 
   function abortPrompt() {
@@ -217,7 +246,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             {selectedSession && <Button asChild className="ml-auto" size="sm" variant="ghost"><Link to={`/settings?session=${encodeURIComponent(selectedSession.id)}`}><Settings aria-hidden="true" />设置</Link></Button>}
           </header>
 
-          <div className="min-h-0 flex-1" ref={messageScrollAreaRef}>
+          <div className="min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="h-full">
               <div className="mx-auto flex w-full max-w-[920px] flex-col gap-4 px-4 py-6 sm:px-6">
                 <SessionTimeline
@@ -225,7 +254,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   history={isActive ? undefined : historyQuery.data}
                   isLoading={!isActive && historyQuery.isPending}
                   isRunning={isActive}
+                  onJumpToTurn={jumpToTurn}
                   onRetry={() => void historyQuery.refetch()}
+                  scrollViewport={scrollViewport}
                   systemEvents={currentRun?.systemEvents}
                   turns={currentRun?.turns}
                 />

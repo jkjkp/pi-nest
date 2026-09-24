@@ -1,5 +1,8 @@
+import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 import { SessionTimeline } from './session-timeline.js'
 
@@ -16,7 +19,7 @@ const history = {
 
 describe('SessionTimeline', () => {
   it('keeps raw Pi records in one closed technical-details disclosure instead of the reading flow', () => {
-    const markup = renderToStaticMarkup(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
+    const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
 
     expect(markup).toContain('技术详情（4 条事件）')
     expect(markup).toContain('本轮原始事件')
@@ -26,11 +29,22 @@ describe('SessionTimeline', () => {
   })
 
   it('expands thinking only while the turn is running', () => {
-    const complete = renderToStaticMarkup(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
-    const running = renderToStaticMarkup(<SessionTimeline error={false} history={history} isLoading={false} isRunning onRetry={() => undefined} />)
+    const complete = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
+    const running = render(<SessionTimeline error={false} history={history} isLoading={false} isRunning onRetry={() => undefined} />)
 
     expect(complete).toContain('思考过程')
     expect(complete).not.toMatch(/<details[^>]*open[^>]*><summary[^>]*>思考过程/)
     expect(running).toMatch(/<details[^>]*open[^>]*><summary[^>]*>思考中/)
   })
+
+  it('provides a single Turn navigation entry outside the reading flow', () => {
+    const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
+
+    expect(markup).toContain('aria-label="对话轮次导航"')
+    expect(markup).toContain('aria-label="第 1 轮：question"')
+  })
 })
+
+function render(node: ReactNode) {
+  return renderToStaticMarkup(<TooltipProvider>{node}</TooltipProvider>)
+}
