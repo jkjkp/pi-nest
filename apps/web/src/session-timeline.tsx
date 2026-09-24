@@ -33,7 +33,7 @@ export function SessionTimeline({ error, history, isLoading, isRunning = false, 
 
   const navigationEntries = timelineNavigationEntries(items)
   const jump = onJumpToTurn ?? (() => undefined)
-  return <section className="grid min-w-0 grid-cols-1 pb-6 md:grid-cols-[2rem_minmax(0,1fr)]" ref={timelineRoot}><TurnNavigationRail entries={navigationEntries} onJump={jump} scrollViewport={scrollViewport ?? null} timelineRoot={timelineRoot} /><div className="min-w-0 space-y-5 md:col-start-2">{history?.hasEarlier && <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">当前仅展示最近 200 条原生条目。</p>}{items.map((item) => <TurnItem isRunning={isRunning} item={item} key={item.id} />)}</div></section>
+  return <section className="grid min-w-0 grid-cols-1 pb-6 md:grid-cols-[3rem_minmax(0,1fr)] md:gap-x-4" ref={timelineRoot}><TurnNavigationRail entries={navigationEntries} onJump={jump} scrollViewport={scrollViewport ?? null} timelineRoot={timelineRoot} /><div className="min-w-0 space-y-5 md:col-start-2">{history?.hasEarlier && <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">当前仅展示最近 200 条原生条目。</p>}{items.map((item) => <TurnItem isRunning={isRunning} item={item} key={item.id} />)}</div></section>
 }
 
 function LoadingTimeline() {

@@ -40,7 +40,7 @@ describe('SessionTimeline', () => {
 
     expect(markup).toContain('aria-label="对话轮次导航"')
     expect(markup).toContain('aria-label="第 1 轮：question"')
-    expect(markup).toContain('md:grid-cols-[2rem_minmax(0,1fr)]')
+    expect(markup).toContain('md:grid-cols-[3rem_minmax(0,1fr)] md:gap-x-4')
     expect(markup).toContain('md:col-start-2')
     expect(markup).toContain('md:sticky')
     expect(markup).not.toContain('选择一轮并定位到对应的用户请求。')
