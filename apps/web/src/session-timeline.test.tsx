@@ -46,9 +46,11 @@ describe('SessionTimeline', () => {
     expect(markup).not.toContain('选择一轮并定位到对应的用户请求。')
   })
 
-  it('keeps user prompts right-aligned and bounded by their Main content column', () => {
+  it('keeps every message in the shared content column while bounding user bubbles inside it', () => {
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
 
+    expect(markup).toContain('conversation-stage-content space-y-5')
+    expect(markup).not.toContain('max-w-3xl')
     expect(markup).toContain('ml-auto w-fit min-w-0 max-w-[min(72%,42rem)]')
     expect(markup).toContain('max-h-56 overflow-hidden')
   })

@@ -91,7 +91,7 @@ function UserPrompt({ prompt, startedAt }: { prompt: string; startedAt: string }
 }
 
 function TimelinePartView({ isRunning, part }: { isRunning: boolean; part: TimelinePart }) {
-  if (part.kind === 'assistant_text') return <article className="max-w-3xl"><AssistantMarkdown isStreaming={isRunning} source={part.text} /></article>
+  if (part.kind === 'assistant_text') return <article><AssistantMarkdown isStreaming={isRunning} source={part.text} /></article>
   if (part.kind === 'thinking') return <details className="rounded-md border bg-muted/30 px-3 py-2 text-sm" open={isRunning}><summary className="cursor-pointer font-medium text-muted-foreground">{isRunning ? '思考中' : '思考过程'}</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words font-sans text-xs leading-6">{part.text}</pre></details>
   if (part.kind === 'tool') return <ToolPart isRunning={isRunning} part={part} />
   if (part.kind === 'bash') return <BashPart isRunning={isRunning} part={part} />
