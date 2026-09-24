@@ -1,6 +1,7 @@
 import { type RefObject, useEffect, useRef, useState } from 'react'
 
 import type { TimelineNavigationEntry } from './timeline-model.js'
+import { nextOutlineAutoFollow } from './turn-navigation-rail-state.js'
 
 const closeDelay = 150
 
@@ -22,6 +23,7 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
   const [open, setOpen] = useState(false)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const outline = useRef<HTMLDivElement>(null)
+  const pendingUserJumpTurnId = useRef<string | undefined>(undefined)
 
   const currentTurnId = entries.some((entry) => entry.id === activeTurnId) ? activeTurnId : entries.at(-1)?.id
 
@@ -39,7 +41,14 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
   }, [entries, scrollViewport, timelineRoot])
 
   useEffect(() => {
-    if (!open || !currentTurnId || !outline.current) return
+    if (pendingUserJumpTurnId.current && !entries.some((entry) => entry.id === pendingUserJumpTurnId.current)) pendingUserJumpTurnId.current = undefined
+  }, [entries])
+
+  useEffect(() => {
+    if (!currentTurnId) return
+    const autoFollow = nextOutlineAutoFollow(pendingUserJumpTurnId.current, currentTurnId)
+    pendingUserJumpTurnId.current = autoFollow.pendingUserJumpTurnId
+    if (!autoFollow.shouldFollow || !open || !outline.current) return
     const active = [...outline.current.querySelectorAll<HTMLElement>('[data-turn-outline-id]')].find((node) => node.dataset.turnOutlineId === currentTurnId)
     if (!active) return
     const top = active.offsetTop - outline.current.scrollTop
@@ -65,6 +74,11 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
     if (!event.currentTarget.contains(event.relatedTarget)) hideOutline()
   }
 
+  function jump(turnId: string) {
+    if (turnId !== currentTurnId) pendingUserJumpTurnId.current = turnId
+    onJump(turnId)
+  }
+
   return (
     <aside aria-label="对话轮次导航" className="hidden h-[min(62vh,32rem)] w-full shrink-0 overflow-visible md:sticky md:top-5 md:block">
       <div className="relative h-full w-full" onBlurCapture={handleBlur} onFocusCapture={showOutline} onPointerEnter={showOutline} onPointerLeave={hideOutline}>
@@ -72,7 +86,7 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
         {entries.map((entry, index) => {
           const active = entry.id === currentTurnId
           return (
-            <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className="absolute left-1/2 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-timeline-marker="" key={entry.id} onClick={() => onJump(entry.id)} style={{ top: markerTop(index, entries.length) }} type="button">
+            <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className="absolute left-1/2 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-timeline-marker="" key={entry.id} onClick={() => jump(entry.id)} style={{ top: markerTop(index, entries.length) }} type="button">
               <span className={`block h-0.5 rounded-full transition-[width,background-color] ${active ? 'w-6 bg-primary' : 'w-3 bg-muted-foreground/55 hover:w-4 hover:bg-foreground'}`} />
             </button>
           )
@@ -83,7 +97,7 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
             {entries.map((entry) => {
               const active = entry.id === currentTurnId
               return (
-                <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'}`} data-turn-outline-id={entry.id} key={entry.id} onClick={() => onJump(entry.id)} tabIndex={open ? 0 : -1} type="button">
+                <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'}`} data-turn-outline-id={entry.id} key={entry.id} onClick={() => jump(entry.id)} tabIndex={open ? 0 : -1} type="button">
                   <span className="min-w-0 flex-1 truncate">{entry.promptPreview}</span>
                   <span aria-hidden="true" className={`block h-0.5 shrink-0 rounded-full ${active ? 'w-6 bg-primary' : 'w-3 bg-muted-foreground/55'}`} />
                 </button>

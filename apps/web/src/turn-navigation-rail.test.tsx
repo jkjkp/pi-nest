@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { TurnNavigationRail } from './turn-navigation-rail.js'
+import { nextOutlineAutoFollow } from './turn-navigation-rail-state.js'
 
 describe('TurnNavigationRail', () => {
   it('keeps every long-session Turn as an independent rail marker and outline entry', () => {
@@ -38,5 +39,11 @@ describe('TurnNavigationRail', () => {
     const markup = renderToStaticMarkup(<TurnNavigationRail entries={[{ id: 'turn-1', index: 1, promptPreview: 'question', startedAt: '2026-09-24T00:00:00.000Z' }]} onJump={() => undefined} scrollViewport={null} timelineRoot={createRef<HTMLElement>()} />)
 
     expect(markup).toContain('overflow-y-auto overscroll-contain')
+  })
+
+  it('skips auto-follow until a clicked target becomes current', () => {
+    expect(nextOutlineAutoFollow('turn-4', 'turn-2')).toEqual({ pendingUserJumpTurnId: 'turn-4', shouldFollow: false })
+    expect(nextOutlineAutoFollow('turn-4', 'turn-4')).toEqual({ pendingUserJumpTurnId: undefined, shouldFollow: false })
+    expect(nextOutlineAutoFollow(undefined, 'turn-5')).toEqual({ pendingUserJumpTurnId: undefined, shouldFollow: true })
   })
 })
