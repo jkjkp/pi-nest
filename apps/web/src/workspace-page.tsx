@@ -50,9 +50,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const [queueMode, setQueueMode] = useState<'follow_up' | 'steer'>('steer')
   const [followLatest, setFollowLatest] = useState(true)
   const [scrollViewport, setScrollViewport] = useState<HTMLElement | null>(null)
+  const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
   const messageScrollAreaRef = useRef<HTMLDivElement>(null)
   const navigationInProgress = useRef(false)
   const navigationFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const inspectorToggleScrollTop = useRef<number | undefined>(undefined)
   const previouslyScrolledSessionId = useRef(selectedSessionId)
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
   const sessions = sessionsQuery.data ?? emptySessions
@@ -133,10 +135,29 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   useEffect(() => () => sessionRuns.releaseForeground(), [sessionRuns])
 
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 80rem)')
+    const closeSheetOnDesktop = () => { if (media.matches) setInspectorSheetOpen(false) }
+    closeSheetOnDesktop()
+    media.addEventListener('change', closeSheetOnDesktop)
+    return () => media.removeEventListener('change', closeSheetOnDesktop)
+  }, [])
+
+  useLayoutEffect(() => {
+    if (inspectorToggleScrollTop.current === undefined || !scrollViewport) return
+    scrollViewport.scrollTo({ top: inspectorToggleScrollTop.current })
+    inspectorToggleScrollTop.current = undefined
+  }, [inspectorOpen, scrollViewport])
+
   function selectSession(sessionId: string) {
     setFollowLatest(true)
     setSearchParams({ session: sessionId })
     setNavigationOpen(false)
+  }
+
+  function toggleInspector() {
+    inspectorToggleScrollTop.current = scrollViewport?.scrollTop
+    setInspectorOpen(!inspectorOpen)
   }
 
   function submitPrompt() {
@@ -228,8 +249,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const inspector = <SessionInspector run={currentRun} session={selectedSession} />
 
   return (
-    <main className="h-svh overflow-hidden bg-background text-foreground">
-      <header className="flex min-h-14 items-center gap-3 border-b bg-card px-3 sm:px-4 md:hidden">
+    <main className="flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-card px-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2">
           <Sheet open={navigationOpen} onOpenChange={setNavigationOpen}>
             <SheetTrigger asChild>
@@ -242,33 +263,30 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </SheetContent>
           </Sheet>
           <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">PN</span>
-          <span className="truncate text-sm font-semibold tracking-tight">Pi Nest</span>
+          <h1 className="truncate text-sm font-semibold tracking-tight" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : 'Pi Nest'}</h1>
         </div>
-        <Sheet open={inspectorOpen} onOpenChange={setInspectorOpen}>
-          <SheetTrigger asChild>
-            <Button aria-label="打开会话检查器" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
-          </SheetTrigger>
-          <SheetContent className="p-0" side="right">
-            <SheetTitle className="sr-only">会话检查器</SheetTitle>
-            <SheetDescription className="sr-only">当前会话的运行摘要与元信息。</SheetDescription>
-            {inspector}
-          </SheetContent>
-        </Sheet>
+        <div className="ml-auto flex items-center gap-1">
+          {selectedSession && <Button asChild size="sm" variant="ghost"><Link to={`/settings?session=${encodeURIComponent(selectedSession.id)}`}><Settings aria-hidden="true" />设置</Link></Button>}
+          <Sheet open={inspectorSheetOpen} onOpenChange={setInspectorSheetOpen}>
+            <SheetTrigger asChild>
+              <Button aria-label="打开会话检查器" className="xl:hidden" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
+            </SheetTrigger>
+            <SheetContent className="p-0" side="right">
+              <SheetTitle className="sr-only">会话检查器</SheetTitle>
+              <SheetDescription className="sr-only">当前会话的运行摘要与元信息。</SheetDescription>
+              {inspector}
+            </SheetContent>
+          </Sheet>
+          <Button aria-label={inspectorOpen ? '收起会话检查器' : '展开会话检查器'} className="hidden xl:inline-flex" onClick={toggleInspector} onPointerDown={(event) => event.preventDefault()} size="icon-sm" type="button" variant="ghost"><PanelRight aria-hidden="true" /></Button>
+        </div>
       </header>
 
       <div
-        className="workspace-grid grid h-[calc(100svh-3.5rem)] md:h-svh"
-        style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px` } as CSSProperties}
+        className="workspace-grid grid min-h-0 flex-1"
+        style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': inspectorOpen ? `${inspectorWidth}px` : '0px' } as CSSProperties}
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
         <section className="flex min-h-0 min-w-0 flex-col">
-          <header className="sticky top-0 z-10 flex min-h-14 items-center border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-6">
-            <h1 className="truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>
-              {selectedSession ? sessionDisplayName(selectedSession) : '选择一个会话'}
-            </h1>
-            {selectedSession && <Button asChild className="ml-auto" size="sm" variant="ghost"><Link to={`/settings?session=${encodeURIComponent(selectedSession.id)}`}><Settings aria-hidden="true" />设置</Link></Button>}
-          </header>
-
           <div className="min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="h-full">
               <div className="mx-auto flex w-full max-w-[920px] flex-col gap-4 px-4 py-6 sm:px-6">
@@ -330,16 +348,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                     <span className="truncate">{modelLabel}</span>
                     <ChevronDown aria-hidden="true" className="text-muted-foreground" />
                   </Button>
-                  <Sheet open={inspectorOpen} onOpenChange={setInspectorOpen}>
-                    <SheetTrigger asChild>
-                      <Button aria-label="打开会话检查器" className="hidden md:inline-flex xl:hidden" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
-                    </SheetTrigger>
-                    <SheetContent className="p-0" side="right">
-                      <SheetTitle className="sr-only">会话检查器</SheetTitle>
-                      <SheetDescription className="sr-only">当前会话的运行摘要与元信息。</SheetDescription>
-                      {inspector}
-                    </SheetContent>
-                  </Sheet>
                   {status === 'running' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
                   {status === 'running' && <Button aria-label={queueMode === 'steer' ? '发送 Steer' : '发送 Follow-up'} className="rounded-full" disabled={prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>}
@@ -360,7 +368,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </SheetContent>
           </Sheet>
         </section>
-        <aside className="hidden min-h-0 border-l bg-card/60 xl:block">{inspector}</aside>
+        <aside aria-hidden={!inspectorOpen} className={`hidden min-h-0 overflow-hidden bg-card/60 xl:block ${inspectorOpen ? 'border-l' : 'pointer-events-none'}`} inert={!inspectorOpen}>{inspector}</aside>
       </div>
     </main>
   )

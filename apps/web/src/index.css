@@ -102,7 +102,8 @@ body {
 
 @media (min-width: 80rem) {
   .workspace-grid {
-    grid-template-columns: var(--navigation-width) minmax(0, 1fr) var(--inspector-width);
+    grid-template-columns: var(--navigation-width) minmax(0, 1fr) minmax(0, var(--side-panel-width));
+    transition: grid-template-columns 150ms ease;
   }
 }
 
