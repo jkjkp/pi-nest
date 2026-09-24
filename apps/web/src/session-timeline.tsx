@@ -7,7 +7,7 @@ import { AssistantMarkdown } from './assistant-markdown.js'
 import type { PiSessionHistoryResponse } from './history.js'
 import { diagnosticLabel, duration, rawJson, timelineItems, timelineNavigationEntries, toolStatus, type RuntimeTurn, type TimelineItem, type TimelinePart } from './timeline-model.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
-import { TurnNavigationRail, TurnNavigationSheet } from './turn-navigation-rail.js'
+import { TurnNavigationRail } from './turn-navigation-rail.js'
 import { formatUpdatedAt } from './workspace.js'
 
 export function SessionTimeline({ error, history, isLoading, isRunning = false, onJumpToTurn, onRetry, scrollViewport, systemEvents = [], turns = [] }: {
@@ -32,7 +32,7 @@ export function SessionTimeline({ error, history, isLoading, isRunning = false, 
 
   const navigationEntries = timelineNavigationEntries(items)
   const jump = onJumpToTurn ?? (() => undefined)
-  return <section className="grid grid-cols-1 gap-2 pb-6 md:grid-cols-[1.5rem_minmax(0,1fr)]" ref={timelineRoot}><TurnNavigationRail entries={navigationEntries} onJump={jump} scrollViewport={scrollViewport ?? null} timelineRoot={timelineRoot} /><div className="min-w-0 space-y-5 md:col-start-2"><TurnNavigationSheet entries={navigationEntries} onJump={jump} />{history?.hasEarlier && <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">当前仅展示最近 200 条原生条目。</p>}{items.map((item) => <TurnItem isRunning={isRunning} item={item} key={item.id} />)}</div></section>
+  return <section className="flex min-w-0 pb-6" ref={timelineRoot}><TurnNavigationRail entries={navigationEntries} onJump={jump} scrollViewport={scrollViewport ?? null} timelineRoot={timelineRoot} /><div className="min-w-0 flex-1 space-y-5">{history?.hasEarlier && <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">当前仅展示最近 200 条原生条目。</p>}{items.map((item) => <TurnItem isRunning={isRunning} item={item} key={item.id} />)}</div></section>
 }
 
 function LoadingTimeline() {

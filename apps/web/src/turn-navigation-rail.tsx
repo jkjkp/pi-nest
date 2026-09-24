@@ -1,33 +1,15 @@
-import { type RefObject, useEffect, useMemo, useState } from 'react'
-import { List } from 'lucide-react'
-
-import { Button } from '@/components/ui/button'
-import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { type RefObject, useEffect, useRef, useState } from 'react'
 
 import type { TimelineNavigationEntry } from './timeline-model.js'
-import { formatUpdatedAt } from './workspace.js'
 
-type MarkerGroup = {
-  entries: TimelineNavigationEntry[]
-  target: TimelineNavigationEntry
+const closeDelay = 150
+
+function markerTop(index: number, count: number) {
+  return count === 1 ? '50%' : `${(index / (count - 1)) * 100}%`
 }
 
-function markerGroups(entries: TimelineNavigationEntry[]) {
-  const perGroup = Math.ceil(entries.length / 36)
-  const groups: MarkerGroup[] = []
-  for (let start = 0; start < entries.length; start += perGroup) {
-    const groupEntries = entries.slice(start, start + perGroup)
-    groups.push({ entries: groupEntries, target: groupEntries[Math.floor(groupEntries.length / 2)]! })
-  }
-  return groups
-}
-
-function markerLabel(group: MarkerGroup) {
-  const first = group.entries[0]!
-  const last = group.entries.at(-1)!
-  const range = first.index === last.index ? `第 ${first.index} 轮` : `第 ${first.index}–${last.index} 轮`
-  return `${range}：${first.promptPreview}`
+function markerLabel(entry: TimelineNavigationEntry) {
+  return `第 ${entry.index} 轮：${entry.promptPreview}`
 }
 
 export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRoot }: {
@@ -36,8 +18,12 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
   scrollViewport: HTMLElement | null
   timelineRoot: RefObject<HTMLElement | null>
 }) {
-  const [activeTurnId, setActiveTurnId] = useState<string>()
-  const groups = useMemo(() => markerGroups(entries), [entries])
+  const [activeTurnId, setActiveTurnId] = useState(() => entries.at(-1)?.id)
+  const [open, setOpen] = useState(false)
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const outline = useRef<HTMLDivElement>(null)
+
+  const currentTurnId = entries.some((entry) => entry.id === activeTurnId) ? activeTurnId : entries.at(-1)?.id
 
   useEffect(() => {
     const root = timelineRoot.current
@@ -52,40 +38,60 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
     return () => observer.disconnect()
   }, [entries, scrollViewport, timelineRoot])
 
-  if (groups.length === 0) return null
+  useEffect(() => {
+    if (!open || !currentTurnId || !outline.current) return
+    const active = [...outline.current.querySelectorAll<HTMLElement>('[data-turn-outline-id]')].find((node) => node.dataset.turnOutlineId === currentTurnId)
+    if (!active) return
+    const top = active.offsetTop - outline.current.scrollTop
+    const bottom = top + active.offsetHeight
+    if (top < 0 || bottom > outline.current.clientHeight) outline.current.scrollTop = Math.max(0, active.offsetTop - (outline.current.clientHeight - active.offsetHeight) / 2)
+  }, [currentTurnId, open])
+
+  useEffect(() => () => clearTimeout(closeTimer.current), [])
+
+  if (entries.length === 0) return null
+
+  function showOutline() {
+    clearTimeout(closeTimer.current)
+    setOpen(true)
+  }
+
+  function hideOutline() {
+    clearTimeout(closeTimer.current)
+    closeTimer.current = setTimeout(() => setOpen(false), closeDelay)
+  }
+
+  function handleBlur(event: React.FocusEvent<HTMLDivElement>) {
+    if (!event.currentTarget.contains(event.relatedTarget)) hideOutline()
+  }
+
   return (
-    <aside aria-label="对话轮次导航" className="hidden self-start md:sticky md:top-5 md:block md:h-[min(62vh,32rem)]">
-      <div className="relative h-full before:absolute before:top-0 before:bottom-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-border">
-        {groups.map((group, index) => {
-          const active = group.entries.some((entry) => entry.id === activeTurnId)
-          const top = groups.length === 1 ? '50%' : `${(index / (groups.length - 1)) * 100}%`
+    <aside aria-label="对话轮次导航" className="hidden h-[min(62vh,32rem)] w-0 shrink-0 overflow-visible md:sticky md:top-5 md:block">
+      <div className="relative h-full w-7" onBlurCapture={handleBlur} onFocusCapture={showOutline} onPointerEnter={showOutline} onPointerLeave={hideOutline}>
+        <div aria-hidden="true" className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border" />
+        {entries.map((entry, index) => {
+          const active = entry.id === currentTurnId
           return (
-            <Tooltip key={group.target.id}>
-              <TooltipTrigger asChild>
-                <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(group)} className={`absolute left-1/2 h-3 -translate-x-1/2 -translate-y-1/2 rounded-full transition-[width,background-color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'w-6 bg-foreground' : 'w-2 bg-muted-foreground/55 hover:w-4 hover:bg-foreground'}`} onClick={() => onJump(group.target.id)} style={{ top }} type="button" />
-              </TooltipTrigger>
-              <TooltipContent side="right" sideOffset={10}><span className="block font-medium">{markerLabel(group)}</span><span className="block text-background/70">{formatUpdatedAt(group.target.startedAt)}</span></TooltipContent>
-            </Tooltip>
+            <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className="absolute left-1/2 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-timeline-marker="" key={entry.id} onClick={() => onJump(entry.id)} style={{ top: markerTop(index, entries.length) }} type="button">
+              <span className={`block h-0.5 rounded-full transition-[width,background-color] ${active ? 'w-6 bg-primary' : 'w-3 bg-muted-foreground/55 hover:w-4 hover:bg-foreground'}`} />
+            </button>
           )
         })}
+        <div aria-hidden={!open} className={`absolute left-0 top-0 z-20 flex h-full w-80 flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg transition-[opacity,transform] duration-150 ${open ? 'translate-x-0 opacity-100' : '-translate-x-2 pointer-events-none opacity-0'}`}>
+          <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">历史输入</div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-1" ref={outline}>
+            {entries.map((entry) => {
+              const active = entry.id === currentTurnId
+              return (
+                <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'}`} data-turn-outline-id={entry.id} key={entry.id} onClick={() => onJump(entry.id)} tabIndex={open ? 0 : -1} type="button">
+                  <span className="min-w-0 flex-1 truncate">{entry.promptPreview}</span>
+                  <span aria-hidden="true" className={`block h-0.5 shrink-0 rounded-full ${active ? 'w-6 bg-primary' : 'w-3 bg-muted-foreground/55'}`} />
+                </button>
+              )
+            })}
+          </div>
+        </div>
       </div>
     </aside>
-  )
-}
-
-export function TurnNavigationSheet({ entries, onJump }: { entries: TimelineNavigationEntry[]; onJump: (turnId: string) => void }) {
-  const [open, setOpen] = useState(false)
-  if (entries.length === 0) return null
-  return (
-    <div className="mb-3 md:hidden">
-      <Sheet onOpenChange={setOpen} open={open}>
-        <SheetTrigger asChild><Button size="sm" type="button" variant="ghost"><List />对话轮次</Button></SheetTrigger>
-        <SheetContent className="flex flex-col gap-3" side="left">
-          <SheetTitle>对话轮次</SheetTitle>
-          <SheetDescription>选择一轮并定位到对应的用户请求。</SheetDescription>
-          <div className="min-h-0 space-y-1 overflow-y-auto">{entries.map((entry) => <button className="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" key={entry.id} onClick={() => { setOpen(false); onJump(entry.id) }} type="button"><span className="block font-medium">第 {entry.index} 轮</span><span className="block truncate text-xs text-muted-foreground">{entry.promptPreview}</span></button>)}</div>
-        </SheetContent>
-      </Sheet>
-    </div>
   )
 }

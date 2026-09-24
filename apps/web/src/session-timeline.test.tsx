@@ -1,8 +1,5 @@
-import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-
-import { TooltipProvider } from '@/components/ui/tooltip'
 
 import { SessionTimeline } from './session-timeline.js'
 
@@ -37,14 +34,15 @@ describe('SessionTimeline', () => {
     expect(running).toMatch(/<details[^>]*open[^>]*><summary[^>]*>思考中/)
   })
 
-  it('provides a single Turn navigation entry outside the reading flow', () => {
+  it('provides an overlay Turn rail without a narrow-screen Sheet entry', () => {
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
 
     expect(markup).toContain('aria-label="对话轮次导航"')
     expect(markup).toContain('aria-label="第 1 轮：question"')
+    expect(markup).toContain('md:sticky')
+    expect(markup).not.toContain('选择一轮并定位到对应的用户请求。')
+    expect(markup).not.toContain('grid-cols-1')
   })
 })
 
-function render(node: ReactNode) {
-  return renderToStaticMarkup(<TooltipProvider>{node}</TooltipProvider>)
-}
+function render(node: React.ReactNode) { return renderToStaticMarkup(node) }

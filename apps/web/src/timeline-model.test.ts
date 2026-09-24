@@ -67,7 +67,7 @@ describe('timelineItems', () => {
     expect(timelineItems(undefined, [], [runtime(1, { type: 'model_change' }, undefined)])).toEqual([])
   })
 
-  it('derives bounded, whitespace-normalized navigation labels from Turns', () => {
+  it('derives a bounded, whitespace-normalized first-line navigation label from Turns', () => {
     const items = timelineItems(undefined, [{
       events: [],
       id: 'turn-1',
@@ -80,8 +80,14 @@ describe('timelineItems', () => {
     }], [])
 
     expect(timelineNavigationEntries(items)).toEqual([
-      expect.objectContaining({ id: 'turn-1', index: 1, promptPreview: `first line ${'x'.repeat(85)}` }),
+      expect.objectContaining({ id: 'turn-1', index: 1, promptPreview: 'first line' }),
       expect.objectContaining({ id: 'turn-2', index: 2, promptPreview: '无用户正文' }),
     ])
+  })
+
+  it('uses the no-content label when a prompt contains only whitespace', () => {
+    const [item] = timelineItems(undefined, [{ events: [], id: 'turn-1', prompt: ' '.repeat(120), startedAt: '2026-09-22T00:00:00.000Z' }], [])
+
+    expect(timelineNavigationEntries([item!])[0]?.promptPreview).toBe('无用户正文')
   })
 })

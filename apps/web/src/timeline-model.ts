@@ -187,9 +187,15 @@ export function timelineNavigationEntries(items: TimelineItem[]): TimelineNaviga
   return items.map((item, index) => ({
     id: item.id,
     index: index + 1,
-    promptPreview: (item.prompt ?? '无用户正文').replace(/\s+/g, ' ').trim().slice(0, 96),
+    promptPreview: navigationPreview(item.prompt),
     startedAt: item.startedAt,
   }))
+}
+
+function navigationPreview(prompt: string | undefined) {
+  if (!prompt) return '无用户正文'
+  const firstLine = prompt.split(/\r?\n/).find((line) => line.trim())
+  return (firstLine ?? prompt).replace(/\s+/g, ' ').trim().slice(0, 96) || '无用户正文'
 }
 
 function promptFrom(events: PiRuntimeEvent[]) {
