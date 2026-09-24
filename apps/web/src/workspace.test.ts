@@ -11,6 +11,7 @@ import {
   runtimeStatusLabel,
   sessionDisplayName,
   sessionStatusLabel,
+  shouldFollowLatest,
 } from './workspace.js'
 import { applyNavigationOrder, reconcileNavigationOrder } from './navigation-order.js'
 import { useWorkspaceStore } from './workspace-store.js'
@@ -21,6 +22,12 @@ describe('workspace presentation helpers', () => {
     expect(sessionStatusLabel('complete')).toBe('✓ 已完成')
     expect(sessionStatusLabel('error')).toBe('× 请求失败')
     expect(sessionStatusLabel('aborted')).toBe('— 已中止')
+  })
+
+  it('does not restore follow-latest during a timeline navigation away from the bottom', () => {
+    expect(shouldFollowLatest(1_000, 905, 15, true)).toBe(false)
+    expect(shouldFollowLatest(1_000, 905, 15, false)).toBe(true)
+    expect(shouldFollowLatest(1_000, 700, 15, false)).toBe(false)
   })
 
   it('renders extension projection deterministically and strips terminal control sequences', () => {

@@ -112,6 +112,10 @@ export function sessionStatusLabel(status: PromptStatus = 'idle') {
   return sessionStatusLabels[status]
 }
 
+export function shouldFollowLatest(scrollHeight: number, scrollTop: number, clientHeight: number, navigationInProgress: boolean) {
+  return !navigationInProgress && scrollHeight - scrollTop - clientHeight <= 80
+}
+
 export function extensionStatusLine(statuses: Record<string, string> | undefined) {
   return Object.keys(statuses ?? {})
     .sort()

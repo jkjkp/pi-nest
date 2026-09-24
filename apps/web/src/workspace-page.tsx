@@ -17,7 +17,7 @@ import type { SessionRunController } from './session-run-controller.js'
 import { SessionTimeline } from './session-timeline.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { deleteSession, fetchSessionHistory, fetchSessions, renameSession } from './workspace-api.js'
-import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, runtimeStatusLabel, sessionDisplayName, sessionStatusLabel } from './workspace.js'
+import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, runtimeStatusLabel, sessionDisplayName, sessionStatusLabel, shouldFollowLatest } from './workspace.js'
 
 const emptySessions: Awaited<ReturnType<typeof fetchSessions>> = []
 
@@ -51,6 +51,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const [followLatest, setFollowLatest] = useState(true)
   const [scrollViewport, setScrollViewport] = useState<HTMLElement | null>(null)
   const messageScrollAreaRef = useRef<HTMLDivElement>(null)
+  const navigationInProgress = useRef(false)
+  const navigationFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const previouslyScrolledSessionId = useRef(selectedSessionId)
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
   const sessions = sessionsQuery.data ?? emptySessions
@@ -91,9 +93,26 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   useEffect(() => {
     if (!scrollViewport) return
-    const updateFollowLatest = () => setFollowLatest(scrollViewport.scrollHeight - scrollViewport.scrollTop - scrollViewport.clientHeight <= 80)
-    scrollViewport.addEventListener('scroll', updateFollowLatest, { passive: true })
-    return () => scrollViewport.removeEventListener('scroll', updateFollowLatest)
+    const updateFollowLatest = () => setFollowLatest(shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, navigationInProgress.current))
+    const completeNavigation = () => {
+      clearTimeout(navigationFallback.current)
+      navigationFallback.current = undefined
+      navigationInProgress.current = false
+      updateFollowLatest()
+    }
+    const handleScroll = () => {
+      updateFollowLatest()
+      if (!navigationInProgress.current) return
+      clearTimeout(navigationFallback.current)
+      navigationFallback.current = setTimeout(completeNavigation, 150)
+    }
+    scrollViewport.addEventListener('scroll', handleScroll, { passive: true })
+    scrollViewport.addEventListener('scrollend', completeNavigation)
+    return () => {
+      clearTimeout(navigationFallback.current)
+      scrollViewport.removeEventListener('scroll', handleScroll)
+      scrollViewport.removeEventListener('scrollend', completeNavigation)
+    }
   }, [scrollViewport])
 
   useLayoutEffect(() => {
@@ -136,7 +155,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     setFollowLatest(false)
     const offset = target.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top
     const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
-    scrollViewport.scrollTo({ behavior, top: Math.max(0, scrollViewport.scrollTop + offset - 16) })
+    const top = Math.max(0, scrollViewport.scrollTop + offset - 16)
+    if (behavior === 'smooth' && Math.abs(scrollViewport.scrollTop - top) > 1) navigationInProgress.current = true
+    scrollViewport.scrollTo({ behavior, top })
   }
 
   function abortPrompt() {
