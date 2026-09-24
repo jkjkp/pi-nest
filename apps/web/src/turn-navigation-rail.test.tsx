@@ -28,14 +28,26 @@ describe('TurnNavigationRail', () => {
     expect(markup).toContain('bg-primary')
   })
 
-  it('keeps its collapsed width inside the gutter and opens the outline from its right edge', () => {
+  it('centers a short minimap while keeping the interactive rail narrower than its gutter', () => {
     const markup = renderToStaticMarkup(<TurnNavigationRail entries={[{ id: 'turn-1', index: 1, promptPreview: 'question', startedAt: '2026-09-24T00:00:00.000Z' }]} onJump={() => undefined} scrollViewport={null} timelineRoot={createRef<HTMLElement>()} />)
 
-    expect(markup).toContain('class="hidden h-[min(62vh,32rem)] w-full shrink-0')
+    expect(markup).toContain('class="hidden h-[min(58vh,28rem)] w-full shrink-0')
+    expect(markup).toContain('md:top-1/2')
+    expect(markup).toContain('md:-translate-y-1/2')
     expect(markup).toContain('relative grid h-full w-full place-items-center')
-    expect(markup).toContain('absolute inset-y-0 w-px justify-self-center bg-border')
-    expect(markup).toContain('justify-self-center -translate-y-1/2 place-items-center')
-    expect(markup).toContain('absolute left-full top-0')
+    expect(markup).toContain('group relative h-full w-5')
+    expect(markup).toContain('data-timeline-rail=""')
+    expect(markup).toContain('absolute left-full top-1/2')
+  })
+
+  it('starts collapsed and leaves outline controls out of the tab order until rail click opens it', () => {
+    const markup = renderToStaticMarkup(<TurnNavigationRail entries={[{ id: 'turn-1', index: 1, promptPreview: 'question', startedAt: '2026-09-24T00:00:00.000Z' }]} onJump={() => undefined} scrollViewport={null} timelineRoot={createRef<HTMLElement>()} />)
+
+    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).toContain('aria-hidden="true"')
+    expect(markup).toContain('pointer-events-none opacity-0')
+    expect(markup).toContain('tabindex="-1"')
+    expect(markup).not.toContain('onPointerEnter')
   })
 
   it('contains scroll chaining within the history outline', () => {
