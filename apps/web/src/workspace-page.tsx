@@ -51,6 +51,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const [followLatest, setFollowLatest] = useState(true)
   const [scrollViewport, setScrollViewport] = useState<HTMLElement | null>(null)
   const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
+  const [desktopInspectorSheetOpen, setDesktopInspectorSheetOpen] = useState(false)
   const messageScrollAreaRef = useRef<HTMLDivElement>(null)
   const navigationInProgress = useRef(false)
   const navigationFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -137,7 +138,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   useEffect(() => {
     const media = window.matchMedia('(min-width: 80rem)')
-    const closeSheetOnDesktop = () => { if (media.matches) setInspectorSheetOpen(false) }
+    const closeSheetOnDesktop = () => {
+      if (!media.matches) return
+      setInspectorSheetOpen(false)
+      setDesktopInspectorSheetOpen(false)
+    }
     closeSheetOnDesktop()
     media.addEventListener('change', closeSheetOnDesktop)
     return () => media.removeEventListener('change', closeSheetOnDesktop)
@@ -249,8 +254,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const inspector = <SessionInspector run={currentRun} session={selectedSession} />
 
   return (
-    <main className="flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-card px-3 sm:px-4">
+    <main className="relative flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-card px-3 sm:px-4 md:hidden">
         <div className="flex min-w-0 items-center gap-2">
           <Sheet open={navigationOpen} onOpenChange={setNavigationOpen}>
             <SheetTrigger asChild>
@@ -281,12 +286,30 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
         </div>
       </header>
 
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 hidden h-14 items-center justify-end px-3 sm:px-4 md:flex">
+        <Sheet open={desktopInspectorSheetOpen} onOpenChange={setDesktopInspectorSheetOpen}>
+          <SheetTrigger asChild>
+            <Button aria-label="打开会话检查器" className="pointer-events-auto xl:hidden" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
+          </SheetTrigger>
+          <SheetContent className="p-0" side="right">
+            <SheetTitle className="sr-only">会话检查器</SheetTitle>
+            <SheetDescription className="sr-only">当前会话的运行摘要与元信息。</SheetDescription>
+            {inspector}
+          </SheetContent>
+        </Sheet>
+        <Button aria-label={inspectorOpen ? '收起会话检查器' : '展开会话检查器'} className="pointer-events-auto hidden xl:inline-flex" onClick={toggleInspector} onPointerDown={(event) => event.preventDefault()} size="icon-sm" type="button" variant="ghost"><PanelRight aria-hidden="true" /></Button>
+      </div>
+
       <div
         className="workspace-grid grid min-h-0 flex-1"
         style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': inspectorOpen ? `${inspectorWidth}px` : '0px' } as CSSProperties}
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
         <section className="flex min-h-0 min-w-0 flex-col">
+          <header className="flex min-h-14 shrink-0 items-center border-b bg-background/95 px-4 pr-16 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-6 sm:pr-16">
+            <h1 className="truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : '选择一个会话'}</h1>
+            {selectedSession && <Button asChild className="ml-auto" size="sm" variant="ghost"><Link to={`/settings?session=${encodeURIComponent(selectedSession.id)}`}><Settings aria-hidden="true" />设置</Link></Button>}
+          </header>
           <div className="min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="h-full">
               <div className="mx-auto flex w-full max-w-[920px] flex-col gap-4 px-4 py-6 sm:px-6">
