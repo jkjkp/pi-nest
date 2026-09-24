@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const open = vi.fn()
+const create = vi.fn()
 const existsSync = vi.fn()
+const writeFileSync = vi.fn()
 const unlink = vi.fn()
+const execFile = vi.fn()
 const spawnSync = vi.fn()
 
-vi.mock('@earendil-works/pi-coding-agent', () => ({ SessionManager: { open } }))
-vi.mock('node:child_process', () => ({ spawnSync }))
-vi.mock('node:fs', () => ({ existsSync }))
+vi.mock('@earendil-works/pi-coding-agent', () => ({ SessionManager: { create, open } }))
+vi.mock('node:child_process', () => ({ execFile, spawnSync }))
+vi.mock('node:fs', () => ({ existsSync, writeFileSync }))
 vi.mock('node:fs/promises', () => ({ unlink }))
 
 const options = {
@@ -21,8 +24,11 @@ describe('Pi session mutations', () => {
 
   beforeEach(() => {
     open.mockReset()
+    create.mockReset()
     existsSync.mockReset()
+    writeFileSync.mockReset()
     unlink.mockReset()
+    execFile.mockReset()
     spawnSync.mockReset()
     appendSessionInfo.mockReset()
     open.mockReturnValue({
@@ -30,6 +36,11 @@ describe('Pi session mutations', () => {
       getHeader: () => ({ cwd: '/working' }),
       getSessionFile: () => '/pi/session-1.jsonl',
       getSessionId: () => 'session-1',
+    })
+    create.mockReturnValue({
+      getHeader: () => ({ cwd: '/working' }),
+      getSessionFile: () => '/pi/created.jsonl',
+      getSessionId: () => 'created-session',
     })
   })
 
@@ -39,6 +50,40 @@ describe('Pi session mutations', () => {
     renamePiSession({ ...options, name: '  Plan review  ' })
 
     expect(appendSessionInfo).toHaveBeenCalledWith('Plan review')
+  })
+
+  it('creates a session bound to the requested absolute workspace', async () => {
+    const { createPiSession } = await import('./index.js')
+
+    expect(createPiSession('/working')).toEqual({ cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' })
+    expect(create).toHaveBeenCalledWith('/working')
+    expect(writeFileSync).toHaveBeenCalledWith('/pi/created.jsonl', '{"cwd":"/working"}\n', { flag: 'wx', mode: 0o600 })
+    expect(() => createPiSession('relative')).toThrow('Pi workspace path must be absolute')
+  })
+
+  it('does not return a session when its header cannot be safely seeded', async () => {
+    const cause = new Error('already exists')
+    writeFileSync.mockImplementation(() => { throw cause })
+    const { createPiSession } = await import('./index.js')
+
+    expect(() => createPiSession('/working')).toThrow('Failed to create Pi session for /working')
+    expect(writeFileSync).toHaveBeenCalledWith('/pi/created.jsonl', '{"cwd":"/working"}\n', { flag: 'wx', mode: 0o600 })
+  })
+
+  it('normalizes equivalent absolute workspace paths before binding the new session', async () => {
+    const { createPiSession } = await import('./index.js')
+
+    createPiSession('/working/../working')
+
+    expect(create).toHaveBeenCalledWith('/working')
+  })
+
+  it('reveals an absolute workspace through Finder without deriving a path from UI text', async () => {
+    execFile.mockImplementation((_command: string, _args: string[], callback: (error: null, stdout: string, stderr: string) => void) => callback(null, '', ''))
+    const { revealPiWorkspace } = await import('./index.js')
+
+    await revealPiWorkspace('/working')
+    expect(execFile).toHaveBeenCalledWith('/usr/bin/open', ['-R', '/working'], expect.any(Function))
   })
 
   it('preserves binding failures as the rename cause', async () => {
