@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -8,6 +8,7 @@ import type { PiSessionHistoryResponse } from './history.js'
 import { diagnosticLabel, duration, rawJson, timelineItems, timelineNavigationEntries, toolStatus, type RuntimeTurn, type TimelineItem, type TimelinePart } from './timeline-model.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
 import { TurnNavigationRail } from './turn-navigation-rail.js'
+import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 
 export function SessionTimeline({ error, history, isLoading, isRunning = false, onJumpToTurn, onRetry, scrollViewport, systemEvents = [], turns = [] }: {
@@ -52,10 +53,40 @@ function HistoryError({ onRetry }: { onRetry: () => void }) {
 function TurnItem({ isRunning, item }: { isRunning: boolean; item: TimelineItem }) {
   return (
     <article className="space-y-3" data-turn-id={item.id}>
-      {item.prompt && <div className="ml-auto max-w-[72%] rounded-[10px] bg-muted/75 px-4 py-3"><header className="text-xs font-medium text-foreground">用户 · <time className="font-normal text-muted-foreground" dateTime={item.startedAt}>{formatUpdatedAt(item.startedAt)}</time></header><pre className="mt-2 whitespace-pre-wrap break-words font-sans text-[15px] leading-7">{item.prompt}</pre></div>}
+      {item.prompt && <UserPrompt prompt={item.prompt} startedAt={item.startedAt} />}
       <div className="space-y-3">{item.parts.map((part, index) => <TimelinePartView isRunning={isRunning} key={`${part.kind}-${part.events[0]?.id ?? index}-${index}`} part={part} />)}</div>
       <TechnicalDetails item={item} />
     </article>
+  )
+}
+
+function UserPrompt({ prompt, startedAt }: { prompt: string; startedAt: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const [hasOverflow, setHasOverflow] = useState(false)
+  const content = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    const node = content.current
+    if (!node) return
+    const measure = () => {
+      if (!expanded) setHasOverflow(promptOverflows(node.scrollHeight, node.clientHeight))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [expanded, prompt])
+
+  return (
+    <div className="ml-auto w-fit min-w-0 max-w-[min(72%,42rem)] rounded-[10px] bg-muted/75 px-4 py-3">
+      <header className="text-xs font-medium text-foreground">用户 · <time className="font-normal text-muted-foreground" dateTime={startedAt}>{formatUpdatedAt(startedAt)}</time></header>
+      <div className={`relative mt-2 ${expanded ? '' : 'max-h-56 overflow-hidden'}`} ref={content}>
+        <pre className="whitespace-pre-wrap break-words font-sans text-[15px] leading-7">{prompt}</pre>
+        {!expanded && hasOverflow && <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-muted to-transparent" />}
+      </div>
+      {hasOverflow && <Button aria-expanded={expanded} className="mt-1 h-auto px-1 py-1 text-xs" onClick={() => setExpanded(!expanded)} size="sm" type="button" variant="ghost">{expanded ? '收起' : '显示更多'}</Button>}
+    </div>
   )
 }
 

@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { SessionTimeline } from './session-timeline.js'
+import { promptOverflows } from './user-prompt-state.js'
 
 const history = {
   entries: [
@@ -43,6 +44,18 @@ describe('SessionTimeline', () => {
     expect(markup).toContain('md:col-start-2')
     expect(markup).toContain('md:sticky')
     expect(markup).not.toContain('选择一轮并定位到对应的用户请求。')
+  })
+
+  it('keeps user prompts right-aligned and bounded by their Main content column', () => {
+    const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
+
+    expect(markup).toContain('ml-auto w-fit min-w-0 max-w-[min(72%,42rem)]')
+    expect(markup).toContain('max-h-56 overflow-hidden')
+  })
+
+  it('only shows the long-prompt affordance when the collapsed prompt exceeds its height', () => {
+    expect(promptOverflows(224, 224)).toBe(false)
+    expect(promptOverflows(226, 224)).toBe(true)
   })
 })
 
