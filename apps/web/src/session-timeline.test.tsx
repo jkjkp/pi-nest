@@ -51,7 +51,9 @@ describe('SessionTimeline', () => {
 
     expect(markup).toContain('conversation-stage-content space-y-5')
     expect(markup).not.toContain('max-w-3xl')
-    expect(markup).toContain('ml-auto w-fit min-w-0 max-w-[min(72%,42rem)]')
+    expect(markup).toContain('ml-auto w-fit max-w-[min(72%,42rem)]')
+    expect(markup).toContain('mb-1 truncate text-right')
+    expect(markup).toContain('ml-auto w-fit max-w-full rounded-[10px]')
     expect(markup).toContain('max-h-56 overflow-hidden')
   })
 

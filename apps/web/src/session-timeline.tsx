@@ -79,13 +79,15 @@ function UserPrompt({ prompt, startedAt }: { prompt: string; startedAt: string }
   }, [expanded, prompt])
 
   return (
-    <div className="ml-auto w-fit min-w-0 max-w-[min(72%,42rem)] rounded-[10px] bg-muted/75 px-4 py-3">
-      <header className="text-xs font-medium text-foreground">用户 · <time className="font-normal text-muted-foreground" dateTime={startedAt}>{formatUpdatedAt(startedAt)}</time></header>
-      <div className={`relative mt-2 ${expanded ? '' : 'max-h-56 overflow-hidden'}`} ref={content}>
-        <pre className="whitespace-pre-wrap break-words font-sans text-[15px] leading-7">{prompt}</pre>
-        {!expanded && hasOverflow && <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-muted to-transparent" />}
+    <div className="ml-auto w-fit max-w-[min(72%,42rem)]">
+      <header className="mb-1 truncate text-right text-xs font-medium text-foreground">用户 · <time className="font-normal text-muted-foreground" dateTime={startedAt}>{formatUpdatedAt(startedAt)}</time></header>
+      <div className="ml-auto w-fit max-w-full rounded-[10px] bg-muted/75 px-4 py-3">
+        <div className={`relative ${expanded ? '' : 'max-h-56 overflow-hidden'}`} ref={content}>
+          <pre className="whitespace-pre-wrap break-words font-sans text-[15px] leading-7">{prompt}</pre>
+          {!expanded && hasOverflow && <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-muted to-transparent" />}
+        </div>
+        {hasOverflow && <Button aria-expanded={expanded} className="mt-1 h-auto px-1 py-1 text-xs" onClick={() => setExpanded(!expanded)} size="sm" type="button" variant="ghost">{expanded ? '收起' : '显示更多'}</Button>}
       </div>
-      {hasOverflow && <Button aria-expanded={expanded} className="mt-1 h-auto px-1 py-1 text-xs" onClick={() => setExpanded(!expanded)} size="sm" type="button" variant="ghost">{expanded ? '收起' : '显示更多'}</Button>}
     </div>
   )
 }
