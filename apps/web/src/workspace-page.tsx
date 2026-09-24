@@ -306,13 +306,17 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
         <section className="flex min-h-0 min-w-0 flex-col">
-          <header className="flex min-h-14 shrink-0 items-center border-b bg-background/95 px-4 pr-16 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-6 sm:pr-16">
-            <h1 className="truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : '选择一个会话'}</h1>
-            {selectedSession && <Button asChild className="ml-auto" size="sm" variant="ghost"><Link to={`/settings?session=${encodeURIComponent(selectedSession.id)}`}><Settings aria-hidden="true" />设置</Link></Button>}
+          <header className="min-h-14 shrink-0 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-6">
+            <div className="conversation-stage min-h-14">
+              <div className="conversation-stage-content flex min-w-0 items-center py-2 pr-12">
+                <h1 className="truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : '选择一个会话'}</h1>
+                {selectedSession && <Button asChild className="ml-auto" size="sm" variant="ghost"><Link to={`/settings?session=${encodeURIComponent(selectedSession.id)}`}><Settings aria-hidden="true" />设置</Link></Button>}
+              </div>
+            </div>
           </header>
           <div className="min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="h-full">
-              <div className="mx-auto flex w-full max-w-[920px] flex-col gap-4 px-4 py-6 sm:px-6">
+              <div className="w-full space-y-4 px-4 py-6 sm:px-6">
                 <SessionTimeline
                   error={historyQuery.isError}
                   history={isActive ? undefined : historyQuery.data}
@@ -324,26 +328,31 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   systemEvents={currentRun?.systemEvents}
                   turns={currentRun?.turns}
                 />
-                <section className="space-y-3">
-                  {extensionWidget ? <pre className="rounded border bg-muted p-2 text-xs">{extensionWidget}</pre> : null}
-                  {isActive && (
-                    <div aria-live="polite">
-                      <p className="text-xs font-medium text-warning">{sessionStatusLabel(status)}</p>
-                    </div>
-                  )}
-                  {currentRun?.error && (
-                    <p className="flex items-center gap-2 rounded-lg border border-destructive/30 border-l-2 border-l-destructive bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">
-                      <CircleX aria-hidden="true" className="size-4" />
-                      {currentRun.error}
-                    </p>
-                  )}
-                  {!currentRun?.error && runtimeStatus && <p className="text-xs text-muted-foreground" role={runtimeStates[selectedSessionId]?.lifecycle === 'failed' ? 'alert' : undefined}>{runtimeStatus}</p>}
-                  {controlError && <p className="text-xs text-destructive" role="alert">{controlError}</p>}
-                </section>
+                <div className="conversation-stage">
+                  <section className="conversation-stage-content space-y-3">
+                    {extensionWidget ? <pre className="rounded border bg-muted p-2 text-xs">{extensionWidget}</pre> : null}
+                    {isActive && (
+                      <div aria-live="polite">
+                        <p className="text-xs font-medium text-warning">{sessionStatusLabel(status)}</p>
+                      </div>
+                    )}
+                    {currentRun?.error && (
+                      <p className="flex items-center gap-2 rounded-lg border border-destructive/30 border-l-2 border-l-destructive bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">
+                        <CircleX aria-hidden="true" className="size-4" />
+                        {currentRun.error}
+                      </p>
+                    )}
+                    {!currentRun?.error && runtimeStatus && <p className="text-xs text-muted-foreground" role={runtimeStates[selectedSessionId]?.lifecycle === 'failed' ? 'alert' : undefined}>{runtimeStatus}</p>}
+                    {controlError && <p className="text-xs text-destructive" role="alert">{controlError}</p>}
+                  </section>
+                </div>
               </div>
             </ScrollArea>
           </div>
-            <div className="mx-auto mb-4 flex min-h-[100px] w-[calc(100%-2rem)] max-w-[920px] shrink-0 flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:w-[calc(100%-3rem)] sm:px-6">
+          <div className="shrink-0 px-4 sm:px-6">
+            <div className="conversation-stage mb-4">
+              <div className="conversation-stage-content">
+                <div className="flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:px-6">
               <label className="sr-only" htmlFor="prompt">向当前 Pi 会话发送提示词</label>
               <Textarea
                 className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
@@ -378,8 +387,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                     <Button aria-label="发送提示词" className="rounded-full" disabled={!selectedSession || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
                   )}
                 </div>
+                </div>
+                </div>
               </div>
             </div>
+          </div>
           <Sheet open={controlOpen} onOpenChange={setControlOpen}>
             <SheetContent className="space-y-5 overflow-y-auto" side="right">
               <SheetTitle>Pi 运行控制</SheetTitle>

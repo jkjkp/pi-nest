@@ -35,13 +35,13 @@ describe('SessionTimeline', () => {
     expect(running).toMatch(/<details[^>]*open[^>]*><summary[^>]*>思考中/)
   })
 
-  it('reserves a desktop gutter for the rail while keeping the outline as an overlay', () => {
+  it('uses the centered Conversation Stage for the rail and content while keeping the outline as an overlay', () => {
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
 
     expect(markup).toContain('aria-label="对话轮次导航"')
     expect(markup).toContain('aria-label="第 1 轮：question"')
-    expect(markup).toContain('md:grid-cols-[3rem_minmax(0,1fr)] md:gap-x-4')
-    expect(markup).toContain('md:col-start-2')
+    expect(markup).toContain('class="conversation-stage pb-6"')
+    expect(markup).toContain('conversation-stage-content space-y-5')
     expect(markup).toContain('md:sticky')
     expect(markup).not.toContain('选择一轮并定位到对应的用户请求。')
   })

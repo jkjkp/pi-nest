@@ -94,9 +94,29 @@ body {
   color: var(--foreground);
 }
 
+.conversation-stage {
+  width: 100%;
+  max-width: 63rem;
+  margin-inline: auto;
+}
+
+.conversation-stage-content {
+  min-width: 0;
+}
+
 @media (min-width: 48rem) {
   .workspace-grid {
     grid-template-columns: var(--navigation-width) minmax(0, 1fr);
+  }
+
+  .conversation-stage {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr);
+    column-gap: 1.5rem;
+  }
+
+  .conversation-stage-content {
+    grid-column: 2;
   }
 }
 

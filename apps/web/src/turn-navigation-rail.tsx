@@ -81,12 +81,12 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
 
   return (
     <aside aria-label="对话轮次导航" className="hidden h-[min(62vh,32rem)] w-full shrink-0 overflow-visible md:sticky md:top-5 md:block">
-      <div className="relative h-full w-full" onBlurCapture={handleBlur} onFocusCapture={showOutline} onPointerEnter={showOutline} onPointerLeave={hideOutline}>
-        <div aria-hidden="true" className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border" />
+      <div className="relative grid h-full w-full place-items-center" onBlurCapture={handleBlur} onFocusCapture={showOutline} onPointerEnter={showOutline} onPointerLeave={hideOutline}>
+        <div aria-hidden="true" className="absolute inset-y-0 w-px justify-self-center bg-border" />
         {entries.map((entry, index) => {
           const active = entry.id === currentTurnId
           return (
-            <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className="absolute left-1/2 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-timeline-marker="" key={entry.id} onClick={() => jump(entry.id)} style={{ top: markerTop(index, entries.length) }} type="button">
+            <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className="absolute grid size-5 justify-self-center -translate-y-1/2 place-items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-timeline-marker="" key={entry.id} onClick={() => jump(entry.id)} style={{ top: markerTop(index, entries.length) }} type="button">
               <span className={`block h-0.5 rounded-full transition-[width,background-color] ${active ? 'w-6 bg-primary' : 'w-3 bg-muted-foreground/55 hover:w-4 hover:bg-foreground'}`} />
             </button>
           )
