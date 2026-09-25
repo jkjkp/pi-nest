@@ -1,7 +1,8 @@
 import { type RefObject, useEffect, useRef, useState } from 'react'
 
 import type { TimelineNavigationEntry } from './timeline-model.js'
-import { nextOutlineAutoFollow } from './turn-navigation-rail-state.js'
+import { jumpFromMarker, jumpFromOutline, markerHitHeight, nextOutlineAutoFollow, openOutlineFromContextMenu, railHeight } from './turn-navigation-rail-state.js'
+import { formatUpdatedAt } from './workspace.js'
 
 function markerTop(index: number, count: number) {
   return count === 1 ? '50%' : `${(index / (count - 1)) * 100}%`
@@ -77,33 +78,37 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
     onJump(turnId)
   }
 
+  const height = railHeight(entries.length)
+  const hitHeight = markerHitHeight(entries.length)
+
   return (
-    <aside aria-label="对话轮次导航" className="hidden h-[min(58vh,28rem)] w-full shrink-0 overflow-visible md:sticky md:top-1/2 md:block md:-translate-y-1/2">
+    <aside aria-label="对话轮次导航" className="hidden w-full shrink-0 overflow-visible md:sticky md:top-1/2 md:block md:-translate-y-1/2" style={{ height: `min(${height}px, 42vh)` }}>
       <div className="relative grid h-full w-full place-items-center">
-        <div className="group relative h-full w-5" ref={rail}>
-          <button aria-controls="conversation-outline" aria-expanded={open} aria-label={open ? '收起历史输入目录' : '展开历史输入目录'} className="absolute inset-y-0 z-0 w-5 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-timeline-rail="" onClick={() => setOpen((value) => !value)} type="button" />
-        {entries.map((entry, index) => {
-          const active = entry.id === currentTurnId
-          return (
-            <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className="absolute z-10 grid size-5 -translate-y-1/2 cursor-pointer place-items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-timeline-marker="" key={entry.id} onClick={(event) => { event.stopPropagation(); jump(entry.id) }} style={{ top: markerTop(index, entries.length) }} type="button">
-              <span className={`block h-0.5 rounded-full transition-[width,background-color,opacity] ${active ? 'w-6 bg-primary group-hover:w-7 hover:w-7' : 'w-3 bg-muted-foreground/45 group-hover:bg-muted-foreground/60 hover:w-5 hover:bg-foreground'}`} />
-            </button>
-          )
-        })}
-        <div aria-hidden={!open} className={`absolute left-full top-1/2 z-20 flex max-h-[min(70vh,32rem)] w-80 -translate-y-1/2 flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg transition-[opacity,transform] duration-150 ${open ? 'translate-x-0 opacity-100' : '-translate-x-2 pointer-events-none opacity-0'}`} id="conversation-outline">
-          <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">历史输入</div>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1" ref={outline}>
-            {entries.map((entry) => {
+        <div className="relative h-full w-5" ref={rail}>
+          <div aria-controls="conversation-outline" aria-expanded={open} aria-label="右键打开历史输入" className="group absolute inset-y-0 w-5" data-timeline-rail="" onContextMenu={(event) => openOutlineFromContextMenu(event, () => setOpen(true))}>
+            {entries.map((entry, index) => {
               const active = entry.id === currentTurnId
               return (
-                <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'}`} data-turn-outline-id={entry.id} key={entry.id} onClick={() => jump(entry.id)} tabIndex={open ? 0 : -1} type="button">
-                  <span className="min-w-0 flex-1 truncate">{entry.promptPreview}</span>
-                  <span aria-hidden="true" className={`block h-0.5 shrink-0 rounded-full ${active ? 'w-6 bg-primary' : 'w-3 bg-muted-foreground/55'}`} />
+                <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className="absolute z-10 grid w-5 -translate-y-1/2 cursor-pointer place-items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-timeline-marker="" key={entry.id} onClick={() => jumpFromMarker(jump, entry.id)} style={{ height: `min(${hitHeight}px, calc(31.5vh / ${Math.max(1, entries.length - 1)}))`, top: markerTop(index, entries.length) }} type="button">
+                  <span className={`block h-0.5 rounded-full transition-[width,background-color,opacity] ${active ? 'w-6 bg-primary group-hover:w-7 hover:w-7' : 'w-3 bg-muted-foreground/45 group-hover:bg-muted-foreground/60 hover:w-5 hover:bg-foreground'}`} />
                 </button>
               )
             })}
           </div>
-        </div>
+          <div aria-hidden={!open} className={`absolute left-full top-1/2 z-20 flex max-h-[min(60vh,26.25rem)] w-[23rem] -translate-y-1/2 flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg transition-[opacity,transform] duration-150 ${open ? 'translate-x-0 opacity-100' : '-translate-x-2 pointer-events-none opacity-0'}`} id="conversation-outline">
+            <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">历史输入</div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1" ref={outline}>
+              {entries.map((entry) => {
+                const active = entry.id === currentTurnId
+                return (
+                  <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className={`flex w-full flex-col items-start gap-1 rounded-md px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'}`} data-turn-outline-id={entry.id} key={entry.id} onClick={() => jumpFromOutline(jump, () => setOpen(false), entry.id)} tabIndex={open ? 0 : -1} type="button">
+                    <span className="text-xs font-medium text-muted-foreground">第 {entry.index} 轮 · <time dateTime={entry.startedAt}>{formatUpdatedAt(entry.startedAt)}</time></span>
+                    <span className="w-full whitespace-pre-wrap break-words text-sm leading-5 line-clamp-3">{entry.prompt || '无用户正文'}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
         </div>
       </div>
     </aside>

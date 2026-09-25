@@ -41,6 +41,7 @@ export type TimelineItem = {
 export type TimelineNavigationEntry = {
   id: string
   index: number
+  prompt: string
   promptPreview: string
   startedAt: string
 }
@@ -192,6 +193,7 @@ export function timelineNavigationEntries(items: TimelineItem[]): TimelineNaviga
   return items.map((item, index) => ({
     id: item.id,
     index: index + 1,
+    prompt: item.prompt ?? '',
     promptPreview: navigationPreview(item.prompt),
     startedAt: item.startedAt,
   }))

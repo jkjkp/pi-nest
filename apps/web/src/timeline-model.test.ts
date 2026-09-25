@@ -98,7 +98,7 @@ describe('timelineItems', () => {
     expect(items.map((item) => item.id)).toEqual(['user-1', 'user-2'])
   })
 
-  it('derives a bounded, whitespace-normalized first-line navigation label from Turns', () => {
+  it('keeps full user text for the history panel while deriving a bounded navigation label', () => {
     const items = timelineItems(undefined, [{
       events: [],
       id: 'turn-1',
@@ -107,7 +107,7 @@ describe('timelineItems', () => {
     }], [])
 
     expect(timelineNavigationEntries(items)).toEqual([
-      expect.objectContaining({ id: 'turn-1', index: 1, promptPreview: 'first line' }),
+      expect.objectContaining({ id: 'turn-1', index: 1, prompt: `  first line\n${'x'.repeat(120)} `, promptPreview: 'first line' }),
     ])
   })
 
