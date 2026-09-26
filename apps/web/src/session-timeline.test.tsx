@@ -33,6 +33,8 @@ describe('SessionTimeline', () => {
     expect(running).toContain('思考中 ·')
     expect(running).toContain('reasoning')
     expect(running).toContain('aria-expanded="true"')
+    expect(running).toContain('aria-label="执行过程"')
+    expect(running).toContain('data-final-answer-turn-id="user-1"')
     expect(running).not.toContain('思考过程')
   })
 

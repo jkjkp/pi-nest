@@ -1,14 +1,17 @@
-import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FilePenLine, Terminal, Wrench } from 'lucide-react'
 
 import { formatActivityDuration, formatElapsedTime, nextExecutionExpanded, turnElapsed, type TurnActivity, type TurnPresentation } from './turn-execution-model.js'
 import { startElapsedClock } from './turn-elapsed-clock.js'
+import { shouldExecutionFollowLatest } from './turn-execution-scroll.js'
 import type { TimelineItem } from './timeline-model.js'
 
 export function TurnExecution({ item, isRunning, presentation }: { item: TimelineItem; isRunning: boolean; presentation: TurnPresentation }) {
   const [expanded, setExpanded] = useState(isRunning)
   const [userToggled, setUserToggled] = useState(false)
   const previousRunning = useRef(isRunning)
+  const executionViewport = useRef<HTMLDivElement>(null)
+  const [executionFollowLatest, setExecutionFollowLatest] = useState(true)
   const [now, setNow] = useState(() => Date.now())
   const contentId = `turn-execution-${item.id}`
 
@@ -22,16 +25,31 @@ export function TurnExecution({ item, isRunning, presentation }: { item: Timelin
     previousRunning.current = isRunning
   }, [isRunning, userToggled])
 
+  useLayoutEffect(() => {
+    if (!expanded || !executionFollowLatest || !executionViewport.current) return
+    executionViewport.current.scrollTop = executionViewport.current.scrollHeight
+  }, [expanded, executionFollowLatest, presentation.activities])
+
   const elapsed = formatElapsedTime(turnElapsed(item, isRunning, now))
   if (!presentation.hasExecution) return <section className="my-4 text-sm text-muted-foreground"><p>{isRunning ? `思考中 · ${elapsed}` : `用时 ${elapsed}`}</p><div className="mt-2 border-b border-border/60" /></section>
 
   return (
     <section className="my-4 text-sm" data-turn-execution="">
-      <button aria-controls={contentId} aria-expanded={expanded} className="flex w-full items-center gap-1 text-left text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setUserToggled(true); setExpanded((value) => !value) }} type="button">
+      <button aria-controls={contentId} aria-expanded={expanded} className="flex w-full items-center gap-1 text-left text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setUserToggled(true); if (!expanded) setExecutionFollowLatest(true); setExpanded((value) => !value) }} type="button">
         <span>{isRunning ? `思考中 · ${elapsed}` : `用时 ${elapsed}`}</span>
         {expanded ? <ChevronDown aria-hidden="true" className="size-4" /> : <ChevronRight aria-hidden="true" className="size-4" />}
       </button>
-      {expanded && <div className="space-y-3 py-3" id={contentId}>{presentation.activities.map((activity) => <Activity activity={activity} key={activity.id} />)}</div>}
+      {expanded && <div className="py-3" id={contentId}>
+        <div aria-label="执行过程" className="max-h-[min(38vh,22.5rem)] space-y-3 overflow-y-auto overscroll-contain pr-2" onScroll={() => {
+          const viewport = executionViewport.current
+          if (viewport) setExecutionFollowLatest(shouldExecutionFollowLatest(viewport.scrollHeight, viewport.scrollTop, viewport.clientHeight))
+        }} ref={executionViewport}>{presentation.activities.map((activity) => <Activity activity={activity} key={activity.id} />)}</div>
+        {!executionFollowLatest && <button className="mt-2 text-xs text-muted-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => {
+          const viewport = executionViewport.current
+          setExecutionFollowLatest(true)
+          if (viewport) viewport.scrollTop = viewport.scrollHeight
+        }} type="button">↓ 查看最新</button>}
+      </div>}
       <div className="border-b border-border/60" />
     </section>
   )

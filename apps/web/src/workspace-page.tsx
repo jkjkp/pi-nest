@@ -63,12 +63,19 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const messageScrollAreaRef = useRef<HTMLDivElement>(null)
   const navigationInProgress = useRef(false)
   const navigationFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const followLatestRef = useRef(followLatest)
   const inspectorToggleScrollTop = useRef<number | undefined>(undefined)
+  const positionedTurn = useRef<string | undefined>(undefined)
   const previouslyScrolledSessionId = useRef(selectedSessionId)
+  const setFollowingLatest = useCallback((value: boolean) => {
+    followLatestRef.current = value
+    setFollowLatest(value)
+  }, [])
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
   const sessions = sessionsQuery.data ?? emptySessions
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
   const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
+  const activeTurn = currentRun?.turns.at(-1)
   const modelLabel = currentRun?.model ?? '当前模型不可用'
   const status = currentRun?.status ?? 'idle'
   const isActive = status === 'running' || status === 'aborting'
@@ -111,9 +118,30 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   const setRailOverlayRoot = useCallback((node: HTMLDivElement | null) => setRailOverlay(node), [setRailOverlay])
 
+  const scrollToFinalAnswer = useCallback((turnId: string) => {
+    if (!followLatestRef.current || !scrollViewport) return
+    requestAnimationFrame(() => {
+      if (!followLatestRef.current) return
+      const answer = [...(messageScrollAreaRef.current?.querySelectorAll<HTMLElement>('[data-final-answer-turn-id]') ?? [])].find((element) => element.dataset.finalAnswerTurnId === turnId)
+      if (!answer) return
+      const offset = answer.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top
+      scrollViewport.scrollTo({ top: Math.max(0, scrollViewport.scrollTop + offset - 48) })
+    })
+  }, [scrollViewport])
+
+  const followFinalAnswer = useCallback(() => {
+    if (!followLatestRef.current || !scrollViewport) return
+    requestAnimationFrame(() => {
+      if (followLatestRef.current) scrollViewport.scrollTop = scrollViewport.scrollHeight
+    })
+  }, [scrollViewport])
+
   useEffect(() => {
     if (!scrollViewport) return
-    const updateFollowLatest = () => setFollowLatest(shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, navigationInProgress.current))
+    const updateFollowLatest = () => {
+      const next = shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, navigationInProgress.current)
+      setFollowingLatest(next)
+    }
     const completeNavigation = () => {
       clearTimeout(navigationFallback.current)
       navigationFallback.current = undefined
@@ -133,7 +161,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       scrollViewport.removeEventListener('scroll', handleScroll)
       scrollViewport.removeEventListener('scrollend', completeNavigation)
     }
-  }, [scrollViewport])
+  }, [scrollViewport, setFollowingLatest])
 
   useLayoutEffect(() => {
     const selectedSessionChanged = previouslyScrolledSessionId.current !== selectedSessionId
@@ -144,7 +172,15 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     })
 
     return () => cancelAnimationFrame(frame)
-  }, [currentRun?.error, currentRun?.systemEvents, currentRun?.turns, followLatest, historyQuery.data, scrollViewport, selectedSessionId])
+  }, [followLatest, historyQuery.data, scrollViewport, selectedSessionId])
+
+  useLayoutEffect(() => {
+    const key = activeTurn ? `${selectedSessionId}:${activeTurn.startedAt}` : undefined
+    if (!isActive || !key || !scrollViewport || positionedTurn.current === key) return
+    positionedTurn.current = key
+    const frame = requestAnimationFrame(() => { scrollViewport.scrollTop = scrollViewport.scrollHeight })
+    return () => cancelAnimationFrame(frame)
+  }, [activeTurn, isActive, scrollViewport, selectedSessionId])
 
   useEffect(() => {
     if (!selectedSession) return
@@ -172,7 +208,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   }, [inspectorOpen, scrollViewport])
 
   function selectSession(sessionId: string) {
-    setFollowLatest(true)
+    setFollowingLatest(true)
     setDraftPrompt('')
     setDraftError(undefined)
     setSearchParams({ session: sessionId })
@@ -199,7 +235,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     if (!draftProject?.cwd || draftPrompt.trim().length === 0 || creatingDraft) return
     setCreatingDraft(true)
     setDraftError(undefined)
-    setFollowLatest(true)
+    setFollowingLatest(true)
     try {
       const firstPrompt = draftPrompt.trim()
       const created = await createSession(draftProject.cwd, firstPrompt)
@@ -223,7 +259,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   function submitPrompt() {
     if (isDraft) return void submitDraft()
     if (!selectedSessionId || prompt.trim().length === 0) return
-    setFollowLatest(true)
+    setFollowingLatest(true)
     if (!isActive) {
       if (sessionRuns.start({ historyTurnCount, prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
     }
@@ -234,7 +270,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     if (!scrollViewport) return
     const target = [...(messageScrollAreaRef.current?.querySelectorAll<HTMLElement>('[data-turn-id]') ?? [])].find((element) => element.dataset.turnId === turnId)
     if (!target) return
-    setFollowLatest(false)
+    setFollowingLatest(false)
     const offset = target.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top
     const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
     const top = Math.max(0, scrollViewport.scrollTop + offset - 16)
@@ -389,6 +425,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   history={historyQuery.data}
                   isLoading={!isActive && historyQuery.isPending}
                   isRunning={isActive}
+                  onFinalAnswerStart={scrollToFinalAnswer}
+                  onFinalAnswerStream={followFinalAnswer}
                   onJumpToTurn={jumpToTurn}
                   onRetry={() => void historyQuery.refetch()}
                   overlayRoot={railOverlay}

@@ -13,11 +13,13 @@ import { projectTurnPresentation } from './turn-execution-model.js'
 import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 
-export function SessionTimeline({ error, history, isLoading, isRunning = false, onJumpToTurn, onRetry, overlayRoot, scrollViewport, systemEvents = [], turns = [] }: {
+export function SessionTimeline({ error, history, isLoading, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onJumpToTurn, onRetry, overlayRoot, scrollViewport, systemEvents = [], turns = [] }: {
   error: boolean
   history: PiSessionHistoryResponse | undefined
   isLoading: boolean
   isRunning?: boolean
+  onFinalAnswerStart?: (turnId: string) => void
+  onFinalAnswerStream?: () => void
   onJumpToTurn?: (turnId: string) => void
   onRetry: () => void
   overlayRoot?: HTMLElement | null
@@ -36,7 +38,7 @@ export function SessionTimeline({ error, history, isLoading, isRunning = false, 
 
   const navigationEntries = timelineNavigationEntries(items)
   const jump = onJumpToTurn ?? (() => undefined)
-  return <section className="conversation-stage pb-6" ref={timelineRoot}>{overlayRoot !== null && <TurnNavigationRail entries={navigationEntries} onJump={jump} overlayRoot={overlayRoot} scrollViewport={scrollViewport ?? null} timelineRoot={timelineRoot} />}<div className="conversation-stage-content space-y-5">{history?.hasEarlier && <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">当前仅展示最近 200 条原生条目。</p>}{items.map((item, index) => <TurnItem isRunning={isRunning && index === items.length - 1} item={item} key={item.id} />)}</div></section>
+  return <section className="conversation-stage pb-6" ref={timelineRoot}>{overlayRoot !== null && <TurnNavigationRail entries={navigationEntries} onJump={jump} overlayRoot={overlayRoot} scrollViewport={scrollViewport ?? null} timelineRoot={timelineRoot} />}<div className="conversation-stage-content space-y-5">{history?.hasEarlier && <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">当前仅展示最近 200 条原生条目。</p>}{items.map((item, index) => <TurnItem isRunning={isRunning && index === items.length - 1} item={item} key={item.id} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} />)}</div></section>
 }
 
 function LoadingTimeline() {
@@ -53,19 +55,36 @@ function HistoryError({ onRetry }: { onRetry: () => void }) {
   )
 }
 
-function TurnItem({ isRunning, item }: { isRunning: boolean; item: TimelineItem }) {
+function TurnItem({ isRunning, item, onFinalAnswerStart, onFinalAnswerStream }: { isRunning: boolean; item: TimelineItem; onFinalAnswerStart: ((turnId: string) => void) | undefined; onFinalAnswerStream: (() => void) | undefined }) {
   const presentation = projectTurnPresentation(item, isRunning)
   return (
     <article className="space-y-3" data-turn-id={item.id}>
       {item.prompt && <UserPrompt prompt={item.prompt} startedAt={item.startedAt} />}
       <TurnExecution isRunning={isRunning} item={item} presentation={presentation} />
-      <FinalAnswer isRunning={isRunning} parts={presentation.finalAnswer} />
+      <FinalAnswer isRunning={isRunning} onStart={() => onFinalAnswerStart?.(item.id)} onStream={onFinalAnswerStream} parts={presentation.finalAnswer} turnId={item.id} />
     </article>
   )
 }
 
-function FinalAnswer({ isRunning, parts }: { isRunning: boolean; parts: Extract<TimelineItem['parts'][number], { kind: 'assistant_text' }>[] }) {
-  return <div className="space-y-3">{parts.map((part, index) => <article key={`${part.events[0]?.id ?? index}-${index}`}><AssistantMarkdown isStreaming={isRunning} source={part.text} /></article>)}</div>
+function FinalAnswer({ isRunning, onStart, onStream, parts, turnId }: { isRunning: boolean; onStart: () => void; onStream: (() => void) | undefined; parts: Extract<TimelineItem['parts'][number], { kind: 'assistant_text' }>[]; turnId: string }) {
+  const hadAnswer = useRef(false)
+  const previousAnswer = useRef('')
+  const answer = parts.map((part) => part.text).join('\n')
+
+  useLayoutEffect(() => {
+    if (!answer) {
+      hadAnswer.current = false
+      previousAnswer.current = ''
+      return
+    }
+    if (!hadAnswer.current) {
+      hadAnswer.current = true
+      if (isRunning) onStart()
+    } else if (isRunning && answer !== previousAnswer.current) onStream?.()
+    previousAnswer.current = answer
+  }, [answer, isRunning, onStart, onStream])
+
+  return <div className="space-y-3" data-final-answer-turn-id={turnId}>{parts.map((part, index) => <article key={`${part.events[0]?.id ?? index}-${index}`}><AssistantMarkdown isStreaming={isRunning} source={part.text} /></article>)}</div>
 }
 
 function UserPrompt({ prompt, startedAt }: { prompt: string; startedAt: string }) {
