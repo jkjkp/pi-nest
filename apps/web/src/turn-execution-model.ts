@@ -24,10 +24,14 @@ function eventType(event: TimelineEvent) {
 
 function text(events: TimelineEvent[], ...keys: string[]) {
   for (const event of [...events].reverse()) {
-    const values = [event.event, record(event.event.args), record(event.event.input), record(event.event.parameters)]
+    const values = [event.event, record(event.event.arguments), record(event.event.args), record(event.event.input), record(event.event.parameters)]
     for (const value of values) for (const key of keys) if (typeof value?.[key] === 'string' && value[key]) return value[key] as string
   }
   return undefined
+}
+
+function argument(part: Extract<TimelinePart, { kind: 'tool' }>, key: string) {
+  return typeof part.arguments?.[key] === 'string' && part.arguments[key] ? part.arguments[key] : undefined
 }
 
 function number(events: TimelineEvent[], key: string) {
@@ -41,9 +45,9 @@ function humanize(value: string) {
 
 function toolLabel(part: Extract<TimelinePart, { kind: 'tool' }>) {
   const name = part.toolName.toLowerCase()
-  const path = text(part.events, 'path', 'filePath', 'filename')
-  const query = text(part.events, 'query', 'pattern')
-  const command = text(part.events, 'command')
+  const path = argument(part, 'path') ?? argument(part, 'filePath') ?? argument(part, 'filename') ?? text(part.events, 'path', 'filePath', 'filename')
+  const query = argument(part, 'query') ?? argument(part, 'pattern') ?? text(part.events, 'query', 'pattern')
+  const command = argument(part, 'command') ?? text(part.events, 'command')
   if (/(read|fetch|cat)/.test(name)) return path ? `读取 ${path}` : '读取文件'
   if (/(search|grep|find)/.test(name)) return query ? `搜索 ${query}` : '搜索内容'
   if (/(edit|write|patch|update)/.test(name)) return path ? `编辑 ${path}` : '编辑文件'

@@ -32,7 +32,7 @@ export type TimelinePart =
   | { events: TimelineEvent[]; kind: 'bash' }
   | { events: TimelineEvent[]; kind: 'file_change' }
   | { events: TimelineEvent[]; kind: 'thinking'; text: string }
-  | { events: TimelineEvent[]; kind: 'tool'; toolCallId: string | undefined; toolName: string }
+  | { arguments?: Record<string, unknown>; events: TimelineEvent[]; kind: 'tool'; toolCallId: string | undefined; toolName: string }
 
 export type TimelineItem = {
   diagnostics: TimelineDiagnostic[]
@@ -105,15 +105,41 @@ function pushAssistantMessage(parts: TimelinePart[], event: TimelineEvent, text:
   parts.push({ events: [event], kind: 'assistant_text', text })
 }
 
-function pushTool(parts: TimelinePart[], event: TimelineEvent) {
-  const toolCallId = typeof event.event.toolCallId === 'string' ? event.event.toolCallId : undefined
-  const toolName = typeof event.event.toolName === 'string' ? event.event.toolName : '未知工具'
+function pushTool(parts: TimelinePart[], event: TimelineEvent, toolCallId = typeof event.event.toolCallId === 'string' ? event.event.toolCallId : undefined, toolName = typeof event.event.toolName === 'string' ? event.event.toolName : '未知工具', arguments_: Record<string, unknown> | undefined = undefined) {
   const previous = [...parts].reverse().find((part) => part.kind === 'tool' && part.toolCallId === toolCallId && part.toolName === toolName)
   if (previous?.kind === 'tool') {
     previous.events.push(event)
     return
   }
-  parts.push({ events: [event], kind: 'tool', toolCallId, toolName })
+  parts.push({ ...(arguments_ ? { arguments: arguments_ } : {}), events: [event], kind: 'tool', toolCallId, toolName })
+}
+
+function projectAssistantContent(item: TimelineItem, event: TimelineEvent, content: unknown) {
+  if (typeof content === 'string') {
+    if (!content) return false
+    pushAssistantMessage(item.parts, event, content)
+    return true
+  }
+  if (!Array.isArray(content)) return false
+  let projected = false
+  for (const block of content) {
+    const candidate = record(block)
+    if (candidate?.type === 'text' && typeof candidate.text === 'string') {
+      pushAssistantMessage(item.parts, event, candidate.text)
+      projected = true
+      continue
+    }
+    if (candidate?.type === 'thinking' && typeof candidate.thinking === 'string') {
+      pushDelta(item.parts, 'thinking', event, candidate.thinking)
+      projected = true
+      continue
+    }
+    if (candidate?.type === 'toolCall' && typeof candidate.id === 'string' && typeof candidate.name === 'string') {
+      pushTool(item.parts, event, candidate.id, candidate.name, record(candidate.arguments))
+      projected = true
+    }
+  }
+  return projected
 }
 
 function pushActivity(parts: TimelinePart[], kind: 'bash' | 'file_change', event: TimelineEvent) {
@@ -157,11 +183,15 @@ function projectEvent(item: TimelineItem, event: TimelineEvent) {
 
   const nativeMessage = message(event)
   if (type === 'message' && nativeMessage?.role === 'assistant') {
-    const text = textContent(nativeMessage.content)
-    if (text) return pushAssistantMessage(item.parts, event, text)
+    if (projectAssistantContent(item, event, nativeMessage.content)) return
     return diagnostic(item, event, 'unrenderable_message')
   }
   if (type === 'message' && nativeMessage?.role === 'user') return
+  if (type === 'message' && nativeMessage?.role === 'toolResult') {
+    const toolCallId = typeof nativeMessage.toolCallId === 'string' ? nativeMessage.toolCallId : undefined
+    const toolName = typeof nativeMessage.toolName === 'string' ? nativeMessage.toolName : '未知工具'
+    return pushTool(item.parts, event, toolCallId, toolName)
+  }
   if (type === 'message') return diagnostic(item, event, 'unrenderable_message')
   if (type.startsWith('tool_execution_')) return pushTool(item.parts, event)
   if (type.startsWith('bash_execution_')) return pushActivity(item.parts, 'bash', event)
@@ -251,11 +281,18 @@ export function rawJson(events: TimelineEvent[]) {
 
 export function toolStatus(events: TimelineEvent[]) {
   const end = events.find((event) => eventType(event) === 'tool_execution_end')
-  if (!end) return '正在执行'
-  return end.event.isError === true || end.event.error ? '失败' : '完成'
+  if (end) return end.event.isError === true || end.event.error ? '失败' : '完成'
+  const result = events.find((event) => {
+    const message = record(event.event.message)
+    return message?.role === 'toolResult'
+  })
+  if (!result) return '正在执行'
+  const message = record(result.event.message)
+  return message?.isError === true ? '失败' : '完成'
 }
 
 export function duration(events: TimelineEvent[]) {
+  if (events.some((event) => eventType(event) === 'message')) return undefined
   if (events.length < 2) return undefined
   const start = Date.parse(events[0]!.observedAt)
   const end = Date.parse(events.at(-1)!.observedAt)

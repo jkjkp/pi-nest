@@ -20,7 +20,8 @@ describe('SessionTimeline', () => {
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
 
     expect(markup).toContain('用时 3秒')
-    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).toContain('data-turn-execution=""')
+    expect((markup.match(/aria-expanded="false"/g) ?? [])).toHaveLength(2)
     expect(markup).toContain('answer')
     expect(markup).not.toContain('技术详情')
     expect(markup).not.toContain('本轮原始事件')
@@ -36,6 +37,22 @@ describe('SessionTimeline', () => {
     expect(running).toContain('aria-label="执行过程"')
     expect(running).toContain('data-final-answer-turn-id="user-1"')
     expect(running).not.toContain('思考过程')
+  })
+
+  it('keeps a persisted execution expandable after refresh', () => {
+    const refreshed = {
+      ...history,
+      entries: [
+        { id: 'user-1', parentId: null, raw: { message: { content: 'question', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
+        { id: 'assistant-1', parentId: 'user-1', raw: { message: { content: [{ thinking: 'historical reasoning', type: 'thinking' }, { id: 'call-1', name: 'read', type: 'toolCall' }], role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:01.000Z', type: 'message' },
+        { id: 'tool-1', parentId: 'assistant-1', raw: { message: { content: [], isError: false, role: 'toolResult', toolCallId: 'call-1', toolName: 'read' }, type: 'message' }, timestamp: '2026-09-22T00:00:02.000Z', type: 'message' },
+        { id: 'assistant-2', parentId: 'tool-1', raw: { message: { content: [{ text: 'answer', type: 'text' }], role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:03.000Z', type: 'message' },
+      ],
+    }
+    const markup = render(<SessionTimeline error={false} history={refreshed} isLoading={false} onRetry={() => undefined} />)
+
+    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).toContain('用时 3秒')
   })
 
   it('does not mark historical Turns as running when the session is active', () => {

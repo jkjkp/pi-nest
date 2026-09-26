@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { diagnosticLabel, timelineItems, timelineNavigationEntries } from './timeline-model.js'
+import { diagnosticLabel, duration, timelineItems, timelineNavigationEntries, toolStatus } from './timeline-model.js'
 
 const runtime = (sequence: number, event: Record<string, unknown>, turnId = 'turn-1') => ({ event, observedAt: `2026-09-22T00:00:${String(sequence).padStart(2, '0')}.000Z`, sequence, sessionId: 'session-1', turnId })
 
@@ -62,6 +62,22 @@ describe('timelineItems', () => {
     expect(turn?.parts.map((part) => part.kind)).toEqual(['assistant_text'])
     expect(turn?.diagnostics.map(diagnosticLabel)).toEqual(['未识别的 Pi 事件：custom', '运行元数据：agent_settled'])
     expect(turn?.events.map((event) => event.id)).toEqual(['user-1', 'unknown-1', 'assistant-1', 'end-1'])
+  })
+
+  it('projects persisted thinking, tool calls, and tool results into execution parts in source order', () => {
+    const [turn] = timelineItems([
+      { id: 'user-1', parentId: null, raw: { message: { content: 'question', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
+      { id: 'assistant-1', parentId: 'user-1', raw: { message: { content: [{ thinking: 'checking files', type: 'thinking' }, { id: 'call-1', name: 'read', type: 'toolCall' }], role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:01.000Z', type: 'message' },
+      { id: 'tool-1', parentId: 'assistant-1', raw: { message: { content: [{ text: 'file contents', type: 'text' }], isError: false, role: 'toolResult', toolCallId: 'call-1', toolName: 'read' }, type: 'message' }, timestamp: '2026-09-22T00:00:02.000Z', type: 'message' },
+      { id: 'assistant-2', parentId: 'tool-1', raw: { message: { content: [{ text: 'final answer', type: 'text' }], role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:03.000Z', type: 'message' },
+    ], [], [])
+    const tool = turn?.parts.find((part) => part.kind === 'tool')
+
+    expect(turn?.parts.map((part) => part.kind)).toEqual(['thinking', 'tool', 'assistant_text'])
+    expect(tool).toMatchObject({ toolCallId: 'call-1', toolName: 'read' })
+    if (!tool || tool.kind !== 'tool') throw new Error('expected persisted tool')
+    expect(toolStatus(tool.events)).toBe('完成')
+    expect(duration(tool.events)).toBeUndefined()
   })
 
   it('does not turn unowned session metadata into a chat row', () => {

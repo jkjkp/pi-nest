@@ -61,6 +61,32 @@ describe('projectTurnPresentation', () => {
 
     expect(presentation.activities).toMatchObject([{ duration: 2_000, kind: 'tool', label: 'Custom Tool', status: '完成' }])
   })
+
+  it('labels a persisted command from the native toolCall arguments', () => {
+    const [persisted] = timelineItems([
+      { id: 'user-1', parentId: null, raw: { message: { content: 'run tests', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
+      { id: 'assistant-1', parentId: 'user-1', raw: { message: { content: [{ arguments: { command: 'pnpm test' }, id: 'call-1', name: 'bash', type: 'toolCall' }], role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:01.000Z', type: 'message' },
+      { id: 'tool-1', parentId: 'assistant-1', raw: { message: { content: [], isError: false, role: 'toolResult', toolCallId: 'call-1', toolName: 'bash' }, type: 'message' }, timestamp: '2026-09-22T00:00:02.000Z', type: 'message' },
+    ], [], [])
+
+    expect(projectTurnPresentation(persisted!, false).activities).toMatchObject([{ kind: 'tool', label: '运行 pnpm test', status: '完成' }])
+  })
+
+  it('keeps persisted execution semantically equivalent to its live projection after refresh', () => {
+    const live = item([thinking('checking files', 1), tool('read', 2), text('final answer', 3)])
+    const [persisted] = timelineItems([
+      { id: 'user-1', parentId: null, raw: { message: { content: 'question', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
+      { id: 'assistant-1', parentId: 'user-1', raw: { message: { content: [{ thinking: 'checking files', type: 'thinking' }, { id: 'call-1', name: 'read', type: 'toolCall' }], role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:01.000Z', type: 'message' },
+      { id: 'tool-1', parentId: 'assistant-1', raw: { message: { content: [], isError: false, role: 'toolResult', toolCallId: 'call-1', toolName: 'read' }, type: 'message' }, timestamp: '2026-09-22T00:00:02.000Z', type: 'message' },
+      { id: 'assistant-2', parentId: 'tool-1', raw: { message: { content: [{ text: 'final answer', type: 'text' }], role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:03.000Z', type: 'message' },
+    ], [], [])
+
+    const livePresentation = projectTurnPresentation(live, false)
+    const persistedPresentation = projectTurnPresentation(persisted!, false)
+    expect(persistedPresentation.hasExecution).toBe(true)
+    expect(persistedPresentation.activities.map((activity) => activity.kind)).toEqual(livePresentation.activities.map((activity) => activity.kind))
+    expect(persistedPresentation.finalAnswer.map((part) => part.text)).toEqual(['final answer'])
+  })
 })
 
 describe('turn elapsed time', () => {
