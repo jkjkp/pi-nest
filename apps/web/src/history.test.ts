@@ -19,7 +19,6 @@ describe('session history presentation contract', () => {
           type: 'message',
         },
       ],
-      hasEarlier: false,
       session: { cwd: '/safe/project', id: 'session-1', updatedAt: '2026-09-21T00:00:00.000Z' },
     }
 

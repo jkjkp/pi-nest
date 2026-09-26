@@ -38,7 +38,7 @@ export function SessionTimeline({ error, history, isLoading, isRunning = false, 
 
   const navigationEntries = timelineNavigationEntries(items)
   const jump = onJumpToTurn ?? (() => undefined)
-  return <section className="conversation-stage pb-6" ref={timelineRoot}>{overlayRoot !== null && <TurnNavigationRail entries={navigationEntries} onJump={jump} overlayRoot={overlayRoot} scrollViewport={scrollViewport ?? null} timelineRoot={timelineRoot} />}<div className="conversation-stage-content space-y-5">{history?.hasEarlier && <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">当前仅展示最近 200 条原生条目。</p>}{items.map((item, index) => <TurnItem isRunning={isRunning && index === items.length - 1} item={item} key={item.id} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} />)}</div></section>
+  return <section className="conversation-stage pb-6" ref={timelineRoot}>{overlayRoot !== null && <TurnNavigationRail entries={navigationEntries} onJump={jump} overlayRoot={overlayRoot} scrollViewport={scrollViewport ?? null} timelineRoot={timelineRoot} />}<div className="conversation-stage-content space-y-5">{items.map((item, index) => <TurnItem isRunning={isRunning && index === items.length - 1} item={item} key={item.id} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} />)}</div></section>
 }
 
 function LoadingTimeline() {

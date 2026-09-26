@@ -5,6 +5,24 @@ import { diagnosticLabel, duration, timelineItems, timelineNavigationEntries, to
 const runtime = (sequence: number, event: Record<string, unknown>, turnId = 'turn-1') => ({ event, observedAt: `2026-09-22T00:00:${String(sequence).padStart(2, '0')}.000Z`, sequence, sessionId: 'session-1', turnId })
 
 describe('timelineItems', () => {
+  it('keeps every persisted turn and navigation entry from a long history', () => {
+    const history = Array.from({ length: 300 }, (_, index) => ({
+      id: `user-${index}`,
+      parentId: index === 0 ? null : `user-${index - 1}`,
+      raw: { message: { content: `question ${index}`, role: 'user' }, type: 'message' },
+      timestamp: `2026-09-22T00:${String(index).padStart(2, '0')}:00.000Z`,
+      type: 'message',
+    }))
+
+    const items = timelineItems(history, [], [])
+    const navigation = timelineNavigationEntries(items)
+
+    expect(items).toHaveLength(300)
+    expect(navigation).toHaveLength(300)
+    expect(navigation[0]).toMatchObject({ id: 'user-0', index: 1 })
+    expect(navigation.at(-1)).toMatchObject({ id: 'user-299', index: 300 })
+  })
+
   it('projects a clean activity timeline while retaining every raw event in technical details', () => {
     const events = [
       runtime(1, { type: 'message_update', assistantMessageEvent: { delta: 'Hello', type: 'text_delta' } }),

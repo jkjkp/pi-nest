@@ -129,7 +129,6 @@ describe('readPiSessionHistory', () => {
           type: 'model_change',
         },
       ],
-      hasEarlier: false,
     })
     expect(readFileSync(sourceSessionFile)).toEqual(sourceBefore)
 
@@ -138,10 +137,10 @@ describe('readPiSessionHistory', () => {
     expect(existsSync(dirname(copiedSessionFile))).toBe(false)
   })
 
-  it('uses the latest 200 SDK context entries', async () => {
+  it('preserves all SDK context entries beyond the former history limit', async () => {
     open.mockReturnValue(
       session(
-        Array.from({ length: 201 }, (_, index) =>
+        Array.from({ length: 1_000 }, (_, index) =>
           user(`user-${index}`, `2026-09-21T00:00:${String(index).padStart(2, '0')}.000Z`, `Message ${index}`),
         ),
       ),
@@ -150,10 +149,9 @@ describe('readPiSessionHistory', () => {
 
     const history = readPiSessionHistory({ expectedSessionId: 'session-1', sessionFile: sourceSessionFile })
 
-    expect(history.hasEarlier).toBe(true)
-    expect(history.entries).toHaveLength(200)
-    expect(history.entries[0]).toMatchObject({ id: 'user-1', type: 'message' })
-    expect(history.entries.at(-1)).toMatchObject({ id: 'user-200', type: 'message' })
+    expect(history.entries).toHaveLength(1_000)
+    expect(history.entries[0]).toMatchObject({ id: 'user-0', type: 'message' })
+    expect(history.entries.at(-1)).toMatchObject({ id: 'user-999', type: 'message' })
   })
 
   it('fails safely when SDK binding validation fails and cleans the temporary copy', async () => {

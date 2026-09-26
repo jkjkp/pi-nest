@@ -10,7 +10,6 @@ export type PiSessionHistoryEntry = {
 
 export type PiSessionHistoryResponse = {
   entries: PiSessionHistoryEntry[]
-  hasEarlier: boolean
   session: PiSessionSummary
 }
 

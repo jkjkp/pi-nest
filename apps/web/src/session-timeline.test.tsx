@@ -11,7 +11,6 @@ const history = {
     { id: 'thinking-1', parentId: 'user-1', raw: { assistantMessageEvent: { delta: 'reasoning', type: 'thinking_delta' }, type: 'message_update' }, timestamp: '2026-09-22T00:00:02.000Z', type: 'message_update' },
     { id: 'assistant-1', parentId: 'user-1', raw: { message: { content: 'answer', role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:03.000Z', type: 'message' },
   ],
-  hasEarlier: false,
   session: { id: 'session-1' },
 }
 
@@ -26,6 +25,7 @@ describe('SessionTimeline', () => {
     expect(markup).not.toContain('技术详情')
     expect(markup).not.toContain('本轮原始事件')
     expect(markup).not.toContain('原始 JSON')
+    expect(markup).not.toContain('当前仅展示最近 200 条原生条目。')
   })
 
   it('expands only the latest running Turn execution', () => {

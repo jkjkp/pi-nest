@@ -4,8 +4,6 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { SessionManager, type SessionEntry } from '@earendil-works/pi-coding-agent'
 
-const HISTORY_LIMIT = 200
-
 export type PiSessionHistoryEntry = {
   id: string
   parentId: string | null
@@ -16,7 +14,6 @@ export type PiSessionHistoryEntry = {
 
 export type PiSessionHistory = {
   entries: PiSessionHistoryEntry[]
-  hasEarlier: boolean
 }
 
 export type PiSessionHistoryOptions = {
@@ -77,13 +74,11 @@ export function readPiSessionHistory({
     }
 
     const contextEntries = session.buildContextEntries()
-    const selectedEntries = contextEntries.slice(-HISTORY_LIMIT)
     const hashAfter = fingerprint(sessionFile)
     if (hashBefore !== hashAfter) throw new PiSessionHistorySourceChangedError()
 
     return {
-      entries: selectedEntries.map(mapEntry),
-      hasEarlier: contextEntries.length > HISTORY_LIMIT,
+      entries: contextEntries.map(mapEntry),
     }
   } catch (cause) {
     if (cause instanceof PiSessionHistorySourceChangedError) throw cause
