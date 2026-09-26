@@ -33,8 +33,9 @@ describe('TurnNavigationRail', () => {
     const markup = renderToStaticMarkup(<TurnNavigationRail entries={[{ id: 'turn-1', index: 1, prompt: 'question', promptPreview: 'question', startedAt: '2026-09-24T00:00:00.000Z' }]} onJump={() => undefined} scrollViewport={null} timelineRoot={createRef<HTMLElement>()} />)
 
     expect(markup).toContain('style="height:min(120px, 42vh)"')
-    expect(markup).toContain('md:top-1/2')
+    expect(markup).toContain('md:absolute md:left-0 md:top-1/2')
     expect(markup).toContain('md:-translate-y-1/2')
+    expect(markup).not.toContain('md:sticky')
     expect(markup).toContain('relative grid h-full w-full place-items-center')
     expect(markup).toContain('relative h-full w-5')
     expect(markup).toContain('data-timeline-rail=""')

@@ -11,13 +11,14 @@ import { TurnNavigationRail } from './turn-navigation-rail.js'
 import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 
-export function SessionTimeline({ error, history, isLoading, isRunning = false, onJumpToTurn, onRetry, scrollViewport, systemEvents = [], turns = [] }: {
+export function SessionTimeline({ error, history, isLoading, isRunning = false, onJumpToTurn, onRetry, overlayRoot, scrollViewport, systemEvents = [], turns = [] }: {
   error: boolean
   history: PiSessionHistoryResponse | undefined
   isLoading: boolean
   isRunning?: boolean
   onJumpToTurn?: (turnId: string) => void
   onRetry: () => void
+  overlayRoot?: HTMLElement | null
   scrollViewport?: HTMLElement | null
   systemEvents?: PiRuntimeEvent[]
   turns?: RuntimeTurn[]
@@ -33,7 +34,7 @@ export function SessionTimeline({ error, history, isLoading, isRunning = false, 
 
   const navigationEntries = timelineNavigationEntries(items)
   const jump = onJumpToTurn ?? (() => undefined)
-  return <section className="conversation-stage pb-6" ref={timelineRoot}><TurnNavigationRail entries={navigationEntries} onJump={jump} scrollViewport={scrollViewport ?? null} timelineRoot={timelineRoot} /><div className="conversation-stage-content space-y-5">{history?.hasEarlier && <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">当前仅展示最近 200 条原生条目。</p>}{items.map((item) => <TurnItem isRunning={isRunning} item={item} key={item.id} />)}</div></section>
+  return <section className="conversation-stage pb-6" ref={timelineRoot}>{overlayRoot !== null && <TurnNavigationRail entries={navigationEntries} onJump={jump} overlayRoot={overlayRoot} scrollViewport={scrollViewport ?? null} timelineRoot={timelineRoot} />}<div className="conversation-stage-content space-y-5">{history?.hasEarlier && <p className="rounded-md border border-dashed px-3 py-2 text-center text-xs text-muted-foreground">当前仅展示最近 200 条原生条目。</p>}{items.map((item) => <TurnItem isRunning={isRunning} item={item} key={item.id} />)}</div></section>
 }
 
 function LoadingTimeline() {

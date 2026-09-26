@@ -39,5 +39,7 @@ describe('WorkspacePage new conversation draft', () => {
     expect(markup).toContain('在 pi-nest 开始新对话')
     expect(markup).toContain('发送第一条消息后才会创建 Pi 会话。')
     expect(markup).not.toContain('未命名会话')
+    expect(markup).toContain('pointer-events-none absolute inset-0 z-10')
+    expect(markup).toContain('conversation-stage relative h-full')
   })
 })

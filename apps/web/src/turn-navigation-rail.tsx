@@ -1,4 +1,5 @@
 import { type RefObject, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import type { TimelineNavigationEntry } from './timeline-model.js'
 import { jumpFromMarker, jumpFromOutline, markerHitHeight, nextOutlineAutoFollow, openOutlineFromContextMenu, railHeight } from './turn-navigation-rail-state.js'
@@ -12,9 +13,10 @@ function markerLabel(entry: TimelineNavigationEntry) {
   return `第 ${entry.index} 轮：${entry.promptPreview}`
 }
 
-export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRoot }: {
+export function TurnNavigationRail({ entries, onJump, overlayRoot, scrollViewport, timelineRoot }: {
   entries: TimelineNavigationEntry[]
   onJump: (turnId: string) => void
+  overlayRoot?: HTMLElement | null
   scrollViewport: HTMLElement | null
   timelineRoot: RefObject<HTMLElement | null>
 }) {
@@ -22,7 +24,7 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
   const [open, setOpen] = useState(false)
   const outline = useRef<HTMLDivElement>(null)
   const pendingUserJumpTurnId = useRef<string | undefined>(undefined)
-  const rail = useRef<HTMLDivElement>(null)
+  const railRoot = useRef<HTMLDivElement>(null)
 
   const currentTurnId = entries.some((entry) => entry.id === activeTurnId) ? activeTurnId : entries.at(-1)?.id
 
@@ -58,7 +60,7 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
   useEffect(() => {
     if (!open) return
     const closeOnOutsidePress = (event: PointerEvent) => {
-      if (event.target instanceof Node && !rail.current?.contains(event.target)) setOpen(false)
+      if (event.target instanceof Node && !railRoot.current?.contains(event.target)) setOpen(false)
     }
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false)
@@ -81,10 +83,10 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
   const height = railHeight(entries.length)
   const hitHeight = markerHitHeight(entries.length)
 
-  return (
-    <aside aria-label="对话轮次导航" className="hidden w-full shrink-0 overflow-visible md:sticky md:top-1/2 md:block md:-translate-y-1/2" style={{ height: `min(${height}px, 42vh)` }}>
+  const rail = (
+    <aside aria-label="对话轮次导航" className="pointer-events-auto hidden shrink-0 overflow-visible md:absolute md:left-0 md:top-1/2 md:block md:w-8 md:-translate-y-1/2" style={{ height: `min(${height}px, 42vh)` }}>
       <div className="relative grid h-full w-full place-items-center">
-        <div className="relative h-full w-5" ref={rail}>
+        <div className="relative h-full w-5" ref={railRoot}>
           <div aria-controls="conversation-outline" aria-expanded={open} aria-label="右键打开历史输入" className="group absolute inset-y-0 w-5" data-timeline-rail="" onContextMenu={(event) => openOutlineFromContextMenu(event, () => setOpen(true))}>
             {entries.map((entry, index) => {
               const active = entry.id === currentTurnId
@@ -113,4 +115,6 @@ export function TurnNavigationRail({ entries, onJump, scrollViewport, timelineRo
       </div>
     </aside>
   )
+
+  return overlayRoot ? createPortal(rail, overlayRoot) : rail
 }

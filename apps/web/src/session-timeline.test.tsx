@@ -35,14 +35,15 @@ describe('SessionTimeline', () => {
     expect(running).toMatch(/<details[^>]*open[^>]*><summary[^>]*>思考中/)
   })
 
-  it('uses the centered Conversation Stage for the rail and content while keeping the outline as an overlay', () => {
+  it('keeps timeline content centered while allowing the Rail to move to the message viewport overlay', () => {
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
 
     expect(markup).toContain('aria-label="对话轮次导航"')
     expect(markup).toContain('aria-label="第 1 轮：question"')
     expect(markup).toContain('class="conversation-stage pb-6"')
     expect(markup).toContain('conversation-stage-content space-y-5')
-    expect(markup).toContain('md:sticky')
+    expect(markup).toContain('md:absolute md:left-0 md:top-1/2')
+    expect(markup).not.toContain('md:sticky')
     expect(markup).not.toContain('选择一轮并定位到对应的用户请求。')
   })
 

@@ -56,6 +56,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const [thinkingLevels, setThinkingLevels] = useState<string[]>([])
   const [queueMode, setQueueMode] = useState<'follow_up' | 'steer'>('steer')
   const [followLatest, setFollowLatest] = useState(true)
+  const [railOverlay, setRailOverlay] = useState<HTMLElement | null>(null)
   const [scrollViewport, setScrollViewport] = useState<HTMLElement | null>(null)
   const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
   const [desktopInspectorSheetOpen, setDesktopInspectorSheetOpen] = useState(false)
@@ -107,6 +108,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     messageScrollAreaRef.current = node
     setScrollViewport(node?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null)
   }, [setScrollViewport])
+
+  const setRailOverlayRoot = useCallback((node: HTMLDivElement | null) => setRailOverlay(node), [setRailOverlay])
 
   useEffect(() => {
     if (!scrollViewport) return
@@ -372,7 +375,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               </div>
             </div>
           </header>
-          <div className="min-h-0 flex-1" ref={setMessageScrollArea}>
+          <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="h-full">
               <div className="w-full space-y-4 px-4 py-6 sm:px-6">
                 {isDraft ? (
@@ -388,6 +391,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   isRunning={isActive}
                   onJumpToTurn={jumpToTurn}
                   onRetry={() => void historyQuery.refetch()}
+                  overlayRoot={railOverlay}
                   scrollViewport={scrollViewport}
                   systemEvents={currentRun?.systemEvents}
                   turns={currentRun?.turns}
@@ -413,6 +417,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 </div>
               </div>
             </ScrollArea>
+            <div className="pointer-events-none absolute inset-0 z-10 px-4 sm:px-6">
+              <div className="conversation-stage relative h-full" ref={setRailOverlayRoot} />
+            </div>
           </div>
           <div className="shrink-0 px-4 sm:px-6">
             <div className="conversation-stage mb-4">
