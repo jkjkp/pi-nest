@@ -2,6 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FilePenLine, Terminal, Wrench } from 'lucide-react'
 
 import { formatActivityDuration, formatElapsedTime, nextExecutionExpanded, turnElapsed, type TurnActivity, type TurnPresentation } from './turn-execution-model.js'
+import { startElapsedClock } from './turn-elapsed-clock.js'
 import type { TimelineItem } from './timeline-model.js'
 
 export function TurnExecution({ item, isRunning, presentation }: { item: TimelineItem; isRunning: boolean; presentation: TurnPresentation }) {
@@ -13,9 +14,8 @@ export function TurnExecution({ item, isRunning, presentation }: { item: Timelin
 
   useEffect(() => {
     if (!isRunning) return
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
-    return () => window.clearInterval(timer)
-  }, [isRunning])
+    return startElapsedClock(item.runtimeTiming?.startedAt ?? item.startedAt, setNow)
+  }, [isRunning, item.id, item.runtimeTiming?.startedAt, item.startedAt])
 
   useEffect(() => {
     setExpanded((current) => nextExecutionExpanded(current, previousRunning.current, isRunning, userToggled))

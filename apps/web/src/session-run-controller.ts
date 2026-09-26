@@ -62,6 +62,9 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     if (event.event.type !== 'agent_settled') return
 
     activeRuns.delete(event.sessionId)
+    // Both timestamps are captured in this browser, so a completed duration never
+    // switches to the daemon/history clock when the persisted entry arrives.
+    useWorkspaceStore.getState().completeLatestRunTurn(event.sessionId, new Date().toISOString())
     useWorkspaceStore.getState().updateRun(event.sessionId, {
       status: activeRun.stopReason === 'aborted' ? 'aborted' : 'complete',
       stopReason: activeRun.stopReason ?? 'stop',

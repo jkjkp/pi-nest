@@ -35,6 +35,7 @@ type WorkspaceState = {
   runtimeStates: Record<string, Omit<RuntimeStatus, 'sessionId'>>
   watchStates: Record<string, 'ready' | 'watching'>
   appendRunEvent: (sessionId: string, event: PiRuntimeEvent) => void
+  completeLatestRunTurn: (sessionId: string, completedAt: string) => void
   runs: Record<string, SessionRunSummary>
   navigationOrder: NavigationOrder
   setDraft: (sessionId: string, draft: string) => void
@@ -99,6 +100,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         runs: {
           ...state.runs,
           [sessionId]: { ...run, turns },
+        },
+      }
+    }),
+  completeLatestRunTurn: (sessionId, completedAt) =>
+    set((state) => {
+      const run = state.runs[sessionId]
+      const current = run?.turns.at(-1)
+      if (!run || !current || current.completedAt) return state
+      return {
+        runs: {
+          ...state.runs,
+          [sessionId]: { ...run, turns: [...run.turns.slice(0, -1), { ...current, completedAt }] },
         },
       }
     }),

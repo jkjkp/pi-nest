@@ -2,10 +2,16 @@ import type { PiSessionHistoryEntry } from './history.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
 
 export type RuntimeTurn = {
+  completedAt?: string
   events: PiRuntimeEvent[]
   historyTurnCount?: number
   id: string
   prompt?: string
+  startedAt: string
+}
+
+export type TurnTiming = {
+  completedAt?: string
   startedAt: string
 }
 
@@ -35,6 +41,7 @@ export type TimelineItem = {
   kind: 'turn'
   parts: TimelinePart[]
   prompt: string | undefined
+  runtimeTiming?: TurnTiming
   startedAt: string
 }
 
@@ -163,8 +170,8 @@ function projectEvent(item: TimelineItem, event: TimelineEvent) {
   diagnostic(item, event, 'unknown')
 }
 
-function newTurn(id: string, prompt: string | undefined, startedAt: string): TimelineItem {
-  return { diagnostics: [], events: [], id, kind: 'turn', parts: [], prompt, startedAt }
+function newTurn(id: string, prompt: string | undefined, startedAt: string, runtimeTiming?: TurnTiming): TimelineItem {
+  return { diagnostics: [], events: [], id, kind: 'turn', parts: [], prompt, ...(runtimeTiming ? { runtimeTiming } : {}), startedAt }
 }
 
 function historyItems(entries: PiSessionHistoryEntry[]): TimelineItem[] {
@@ -190,8 +197,17 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
   for (const turn of turns) {
     // A local turn exists only after an explicit user prompt has been accepted.
     // Runtime events may enrich it, but cannot create another conversation node.
-    if (!turn.prompt?.trim() || (turn.historyTurnCount !== undefined && items.length > turn.historyTurnCount)) continue
-    const item = newTurn(turn.id, turn.prompt ?? promptFrom(turn.events), turn.startedAt)
+    if (!turn.prompt?.trim()) continue
+    const runtimeTiming = { ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }), startedAt: turn.startedAt }
+    const persisted = turn.historyTurnCount === undefined ? undefined : items[turn.historyTurnCount]
+    if (persisted) {
+      // History can arrive before the final runtime event. Keep its canonical content,
+      // but retain the browser-clock timing captured for the live turn.
+      persisted.runtimeTiming = runtimeTiming
+      continue
+    }
+    if (turn.historyTurnCount !== undefined && items.length > turn.historyTurnCount) continue
+    const item = newTurn(turn.id, turn.prompt ?? promptFrom(turn.events), turn.startedAt, runtimeTiming)
     for (const event of turn.events) projectEvent(item, runtimeEvent(event))
     items.push(item)
   }

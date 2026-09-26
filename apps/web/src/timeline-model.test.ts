@@ -89,13 +89,24 @@ describe('timelineItems', () => {
     expect(items.at(-1)).toMatchObject({ prompt: 'new prompt' })
   })
 
-  it('drops the provisional live turn once its persisted user entry is present', () => {
+  it('keeps the runtime start timestamp stable while streaming events update', () => {
+    const live = { events: [runtime(1, { type: 'message_update' })], id: 'pending:session-1', prompt: 'new', startedAt: '2026-09-22T00:01:00.000Z' }
+
+    const initial = timelineItems(undefined, [live], [])
+    const streamed = timelineItems(undefined, [{ ...live, events: [...live.events, runtime(2, { type: 'message_update' })] }], [])
+
+    expect(initial[0]?.runtimeTiming).toEqual({ startedAt: '2026-09-22T00:01:00.000Z' })
+    expect(streamed[0]?.runtimeTiming).toEqual(initial[0]?.runtimeTiming)
+  })
+
+  it('replaces the provisional live turn with history while retaining its browser-clock timing', () => {
     const items = timelineItems([
       { id: 'user-1', parentId: null, raw: { message: { content: 'old', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
       { id: 'user-2', parentId: 'user-1', raw: { message: { content: 'new', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:01:00.000Z', type: 'message' },
-    ], [{ events: [runtime(1, { type: 'message_update' })], historyTurnCount: 1, id: 'pending:session-1', prompt: 'new', startedAt: '2026-09-22T00:01:00.000Z' }], [])
+    ], [{ completedAt: '2026-09-22T00:01:26.000Z', events: [runtime(1, { type: 'message_update' })], historyTurnCount: 1, id: 'pending:session-1', prompt: 'new', startedAt: '2026-09-22T00:01:00.000Z' }], [])
 
     expect(items.map((item) => item.id)).toEqual(['user-1', 'user-2'])
+    expect(items[1]).toMatchObject({ runtimeTiming: { completedAt: '2026-09-22T00:01:26.000Z', startedAt: '2026-09-22T00:01:00.000Z' }, startedAt: '2026-09-22T00:01:00.000Z' })
   })
 
   it('keeps full user text for the history panel while deriving a bounded navigation label', () => {

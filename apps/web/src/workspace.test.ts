@@ -141,6 +141,17 @@ describe('workspace presentation helpers', () => {
     expect(useWorkspaceStore.getState().runs.first).toMatchObject({ systemEvents: [{ event: { type: 'tool_execution_start' } }], turns: [] })
   })
 
+  it('freezes the most recent live turn at the browser completion timestamp', () => {
+    useWorkspaceStore.setState({
+      runs: { first: { status: 'running', systemEvents: [], turns: [{ events: [], id: 'turn-1', prompt: 'known user input', startedAt: '2026-09-22T00:00:00.000Z' }] } },
+    })
+
+    useWorkspaceStore.getState().completeLatestRunTurn('first', '2026-09-22T00:00:26.000Z')
+    useWorkspaceStore.getState().completeLatestRunTurn('first', '2026-09-22T00:00:99.000Z')
+
+    expect(useWorkspaceStore.getState().runs.first?.turns[0]?.completedAt).toBe('2026-09-22T00:00:26.000Z')
+  })
+
   it('reconciles persisted navigation order while appending newly discovered sessions', () => {
     const source = [
       { key: 'cwd:/alpha', sessions: [{ id: 'new' }, { id: 'saved' }] },

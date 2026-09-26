@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { formatActivityDuration, formatElapsedTime, nextExecutionExpanded, projectTurnPresentation, turnCompletedAt, turnElapsed } from './turn-execution-model.js'
-import type { TimelineEvent, TimelineItem, TimelinePart } from './timeline-model.js'
+import { timelineItems, type TimelineEvent, type TimelineItem, type TimelinePart } from './timeline-model.js'
 
 function event(type: string, second: number, fields: Record<string, unknown> = {}): TimelineEvent {
   return { event: { type, ...fields }, id: `${type}-${second}`, observedAt: `2026-09-22T00:00:${String(second).padStart(2, '0')}.000Z`, raw: { type, ...fields } }
@@ -71,6 +71,25 @@ describe('turn elapsed time', () => {
     expect(turnCompletedAt(ended)).toBe('2026-09-22T00:00:45.000Z')
     expect(turnElapsed(ended, false)).toBe(45_000)
     expect(turnElapsed(fallback, false)).toBe(12_000)
+  })
+
+  it('uses browser-clock runtime timing through completion instead of falling back to event time', () => {
+    const completed = {
+      ...item([], [event('turn_end', 12)]),
+      runtimeTiming: { completedAt: '2026-09-22T00:00:26.000Z', startedAt: '2026-09-22T00:00:00.000Z' },
+    }
+
+    expect(turnElapsed(completed, true, Date.parse('2026-09-22T00:00:25.000Z'))).toBe(25_000)
+    expect(turnElapsed(completed, false)).toBe(26_000)
+  })
+
+  it('does not make duration go backwards when persisted history replaces a completed live turn', () => {
+    const [persisted] = timelineItems([
+      { id: 'user-1', parentId: null, raw: { message: { content: 'go', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:05.000Z', type: 'message' },
+      { id: 'turn-end', parentId: 'user-1', raw: { type: 'turn_end' }, timestamp: '2026-09-22T00:00:12.000Z', type: 'turn_end' },
+    ], [{ completedAt: '2026-09-22T00:00:26.000Z', events: [], historyTurnCount: 0, id: 'pending:session-1', prompt: 'go', startedAt: '2026-09-22T00:00:00.000Z' }], [])
+
+    expect(turnElapsed(persisted!, false)).toBe(26_000)
   })
 
   it('formats Turn and short activity durations for people', () => {

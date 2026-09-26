@@ -100,8 +100,8 @@ export function turnCompletedAt(item: TimelineItem) {
 }
 
 export function turnElapsed(item: TimelineItem, isRunning: boolean, now = Date.now()) {
-  const startedAt = Date.parse(item.startedAt)
-  const endedAt = isRunning ? now : Date.parse(turnCompletedAt(item) ?? '')
+  const startedAt = Date.parse(item.runtimeTiming?.startedAt ?? item.startedAt)
+  const endedAt = isRunning ? now : Date.parse(item.runtimeTiming?.completedAt ?? turnCompletedAt(item) ?? '')
   return Number.isFinite(startedAt) && Number.isFinite(endedAt) ? Math.max(0, endedAt - startedAt) : undefined
 }
 

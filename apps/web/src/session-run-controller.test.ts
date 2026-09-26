@@ -36,9 +36,11 @@ async function tick() { await Promise.resolve(); await Promise.resolve() }
 
 describe('session run controller', () => {
   beforeEach(() => useWorkspaceStore.setState({ runs: {} }))
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
   it('watches, resumes, then prompts and completes from native Pi events', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-22T00:00:00.000Z'))
     const runtime = runtimeMock()
     const invalidateHistory = vi.fn()
     const controller = createSessionRunController({ invalidateHistory, runtime: runtime as never })
@@ -53,10 +55,11 @@ describe('session run controller', () => {
     runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Hi' } }, observedAt: 'now', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
     runtime.emit({ event: { type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } }, observedAt: 'now', sequence: 2, sessionId: 'session-a', turnId: 'turn-1' })
     runtime.emit({ event: { type: 'turn_end' }, observedAt: 'now', sequence: 3, sessionId: 'session-a', turnId: 'turn-1' })
+    vi.setSystemTime(new Date('2026-09-22T00:00:26.000Z'))
     runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', sequence: 4, sessionId: 'session-a' })
     const completed = useWorkspaceStore.getState().runs['session-a']
     expect(completed).toMatchObject({ status: 'complete', stopReason: 'stop' })
-    expect(completed?.turns[0]).toMatchObject({ id: 'pending:session-a', prompt: 'hello' })
+    expect(completed?.turns[0]).toMatchObject({ completedAt: '2026-09-22T00:00:26.000Z', id: 'pending:session-a', prompt: 'hello', startedAt: '2026-09-22T00:00:00.000Z' })
     expect(completed?.turns[0]?.events.map((event) => event.event.type)).toEqual(['message_update', 'message_end', 'turn_end'])
     expect(completed?.systemEvents.map((event) => event.event.type)).toEqual(['agent_settled'])
     expect(invalidateHistory).toHaveBeenCalledWith('session-a')
