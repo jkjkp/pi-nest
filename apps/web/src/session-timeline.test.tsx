@@ -16,23 +16,39 @@ const history = {
 }
 
 describe('SessionTimeline', () => {
-  it('keeps raw Pi records in one closed technical-details disclosure instead of the reading flow', () => {
+  it('keeps raw Pi records out of the reading flow while rendering a collapsed execution summary', () => {
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
 
-    expect(markup).toContain('技术详情（4 条事件）')
-    expect(markup).toContain('本轮原始事件')
-    expect(markup).not.toContain('Pi 原生事件')
+    expect(markup).toContain('用时 3秒')
+    expect(markup).toContain('aria-expanded="false"')
+    expect(markup).toContain('answer')
+    expect(markup).not.toContain('技术详情')
+    expect(markup).not.toContain('本轮原始事件')
     expect(markup).not.toContain('原始 JSON')
-    expect(markup).not.toMatch(/<details[^>]*open[^>]*>.*技术详情/)
   })
 
-  it('expands thinking only while the turn is running', () => {
-    const complete = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
+  it('expands only the latest running Turn execution', () => {
     const running = render(<SessionTimeline error={false} history={history} isLoading={false} isRunning onRetry={() => undefined} />)
 
-    expect(complete).toContain('思考过程')
-    expect(complete).not.toMatch(/<details[^>]*open[^>]*><summary[^>]*>思考过程/)
-    expect(running).toMatch(/<details[^>]*open[^>]*><summary[^>]*>思考中/)
+    expect(running).toContain('思考中 ·')
+    expect(running).toContain('reasoning')
+    expect(running).toContain('aria-expanded="true"')
+    expect(running).not.toContain('思考过程')
+  })
+
+  it('does not mark historical Turns as running when the session is active', () => {
+    const twoTurns = {
+      ...history,
+      entries: [...history.entries,
+        { id: 'user-2', parentId: 'user-1', raw: { message: { content: 'second question', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:04.000Z', type: 'message' },
+        { id: 'thinking-2', parentId: 'user-2', raw: { assistantMessageEvent: { delta: 'latest reasoning', type: 'thinking_delta' }, type: 'message_update' }, timestamp: '2026-09-22T00:00:05.000Z', type: 'message_update' },
+      ],
+    }
+    const markup = render(<SessionTimeline error={false} history={twoTurns} isLoading={false} isRunning onRetry={() => undefined} />)
+
+    expect((markup.match(/aria-expanded="true"/g) ?? [])).toHaveLength(1)
+    expect((markup.match(/aria-expanded="false"/g) ?? [])).toHaveLength(2)
+    expect((markup.match(/思考中 ·/g) ?? [])).toHaveLength(1)
   })
 
   it('keeps timeline content centered while allowing the Rail to move to the message viewport overlay', () => {

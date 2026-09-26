@@ -109,6 +109,15 @@ function pushTool(parts: TimelinePart[], event: TimelineEvent) {
   parts.push({ events: [event], kind: 'tool', toolCallId, toolName })
 }
 
+function pushActivity(parts: TimelinePart[], kind: 'bash' | 'file_change', event: TimelineEvent) {
+  const previous = parts.at(-1)
+  if (previous?.kind === kind) {
+    previous.events.push(event)
+    return
+  }
+  parts.push({ events: [event], kind })
+}
+
 function historyEvent(entry: PiSessionHistoryEntry): TimelineEvent {
   return { event: entry.raw, id: entry.id, observedAt: entry.timestamp, raw: entry.raw }
 }
@@ -148,8 +157,8 @@ function projectEvent(item: TimelineItem, event: TimelineEvent) {
   if (type === 'message' && nativeMessage?.role === 'user') return
   if (type === 'message') return diagnostic(item, event, 'unrenderable_message')
   if (type.startsWith('tool_execution_')) return pushTool(item.parts, event)
-  if (type.startsWith('bash_execution_')) return item.parts.push({ events: [event], kind: 'bash' })
-  if (type === 'file_change' || type === 'file_changes' || Array.isArray(event.event.changes)) return item.parts.push({ events: [event], kind: 'file_change' })
+  if (type.startsWith('bash_execution_')) return pushActivity(item.parts, 'bash', event)
+  if (type === 'file_change' || type === 'file_changes' || Array.isArray(event.event.changes)) return pushActivity(item.parts, 'file_change', event)
   if (isMetadata(type)) return diagnostic(item, event, 'metadata')
   diagnostic(item, event, 'unknown')
 }
