@@ -1,4 +1,4 @@
-import type { PiSessionHistoryResponse } from './history.js'
+import { historyPageSize, type PiSessionHistoryResponse, type TurnIndexEntry } from './history.js'
 import type { PiSessionSummary } from './workspace.js'
 
 export type PiRuntimeSettings = {
@@ -22,8 +22,14 @@ function sessionUrl(sessionId: string) {
   return `/api/sessions/${encodeURIComponent(sessionId)}`
 }
 
-export function fetchSessionHistory(sessionId: string) {
-  return fetchJson<PiSessionHistoryResponse>(`${sessionUrl(sessionId)}/history`)
+export function fetchSessionHistory(sessionId: string, before?: string) {
+  const query = new URLSearchParams({ limit: String(historyPageSize) })
+  if (before) query.set('before', before)
+  return fetchJson<PiSessionHistoryResponse>(`${sessionUrl(sessionId)}/history?${query}`)
+}
+
+export function fetchSessionTurnIndex(sessionId: string) {
+  return fetchJson<{ entries: TurnIndexEntry[] }>(`${sessionUrl(sessionId)}/turn-index`).then((response) => response.entries)
 }
 
 export async function fetchSessions() {
