@@ -13,6 +13,7 @@ const history = {
     { id: 'assistant-1', parentId: 'user-1', raw: { message: { content: 'answer', role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:03.000Z', type: 'message' },
   ],
   hasEarlier: false,
+  revision: 'fixture',
   session: { id: 'session-1' },
 }
 
@@ -114,7 +115,7 @@ describe('SessionTimeline', () => {
   })
 
   it('uses the complete Turn Index for a density Rail while the body remains virtualized', () => {
-    const turnIndex = Array.from({ length: 3_000 }, (_, index) => ({ id: `user-${index + 1}`, index: index + 1, promptPreview: `prompt ${index + 1}`, startedAt: '2026-09-22T00:00:00.000Z' }))
+    const turnIndex = { entries: Array.from({ length: 3_000 }, (_, index) => ({ id: `user-${index + 1}`, index: index + 1, promptPreview: `prompt ${index + 1}`, startedAt: '2026-09-22T00:00:00.000Z' })), revision: 'fixture' }
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} turnIndex={turnIndex} />)
 
     expect(markup).toContain('data-rail-mode="density"')

@@ -9,7 +9,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from 
 import { Textarea } from '@/components/ui/textarea'
 
 import { useComposerTextarea } from './composer-textarea.js'
-import { historyPageCursorForTurn, historyUserTurnCount, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
+import { historyUserTurnCount, mergeSessionHistoryPage, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import { SessionInspector } from './session-inspector.js'
 import { SessionNavigation } from './session-navigation.js'
@@ -21,6 +21,7 @@ import { createSession, deleteSession, fetchSessionHistory, fetchSessionTurnInde
 import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, runtimeStatusLabel, sessionDisplayName, sessionStatusLabel, shouldFollowLatest, type ProjectSessionGroup } from './workspace.js'
 
 const emptySessions: Awaited<ReturnType<typeof fetchSessions>> = []
+type HistoryPageParam = { before?: string; revision?: string }
 
 export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunController }) {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -86,17 +87,17 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
   const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
   const historyEnabled = Boolean(selectedSession) && watchStates[selectedSessionId] === 'ready' && !isActive && runtimeStates[selectedSessionId]?.lifecycle !== 'active' && runtimeStates[selectedSessionId]?.lifecycle !== 'loading'
-  const historyQuery = useInfiniteQuery<PiSessionHistoryResponse, Error, InfiniteData<PiSessionHistoryResponse>, ReturnType<typeof sessionHistoryQueryKey>, string | undefined>({
+  const historyQuery = useInfiniteQuery<PiSessionHistoryResponse, Error, InfiniteData<PiSessionHistoryResponse>, ReturnType<typeof sessionHistoryQueryKey>, HistoryPageParam>({
     enabled: historyEnabled,
     getNextPageParam: () => undefined,
-    getPreviousPageParam: (firstPage) => firstPage.hasEarlier ? firstPage.beforeCursor : undefined,
-    initialPageParam: undefined as string | undefined,
+    getPreviousPageParam: (firstPage) => firstPage.hasEarlier ? { before: firstPage.beforeCursor, revision: firstPage.revision } : undefined,
+    initialPageParam: {},
     queryKey: sessionHistoryQueryKey(selectedSessionId),
-    queryFn: ({ pageParam }) => fetchSessionHistory(selectedSessionId, pageParam),
+    queryFn: ({ pageParam }) => fetchSessionHistory(selectedSessionId, pageParam.before, pageParam.revision),
     retry: false,
   })
-  const turnIndexQuery = useQuery({ enabled: historyEnabled, queryKey: sessionTurnIndexQueryKey(selectedSessionId), queryFn: () => fetchSessionTurnIndex(selectedSessionId), retry: false })
   const history = useMemo(() => mergeSessionHistoryPages(historyQuery.data?.pages), [historyQuery.data?.pages])
+  const turnIndexQuery = useQuery({ enabled: historyEnabled && Boolean(history?.revision), queryKey: sessionTurnIndexQueryKey(selectedSessionId, history?.revision), queryFn: () => fetchSessionTurnIndex(selectedSessionId, history!.revision), retry: false })
   const historyTurnCount = historyUserTurnCount(history?.entries)
 
   useEffect(() => {
@@ -289,17 +290,18 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     if (alignment === 'end') requestAnimationFrame(() => scrollViewport.scrollTo({ behavior, top: scrollViewport.scrollHeight }))
   }, [scrollViewport, setFollowingLatest])
 
-  const jumpToUnloadedTurn = useCallback((turnId: string) => {
+  const jumpToUnloadedTurn = useCallback((turnId: string, cursor: string | undefined) => {
     if (!selectedSessionId) return
-    const cursor = historyPageCursorForTurn(turnIndexQuery.data ?? [], turnId)
-    if (!turnIndexQuery.data?.some((entry) => entry.id === turnId)) return
     const sessionId = selectedSessionId
-    void fetchSessionHistory(sessionId, cursor).then((page) => {
+    void fetchSessionHistory(sessionId, cursor, history?.revision).then((page) => {
       if (sessionId !== selectedSessionIdRef.current) return
-      queryClient.setQueryData<InfiniteData<PiSessionHistoryResponse>>(sessionHistoryQueryKey(sessionId), { pageParams: [cursor], pages: [page] })
+      queryClient.setQueryData<InfiniteData<PiSessionHistoryResponse, HistoryPageParam>>(sessionHistoryQueryKey(sessionId), (current) => ({
+        pageParams: [...(current?.pageParams ?? []), { before: cursor, revision: history?.revision }],
+        pages: mergeSessionHistoryPage(current?.pages, page),
+      }))
       setPendingJump({ sessionId, turnId })
     })
-  }, [queryClient, selectedSessionId, turnIndexQuery.data])
+  }, [history?.revision, queryClient, selectedSessionId])
 
   function abortPrompt() {
     if (!selectedSessionId || status !== 'running') return

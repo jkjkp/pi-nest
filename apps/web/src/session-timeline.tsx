@@ -5,9 +5,10 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { AssistantMarkdown } from './assistant-markdown.js'
-import type { PiSessionHistoryResponse, TurnIndexEntry } from './history.js'
+import { historyPageCursorForTurn, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
 import { prependedScrollTop, turnJumpAlignment, type TurnJumpAlignment } from './timeline-pagination.js'
-import { timelineItems, timelineNavigationEntries, type RuntimeTurn, type TimelineItem } from './timeline-model.js'
+import { timelineNavigationTurns } from './timeline-navigation.js'
+import { timelineItems, type RuntimeTurn, type TimelineItem } from './timeline-model.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
 import { TurnNavigationRail } from './turn-navigation-rail.js'
 import { TurnExecution } from './turn-execution.js'
@@ -25,7 +26,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   onFinalAnswerStart?: (turnId: string) => void
   onFinalAnswerStream?: () => void
   onJumpToTurn?: (turnId: string, scrollTo: (behavior: ScrollBehavior) => void, alignment: TurnJumpAlignment) => void
-  onJumpToUnloadedTurn?: (turnId: string) => void
+  onJumpToUnloadedTurn?: (turnId: string, cursor: string | undefined) => void
   onLoadEarlier?: () => void
   onPendingJumpHandled?: () => void
   onRetry: () => void
@@ -33,15 +34,15 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   pendingJumpTurnId?: string
   scrollViewport?: HTMLElement | null
   systemEvents?: PiRuntimeEvent[]
-  turnIndex?: TurnIndexEntry[]
+  turnIndex?: PiSessionTurnIndex
   turns?: RuntimeTurn[]
 }) {
   const prependAnchor = useRef<{ firstTurnId: string | undefined; scrollHeight: number; scrollTop: number } | undefined>(undefined)
   const historyLoadRequested = useRef(false)
   const [canLoadEarlier, setCanLoadEarlier] = useState(false)
   const items = useMemo(() => timelineItems(history?.entries, turns, systemEvents), [history?.entries, systemEvents, turns])
-  const navigationEntries = useMemo(() => timelineNavigationEntries(items), [items])
-  const railEntries = useMemo<TurnIndexEntry[]>(() => turnIndex?.length ? turnIndex : navigationEntries.map(({ id, index, promptPreview, startedAt }) => ({ id, index, promptPreview, startedAt })), [navigationEntries, turnIndex])
+  const persistedIndex = turnIndex && turnIndex.revision === history?.revision ? turnIndex.entries : undefined
+  const railEntries = useMemo(() => timelineNavigationTurns(persistedIndex, items), [items, persistedIndex])
   // oxlint-disable-next-line react/incompatible-library -- The virtualizer owns DOM measurement state outside React.
   const virtualizer = useVirtualizer({
     count: items.length + 1,
@@ -98,7 +99,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
 
   const jump = (turnId: string) => {
     const index = items.findIndex((item) => item.id === turnId)
-    if (index < 0) return void onJumpToUnloadedTurn?.(turnId)
+    if (index < 0) return void onJumpToUnloadedTurn?.(turnId, historyPageCursorForTurn(railEntries, turnId))
     const alignment = turnJumpAlignment(turnId, railEntries.at(-1)?.id)
     const scrollTo = (behavior: ScrollBehavior) => virtualizer.scrollToIndex(index + 1, { align: alignment, behavior })
     if (onJumpToTurn) onJumpToTurn(turnId, scrollTo, alignment)

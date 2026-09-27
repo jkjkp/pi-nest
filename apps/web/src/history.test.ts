@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { historyPageCursorForTurn, historyUserTurnCount, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
+import { historyPageCursorForTurn, historyUserTurnCount, mergeSessionHistoryPage, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
 
 describe('session history presentation contract', () => {
   it('keeps history cache isolated by session ID', () => {
@@ -28,6 +28,7 @@ describe('session history presentation contract', () => {
         },
       ],
       hasEarlier: false,
+      revision: 'a'.repeat(64),
       session: { cwd: '/safe/project', id: 'session-1', updatedAt: '2026-09-21T00:00:00.000Z' },
     }
 
@@ -44,12 +45,22 @@ describe('session history presentation contract', () => {
 
   it('merges earlier pages before the latest page without changing their order', () => {
     const session = { cwd: '/safe/project', id: 'session-1', updatedAt: '2026-09-21T00:00:00.000Z' }
+    const revision = 'a'.repeat(64)
     const history = mergeSessionHistoryPages([
-      { entries: [{ id: 'user-1', parentId: null, raw: {}, timestamp: 'one', type: 'message' }], hasEarlier: false, session },
-      { beforeCursor: 'user-2', entries: [{ id: 'user-2', parentId: 'user-1', raw: {}, timestamp: 'two', type: 'message' }], hasEarlier: true, session },
+      { entries: [{ id: 'user-1', parentId: null, raw: {}, timestamp: 'one', type: 'message' }], hasEarlier: false, revision, session },
+      { beforeCursor: 'user-2', entries: [{ id: 'user-2', parentId: 'user-1', raw: {}, timestamp: 'two', type: 'message' }], hasEarlier: true, revision, session },
     ])
 
     expect(history?.entries.map((entry) => entry.id)).toEqual(['user-1', 'user-2'])
     expect(history?.hasEarlier).toBe(true)
+  })
+
+  it('keeps existing pages when a navigation jump loads a non-adjacent Turn page', () => {
+    const session = { cwd: '/safe/project', id: 'session-1', updatedAt: '2026-09-21T00:00:00.000Z' }
+    const revision = 'a'.repeat(64)
+    const latest = { entries: [{ id: 'user-9', parentId: null, raw: { message: { role: 'user' } }, timestamp: '2026-09-21T00:09:00.000Z', type: 'message' }], hasEarlier: true, revision, session }
+    const target = { entries: [{ id: 'user-3', parentId: null, raw: { message: { role: 'user' } }, timestamp: '2026-09-21T00:03:00.000Z', type: 'message' }], hasEarlier: true, revision, session }
+
+    expect(mergeSessionHistoryPage([latest], target).flatMap((page) => page.entries.map((entry) => entry.id))).toEqual(['user-3', 'user-9'])
   })
 })
