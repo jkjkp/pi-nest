@@ -5,18 +5,21 @@ import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
 import { RuntimeSecurity } from './runtime-security.js'
 
 const adapter = vi.hoisted(() => {
+  class PiSessionHistoryCursorError extends Error {}
   class PiSessionHistorySourceChangedError extends Error {}
   return {
+    PiSessionHistoryCursorError,
     PiSessionHistorySourceChangedError,
     createPiSession: vi.fn(),
     deletePiSession: vi.fn(),
     listPiSessions: vi.fn(),
     readPiSessionHistory: vi.fn(),
+    readPiSessionTurnIndex: vi.fn(),
     renamePiSession: vi.fn(),
     revealPiWorkspace: vi.fn(),
   }
 })
-const { createPiSession, deletePiSession, listPiSessions, readPiSessionHistory, renamePiSession, revealPiWorkspace } = adapter
+const { createPiSession, deletePiSession, listPiSessions, readPiSessionHistory, readPiSessionTurnIndex, renamePiSession, revealPiWorkspace } = adapter
 
 vi.mock('@pi-nest/pi-adapter', () => ({
   ...adapter,
@@ -41,10 +44,11 @@ describe('Pi Nest API', () => {
   let runtime: ReturnType<typeof runtimeMock>
 
   beforeEach(() => {
-    createPiSession.mockReset(); deletePiSession.mockReset(); listPiSessions.mockReset(); readPiSessionHistory.mockReset(); renamePiSession.mockReset(); revealPiWorkspace.mockReset()
+    createPiSession.mockReset(); deletePiSession.mockReset(); listPiSessions.mockReset(); readPiSessionHistory.mockReset(); readPiSessionTurnIndex.mockReset(); renamePiSession.mockReset(); revealPiWorkspace.mockReset()
     runtime = runtimeMock()
     listPiSessions.mockResolvedValue([nativeSession])
-    readPiSessionHistory.mockReturnValue({ entries: [] })
+    readPiSessionHistory.mockReturnValue({ entries: [], hasEarlier: false })
+    readPiSessionTurnIndex.mockReturnValue({ entries: [] })
     createPiSession.mockReturnValue({ cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' })
     deletePiSession.mockResolvedValue({ method: 'trash' })
     revealPiWorkspace.mockResolvedValue(undefined)
@@ -74,10 +78,32 @@ describe('Pi Nest API', () => {
     const response = await app().request('/api/sessions/session-1/history')
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('no-store')
-    await expect(response.json()).resolves.toEqual({ entries: [], session: { cwd: '/working', id: 'session-1', updatedAt: nativeSession.updatedAt } })
+    await expect(response.json()).resolves.toEqual({ entries: [], hasEarlier: false, session: { cwd: '/working', id: 'session-1', updatedAt: nativeSession.updatedAt } })
     expect(readPiSessionHistory).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', sessionFile: '/pi/session.jsonl' })
     runtime.isPromptActive.mockReturnValue(true)
     expect((await app().request('/api/sessions/session-1/history')).status).toBe(409)
+  })
+
+  it('passes the bounded stable cursor through to the native Turn page reader', async () => {
+    readPiSessionHistory.mockReturnValue({ beforeCursor: 'user-41', entries: [{ id: 'user-80' }], hasEarlier: true })
+
+    const response = await app().request('/api/sessions/session-1/history?before=user-81&limit=40')
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ beforeCursor: 'user-41', hasEarlier: true })
+    expect(readPiSessionHistory).toHaveBeenCalledWith({ before: 'user-81', expectedCwd: '/working', expectedSessionId: 'session-1', limit: 40, sessionFile: '/pi/session.jsonl' })
+    expect((await app().request('/api/sessions/session-1/history?limit=101')).status).toBe(400)
+  })
+
+  it('reads a complete lightweight Turn index separately from paged history bodies', async () => {
+    readPiSessionTurnIndex.mockReturnValue({ entries: [{ id: 'user-1', index: 1, promptPreview: 'first', startedAt: '2026-09-21T00:00:00.000Z' }] })
+
+    const response = await app().request('/api/sessions/session-1/turn-index')
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    await expect(response.json()).resolves.toEqual({ entries: [{ id: 'user-1', index: 1, promptPreview: 'first', startedAt: '2026-09-21T00:00:00.000Z' }] })
+    expect(readPiSessionTurnIndex).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', sessionFile: '/pi/session.jsonl' })
   })
 
   it('keeps native session mutations mutually exclusive through the runtime registry', async () => {
