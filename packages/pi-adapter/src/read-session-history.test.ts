@@ -81,6 +81,7 @@ describe('readPiSessionHistory', () => {
       expectedSessionId: 'session-1',
       sessionFile: sourceSessionFile,
     })).toEqual({
+      hasEarlier: false,
       entries: [
         {
           id: 'user-1',
@@ -137,7 +138,7 @@ describe('readPiSessionHistory', () => {
     expect(existsSync(dirname(copiedSessionFile))).toBe(false)
   })
 
-  it('preserves all SDK context entries beyond the former history limit', async () => {
+  it('keeps more than 200 Turns fully accessible through stable Turn-start cursors', async () => {
     open.mockReturnValue(
       session(
         Array.from({ length: 1_000 }, (_, index) =>
@@ -147,11 +148,57 @@ describe('readPiSessionHistory', () => {
     )
     const { readPiSessionHistory } = await import('./read-session-history.js')
 
-    const history = readPiSessionHistory({ expectedSessionId: 'session-1', sessionFile: sourceSessionFile })
+    const first = readPiSessionHistory({ expectedSessionId: 'session-1', sessionFile: sourceSessionFile })
+    const second = readPiSessionHistory({ before: first.beforeCursor, expectedSessionId: 'session-1', sessionFile: sourceSessionFile })
+    const loaded = [...first.entries, ...second.entries]
+    let page = second
+    while (page.hasEarlier) {
+      page = readPiSessionHistory({ before: page.beforeCursor, expectedSessionId: 'session-1', sessionFile: sourceSessionFile })
+      loaded.push(...page.entries)
+    }
 
-    expect(history.entries).toHaveLength(1_000)
-    expect(history.entries[0]).toMatchObject({ id: 'user-0', type: 'message' })
-    expect(history.entries.at(-1)).toMatchObject({ id: 'user-999', type: 'message' })
+    expect(first.entries).toHaveLength(40)
+    expect(first.entries[0]).toMatchObject({ id: 'user-960', type: 'message' })
+    expect(first.beforeCursor).toBe('user-960')
+    expect(second.entries.map((entry) => entry.id)).toEqual(Array.from({ length: 40 }, (_, index) => `user-${920 + index}`))
+    expect(new Set(loaded.map((entry) => entry.id)).size).toBe(1_000)
+    expect(page.hasEarlier).toBe(false)
+  })
+
+  it('never splits a Turn when selecting a page', async () => {
+    open.mockReturnValue(session([
+      user('user-1', '2026-09-21T00:00:00.000Z', 'one'),
+      { id: 'assistant-1', message: { content: 'one', role: 'assistant' }, parentId: 'user-1', timestamp: '2026-09-21T00:00:01.000Z', type: 'message' },
+      { id: 'tool-1', message: { content: [], role: 'toolResult' }, parentId: 'assistant-1', timestamp: '2026-09-21T00:00:02.000Z', type: 'message' },
+      user('user-2', '2026-09-21T00:00:03.000Z', 'two'),
+      { id: 'assistant-2', message: { content: 'two', role: 'assistant' }, parentId: 'user-2', timestamp: '2026-09-21T00:00:04.000Z', type: 'message' },
+      user('user-3', '2026-09-21T00:00:05.000Z', 'three'),
+      { id: 'assistant-3', message: { content: 'three', role: 'assistant' }, parentId: 'user-3', timestamp: '2026-09-21T00:00:06.000Z', type: 'message' },
+    ]))
+    const { readPiSessionHistory } = await import('./read-session-history.js')
+
+    const latest = readPiSessionHistory({ expectedSessionId: 'session-1', limit: 1, sessionFile: sourceSessionFile })
+    const previous = readPiSessionHistory({ before: latest.beforeCursor, expectedSessionId: 'session-1', limit: 1, sessionFile: sourceSessionFile })
+
+    expect(latest.entries.map((entry) => entry.id)).toEqual(['user-3', 'assistant-3'])
+    expect(previous.entries.map((entry) => entry.id)).toEqual(['user-2', 'assistant-2'])
+    expect(previous.hasEarlier).toBe(true)
+  })
+
+  it('builds a lightweight complete Turn index without returning Turn bodies', async () => {
+    open.mockReturnValue(session([
+      user('user-1', '2026-09-21T00:00:00.000Z', ' first\n prompt '),
+      { id: 'assistant-1', message: { content: 'answer', role: 'assistant' }, parentId: 'user-1', timestamp: '2026-09-21T00:00:01.000Z', type: 'message' },
+      user('user-2', '2026-09-21T00:00:02.000Z', [{ text: 'second prompt', type: 'text' }]),
+    ]))
+    const { readPiSessionTurnIndex } = await import('./read-session-history.js')
+
+    expect(readPiSessionTurnIndex({ expectedSessionId: 'session-1', sessionFile: sourceSessionFile })).toEqual({
+      entries: [
+        { id: 'user-1', index: 1, promptPreview: 'first prompt', startedAt: '2026-09-21T00:00:00.000Z' },
+        { id: 'user-2', index: 2, promptPreview: 'second prompt', startedAt: '2026-09-21T00:00:02.000Z' },
+      ],
+    })
   })
 
   it('fails safely when SDK binding validation fails and cleans the temporary copy', async () => {
