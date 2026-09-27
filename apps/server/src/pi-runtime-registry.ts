@@ -14,7 +14,9 @@ type StreamListener = (event: PiRuntimeEvent) => void
 type StreamErrorListener = (error: PiRuntimeStreamError) => void
 type UnloadReason = 'capacityEvicted' | 'deleted' | 'failed' | 'idleExpired' | 'mutation' | 'settingsReload' | 'shutdown'
 type ExtensionUiProjection = { freshness: 'known' | 'restored'; statuses: Map<string, string>; widgets: Map<string, string[]> }
+type ActiveTurn = { firstSequence?: number; prompt: string; startedAt: string }
 type RuntimeState = {
+  activeTurn?: ActiveTurn
   error?: string
   failureKind?: PiRuntimeFailureKind
   extensionUi?: ExtensionUiProjection
@@ -35,8 +37,10 @@ export type PiRuntimeExtensionUi = {
   widgets: Record<string, string[]>
 }
 export type PiRuntimeSessionSnapshot = {
+  activeTurn?: Omit<ActiveTurn, 'firstSequence'>
   atSequence: number
   extensionUi: PiRuntimeExtensionUi
+  replayAfter?: number
   runtime: Omit<PiRuntimeStatus, 'sessionId'>
   sessionId: string
 }
@@ -173,11 +177,12 @@ export class PiRuntimeRegistry {
     await this.projectionsReady
     const state = this.stateFor(sessionId)
     this.cancelUnload(sessionId)
-    const entry = this.streamForSubscribe(sessionId, after)
+    const replayAfter = state.activeTurn?.firstSequence === undefined ? after : Math.min(after, state.activeTurn.firstSequence - 1)
+    const entry = this.streamForSubscribe(sessionId, replayAfter)
     let unsubscribeStatus: (() => void) | undefined
     const unsubscribe = await entry.stream.subscribeWithSnapshot(
-      after,
-      (atSequence) => this.snapshot(sessionId, atSequence),
+      replayAfter,
+      (atSequence) => this.snapshot(sessionId, atSequence, replayAfter),
       (snapshot) => {
         onSnapshot?.(snapshot)
         if (onStatus) {
@@ -250,6 +255,8 @@ export class PiRuntimeRegistry {
     if (this.settingsUpdating || this.locks.has(session.id)) return undefined
     this.cancelUnload(session.id)
     this.locks.set(session.id, 'prompt')
+    const state = this.stateFor(session.id)
+    state.activeTurn = { prompt: message, startedAt: new Date().toISOString() }
 
     let resolveAccepted: () => void = () => undefined
     let rejectAccepted: (cause: unknown) => void = () => undefined
@@ -279,6 +286,7 @@ export class PiRuntimeRegistry {
         throw cause
       })
       .finally(() => {
+        state.activeTurn = undefined
         this.locks.delete(session.id)
         this.scheduleUnload(session.id)
       })
@@ -374,6 +382,7 @@ export class PiRuntimeRegistry {
         lastUsed: ++this.usageClock,
         unsubscribe: host.onEvent((event) => {
           void this.streamFor(session.id).stream.publish(event, async (published) => {
+            this.trackActiveTurn(session.id, published)
             this.trackExtensionDialog(session.id, published.event)
             await this.trackExtensionUi(session.id, published.event)
           })
@@ -487,14 +496,21 @@ export class PiRuntimeRegistry {
     return state
   }
 
-  private snapshot(sessionId: string, atSequence: number): PiRuntimeSessionSnapshot {
+  private snapshot(sessionId: string, atSequence: number, replayAfter: number): PiRuntimeSessionSnapshot {
     const state = this.stateFor(sessionId)
     return {
+      ...(state.activeTurn ? { activeTurn: { prompt: state.activeTurn.prompt, startedAt: state.activeTurn.startedAt } } : {}),
       atSequence,
       extensionUi: this.getExtensionUiSnapshot(sessionId),
+      ...(replayAfter < atSequence ? { replayAfter } : {}),
       runtime: { ...(state.error ? { error: state.error } : {}), ...(state.failureKind ? { failureKind: state.failureKind } : {}), lifecycle: state.lifecycle, revision: state.revision },
       sessionId,
     }
+  }
+
+  private trackActiveTurn(sessionId: string, event: PiRuntimeEvent) {
+    const activeTurn = this.stateFor(sessionId).activeTurn
+    if (activeTurn && activeTurn.firstSequence === undefined && event.event.type === 'turn_start') activeTurn.firstSequence = event.sequence
   }
 
   private transition(sessionId: string, lifecycle: PiRuntimeLifecycle, error?: string, failureKind?: PiRuntimeFailureKind) {

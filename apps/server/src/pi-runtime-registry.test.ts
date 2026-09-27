@@ -156,6 +156,30 @@ describe('PiRuntimeRegistry', () => {
     await registry.close()
   })
 
+  it('replays the entire active Turn to a refreshed watcher', async () => {
+    const host = hostMock()
+    const running = deferred<{ model: undefined; stopReason: string }>()
+    host.prompt.mockReturnValueOnce(running.promise)
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const firstEvents: number[] = []
+    await registry.watch(session.id, 'tab-a', 0, (event) => firstEvents.push(event.sequence), () => undefined)
+    const prompt = registry.startPrompt(session, 'resume this prompt')
+    await vi.waitFor(() => expect(host.prompt).toHaveBeenCalledWith('resume this prompt'))
+    host.emit({ type: 'turn_start' })
+    host.emit({ type: 'message_update' })
+    await vi.waitFor(() => expect(firstEvents).toEqual([1, 2]))
+
+    const replayed: number[] = []
+    const snapshots: any[] = []
+    await registry.watch(session.id, 'tab-b', 2, (event) => replayed.push(event.sequence), () => undefined, (snapshot) => snapshots.push(snapshot))
+
+    expect(snapshots).toMatchObject([{ activeTurn: { prompt: 'resume this prompt' }, replayAfter: 0, runtime: { lifecycle: 'active' } }])
+    expect(replayed).toEqual([1, 2])
+    running.resolve({ model: undefined, stopReason: 'stop' })
+    await expect(prompt).resolves.toMatchObject({ stopReason: 'stop' })
+    await registry.close()
+  })
+
   it('closes an idle host after its configured retention window', async () => {
     vi.useFakeTimers()
     const host = hostMock()
