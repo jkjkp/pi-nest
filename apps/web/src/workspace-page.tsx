@@ -1,5 +1,5 @@
 import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type InfiniteData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, CircleX, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
 
@@ -9,14 +9,15 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from 
 import { Textarea } from '@/components/ui/textarea'
 
 import { useComposerTextarea } from './composer-textarea.js'
-import { historyUserTurnCount, sessionHistoryQueryKey } from './history.js'
+import { historyPageCursorForTurn, historyUserTurnCount, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import { SessionInspector } from './session-inspector.js'
 import { SessionNavigation } from './session-navigation.js'
 import type { SessionRunController } from './session-run-controller.js'
 import { SessionTimeline } from './session-timeline.js'
+import type { TurnJumpAlignment } from './timeline-pagination.js'
 import { useWorkspaceStore } from './workspace-store.js'
-import { createSession, deleteSession, fetchSessionHistory, fetchSessions, renameSession, revealProjectInFinder } from './workspace-api.js'
+import { createSession, deleteSession, fetchSessionHistory, fetchSessionTurnIndex, fetchSessions, renameSession, revealProjectInFinder } from './workspace-api.js'
 import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, runtimeStatusLabel, sessionDisplayName, sessionStatusLabel, shouldFollowLatest, type ProjectSessionGroup } from './workspace.js'
 
 const emptySessions: Awaited<ReturnType<typeof fetchSessions>> = []
@@ -58,6 +59,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const [followLatest, setFollowLatest] = useState(true)
   const [railOverlay, setRailOverlay] = useState<HTMLElement | null>(null)
   const [scrollViewport, setScrollViewport] = useState<HTMLElement | null>(null)
+  const [pendingJump, setPendingJump] = useState<{ sessionId: string; turnId: string }>()
   const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
   const [desktopInspectorSheetOpen, setDesktopInspectorSheetOpen] = useState(false)
   const messageScrollAreaRef = useRef<HTMLDivElement>(null)
@@ -67,6 +69,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const inspectorToggleScrollTop = useRef<number | undefined>(undefined)
   const positionedTurn = useRef<string | undefined>(undefined)
   const previouslyScrolledSessionId = useRef(selectedSessionId)
+  const selectedSessionIdRef = useRef(selectedSessionId)
   const setFollowingLatest = useCallback((value: boolean) => {
     followLatestRef.current = value
     setFollowLatest(value)
@@ -82,13 +85,24 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const extensionStatus = extensionStatusLine(extensionStatuses[selectedSessionId])
   const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
   const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
-  const historyQuery = useQuery({
-    enabled: Boolean(selectedSession) && watchStates[selectedSessionId] === 'ready' && !isActive && runtimeStates[selectedSessionId]?.lifecycle !== 'active' && runtimeStates[selectedSessionId]?.lifecycle !== 'loading',
+  const historyEnabled = Boolean(selectedSession) && watchStates[selectedSessionId] === 'ready' && !isActive && runtimeStates[selectedSessionId]?.lifecycle !== 'active' && runtimeStates[selectedSessionId]?.lifecycle !== 'loading'
+  const historyQuery = useInfiniteQuery<PiSessionHistoryResponse, Error, InfiniteData<PiSessionHistoryResponse>, ReturnType<typeof sessionHistoryQueryKey>, string | undefined>({
+    enabled: historyEnabled,
+    getNextPageParam: () => undefined,
+    getPreviousPageParam: (firstPage) => firstPage.hasEarlier ? firstPage.beforeCursor : undefined,
+    initialPageParam: undefined as string | undefined,
     queryKey: sessionHistoryQueryKey(selectedSessionId),
-    queryFn: () => fetchSessionHistory(selectedSessionId),
+    queryFn: ({ pageParam }) => fetchSessionHistory(selectedSessionId, pageParam),
     retry: false,
   })
-  const historyTurnCount = historyQuery.data ? historyUserTurnCount(historyQuery.data.entries) : undefined
+  const turnIndexQuery = useQuery({ enabled: historyEnabled, queryKey: sessionTurnIndexQueryKey(selectedSessionId), queryFn: () => fetchSessionTurnIndex(selectedSessionId), retry: false })
+  const history = useMemo(() => mergeSessionHistoryPages(historyQuery.data?.pages), [historyQuery.data?.pages])
+  const historyTurnCount = historyUserTurnCount(history?.entries)
+
+  useEffect(() => {
+    selectedSessionIdRef.current = selectedSessionId
+  }, [selectedSessionId])
+
   const sourceProjects = useMemo(() => groupSessionsByProject(sessions), [sessions])
   const orderedProjects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
   const projects = useMemo(() => orderedProjects.filter((project) => !project.cwd || !hiddenProjectCwds[project.cwd]), [hiddenProjectCwds, orderedProjects])
@@ -172,7 +186,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     })
 
     return () => cancelAnimationFrame(frame)
-  }, [followLatest, historyQuery.data, scrollViewport, selectedSessionId])
+  }, [followLatest, history, scrollViewport, selectedSessionId])
 
   useLayoutEffect(() => {
     const key = activeTurn ? `${selectedSessionId}:${activeTurn.startedAt}` : undefined
@@ -266,17 +280,26 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     else void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败'))
   }
 
-  function jumpToTurn(turnId: string) {
+  const jumpToTurn = useCallback((_turnId: string, scrollTo: (behavior: ScrollBehavior) => void, alignment: TurnJumpAlignment) => {
     if (!scrollViewport) return
-    const target = [...(messageScrollAreaRef.current?.querySelectorAll<HTMLElement>('[data-turn-id]') ?? [])].find((element) => element.dataset.turnId === turnId)
-    if (!target) return
     setFollowingLatest(false)
-    const offset = target.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top
     const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
-    const top = Math.max(0, scrollViewport.scrollTop + offset - 16)
-    if (behavior === 'smooth' && Math.abs(scrollViewport.scrollTop - top) > 1) navigationInProgress.current = true
-    scrollViewport.scrollTo({ behavior, top })
-  }
+    if (behavior === 'smooth') navigationInProgress.current = true
+    scrollTo(behavior)
+    if (alignment === 'end') requestAnimationFrame(() => scrollViewport.scrollTo({ behavior, top: scrollViewport.scrollHeight }))
+  }, [scrollViewport, setFollowingLatest])
+
+  const jumpToUnloadedTurn = useCallback((turnId: string) => {
+    if (!selectedSessionId) return
+    const cursor = historyPageCursorForTurn(turnIndexQuery.data ?? [], turnId)
+    if (!turnIndexQuery.data?.some((entry) => entry.id === turnId)) return
+    const sessionId = selectedSessionId
+    void fetchSessionHistory(sessionId, cursor).then((page) => {
+      if (sessionId !== selectedSessionIdRef.current) return
+      queryClient.setQueryData<InfiniteData<PiSessionHistoryResponse>>(sessionHistoryQueryKey(sessionId), { pageParams: [cursor], pages: [page] })
+      setPendingJump({ sessionId, turnId })
+    })
+  }, [queryClient, selectedSessionId, turnIndexQuery.data])
 
   function abortPrompt() {
     if (!selectedSessionId || status !== 'running') return
@@ -421,17 +444,24 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                     </section>
                   </div>
                 ) : selectedSession ? <SessionTimeline
-                  error={historyQuery.isError}
-                  history={historyQuery.data}
-                  isLoading={!isActive && historyQuery.isPending}
+                  error={historyQuery.isError && !history}
+                  hasEarlier={historyQuery.hasPreviousPage}
+                  history={history}
+                  isLoading={!isActive && !history && historyQuery.isPending}
+                  isLoadingEarlier={historyQuery.isFetchingPreviousPage}
                   isRunning={isActive}
+                  onLoadEarlier={() => void historyQuery.fetchPreviousPage()}
                   onFinalAnswerStart={scrollToFinalAnswer}
                   onFinalAnswerStream={followFinalAnswer}
                   onJumpToTurn={jumpToTurn}
+                  onJumpToUnloadedTurn={jumpToUnloadedTurn}
                   onRetry={() => void historyQuery.refetch()}
+                  onPendingJumpHandled={() => setPendingJump(undefined)}
                   overlayRoot={railOverlay}
+                  pendingJumpTurnId={pendingJump?.sessionId === selectedSessionId ? pendingJump.turnId : undefined}
                   scrollViewport={scrollViewport}
                   systemEvents={currentRun?.systemEvents}
+                  turnIndex={turnIndexQuery.data}
                   turns={currentRun?.turns}
                 /> : <div className="conversation-stage py-16"><p className="conversation-stage-content text-center text-sm text-muted-foreground">从左侧选择一个会话，或在项目中创建新对话。</p></div>}
                 <div className="conversation-stage">
@@ -455,7 +485,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 </div>
               </div>
             </ScrollArea>
-            <div className="pointer-events-none absolute inset-0 z-10 px-4 sm:px-6">
+            <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden px-4 sm:px-6">
               <div className="conversation-stage relative h-full" ref={setRailOverlayRoot} />
             </div>
           </div>

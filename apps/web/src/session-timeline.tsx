@@ -1,10 +1,12 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { AssistantMarkdown } from './assistant-markdown.js'
-import type { PiSessionHistoryResponse } from './history.js'
+import type { PiSessionHistoryResponse, TurnIndexEntry } from './history.js'
+import { prependedScrollTop, turnJumpAlignment, type TurnJumpAlignment } from './timeline-pagination.js'
 import { timelineItems, timelineNavigationEntries, type RuntimeTurn, type TimelineItem } from './timeline-model.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
 import { TurnNavigationRail } from './turn-navigation-rail.js'
@@ -13,32 +15,118 @@ import { projectTurnPresentation } from './turn-execution-model.js'
 import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 
-export function SessionTimeline({ error, history, isLoading, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onJumpToTurn, onRetry, overlayRoot, scrollViewport, systemEvents = [], turns = [] }: {
+export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onJumpToTurn, onJumpToUnloadedTurn, onLoadEarlier, onPendingJumpHandled, onRetry, overlayRoot, pendingJumpTurnId, scrollViewport, systemEvents = [], turnIndex, turns = [] }: {
   error: boolean
+  hasEarlier?: boolean
   history: PiSessionHistoryResponse | undefined
   isLoading: boolean
+  isLoadingEarlier?: boolean
   isRunning?: boolean
   onFinalAnswerStart?: (turnId: string) => void
   onFinalAnswerStream?: () => void
-  onJumpToTurn?: (turnId: string) => void
+  onJumpToTurn?: (turnId: string, scrollTo: (behavior: ScrollBehavior) => void, alignment: TurnJumpAlignment) => void
+  onJumpToUnloadedTurn?: (turnId: string) => void
+  onLoadEarlier?: () => void
+  onPendingJumpHandled?: () => void
   onRetry: () => void
   overlayRoot?: HTMLElement | null
+  pendingJumpTurnId?: string
   scrollViewport?: HTMLElement | null
   systemEvents?: PiRuntimeEvent[]
+  turnIndex?: TurnIndexEntry[]
   turns?: RuntimeTurn[]
 }) {
-  const timelineRoot = useRef<HTMLElement>(null)
+  const prependAnchor = useRef<{ firstTurnId: string | undefined; scrollHeight: number; scrollTop: number } | undefined>(undefined)
+  const historyLoadRequested = useRef(false)
+  const [canLoadEarlier, setCanLoadEarlier] = useState(false)
+  const items = useMemo(() => timelineItems(history?.entries, turns, systemEvents), [history?.entries, systemEvents, turns])
+  const navigationEntries = useMemo(() => timelineNavigationEntries(items), [items])
+  const railEntries = useMemo<TurnIndexEntry[]>(() => turnIndex?.length ? turnIndex : navigationEntries.map(({ id, index, promptPreview, startedAt }) => ({ id, index, promptPreview, startedAt })), [navigationEntries, turnIndex])
+  // oxlint-disable-next-line react/incompatible-library -- The virtualizer owns DOM measurement state outside React.
+  const virtualizer = useVirtualizer({
+    count: items.length + 1,
+    estimateSize: (index) => index === 0 ? 20 : 240,
+    getItemKey: (index) => index === 0 ? 'history-load-sentinel' : items[index - 1]!.id,
+    getScrollElement: () => scrollViewport ?? null,
+    initialRect: { height: 800, width: 0 },
+    overscan: 8,
+    useAnimationFrameWithResizeObserver: true,
+  })
+  const virtualItems = virtualizer.getVirtualItems()
+  const activeVirtualItem = virtualizer.getVirtualItemForOffset((virtualizer.scrollOffset ?? 0) + 48)
+  const activeTurnId = items[Math.max(0, (activeVirtualItem?.index ?? 1) - 1)]?.id
+  useEffect(() => {
+    setCanLoadEarlier(false)
+    historyLoadRequested.current = false
+  }, [history?.session.id])
+  useEffect(() => {
+    if ((virtualizer.scrollOffset ?? 0) > 0) setCanLoadEarlier(true)
+  }, [virtualizer.scrollOffset])
+  useEffect(() => {
+    if (!isLoadingEarlier) historyLoadRequested.current = false
+  }, [isLoadingEarlier])
+  const loadEarlier = useCallback(() => {
+    if (!hasEarlier || isLoadingEarlier || !onLoadEarlier) return
+    if (scrollViewport) prependAnchor.current = { firstTurnId: items[0]?.id, scrollHeight: scrollViewport.scrollHeight, scrollTop: scrollViewport.scrollTop }
+    onLoadEarlier()
+  }, [hasEarlier, isLoadingEarlier, items, onLoadEarlier, scrollViewport])
+
+  useLayoutEffect(() => {
+    const anchor = prependAnchor.current
+    if (!anchor || !scrollViewport || items[0]?.id === anchor.firstTurnId) return
+    scrollViewport.scrollTo({ top: prependedScrollTop(anchor.scrollHeight, anchor.scrollTop, scrollViewport.scrollHeight) })
+    prependAnchor.current = undefined
+  }, [items, scrollViewport])
+
+  useLayoutEffect(() => {
+    if (!pendingJumpTurnId) return
+    const index = items.findIndex((item) => item.id === pendingJumpTurnId)
+    if (index < 0) return
+    const alignment = turnJumpAlignment(pendingJumpTurnId, railEntries.at(-1)?.id)
+    const scrollTo = (behavior: ScrollBehavior) => virtualizer.scrollToIndex(index + 1, { align: alignment, behavior })
+    if (onJumpToTurn) onJumpToTurn(pendingJumpTurnId, scrollTo, alignment)
+    else scrollTo('auto')
+    onPendingJumpHandled?.()
+  }, [items, onJumpToTurn, onPendingJumpHandled, pendingJumpTurnId, railEntries, virtualizer])
+
   if (isLoading) return <LoadingTimeline />
   if (error) return <HistoryError onRetry={onRetry} />
 
-  const items = timelineItems(history?.entries, turns, systemEvents)
   if (items.length === 0) {
     return <section className="py-8 text-center"><p className="text-sm text-muted-foreground">{isRunning ? '正在等待 Pi 原生事件…' : '当前活动分支尚无可展示的原生条目。'}</p></section>
   }
 
-  const navigationEntries = timelineNavigationEntries(items)
-  const jump = onJumpToTurn ?? (() => undefined)
-  return <section className="conversation-stage pb-6" ref={timelineRoot}>{overlayRoot !== null && <TurnNavigationRail entries={navigationEntries} onJump={jump} overlayRoot={overlayRoot} scrollViewport={scrollViewport ?? null} timelineRoot={timelineRoot} />}<div className="conversation-stage-content space-y-5">{items.map((item, index) => <TurnItem isRunning={isRunning && index === items.length - 1} item={item} key={item.id} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} />)}</div></section>
+  const jump = (turnId: string) => {
+    const index = items.findIndex((item) => item.id === turnId)
+    if (index < 0) return void onJumpToUnloadedTurn?.(turnId)
+    const alignment = turnJumpAlignment(turnId, railEntries.at(-1)?.id)
+    const scrollTo = (behavior: ScrollBehavior) => virtualizer.scrollToIndex(index + 1, { align: alignment, behavior })
+    if (onJumpToTurn) onJumpToTurn(turnId, scrollTo, alignment)
+    else scrollTo('auto')
+  }
+  return <section className="conversation-stage pb-6">{overlayRoot !== null && <TurnNavigationRail activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} scrollViewport={scrollViewport} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>{virtualItems.map((virtualItem) => {
+    if (virtualItem.index === 0) return <div className="absolute left-0 top-0 w-full" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>
+    const item = items[virtualItem.index - 1]!
+    return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><TurnItem isRunning={isRunning && virtualItem.index === items.length} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} /></div>
+  })}</div></div></section>
+}
+
+function HistoryLoadSentinel({ canLoad, hasEarlier, isLoading, onLoad, requested, scrollViewport }: { canLoad: boolean; hasEarlier: boolean; isLoading: boolean; onLoad: () => void; requested: { current: boolean }; scrollViewport: HTMLElement | null }) {
+  const target = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!canLoad || !hasEarlier || isLoading || !scrollViewport || !target.current || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting && !requested.current) {
+        requested.current = true
+        onLoad()
+      }
+    }, { root: scrollViewport, rootMargin: '160px 0px 0px', threshold: 0 })
+    observer.observe(target.current)
+    return () => observer.disconnect()
+  }, [canLoad, hasEarlier, isLoading, onLoad, requested, scrollViewport])
+
+  return <div aria-live="polite" className="h-5 text-center text-xs text-muted-foreground" data-history-load-sentinel="" ref={target}>{isLoading ? '正在加载更早历史…' : null}</div>
 }
 
 function LoadingTimeline() {
@@ -55,8 +143,8 @@ function HistoryError({ onRetry }: { onRetry: () => void }) {
   )
 }
 
-function TurnItem({ isRunning, item, onFinalAnswerStart, onFinalAnswerStream }: { isRunning: boolean; item: TimelineItem; onFinalAnswerStart: ((turnId: string) => void) | undefined; onFinalAnswerStream: (() => void) | undefined }) {
-  const presentation = projectTurnPresentation(item, isRunning)
+const TurnItem = memo(function TurnItem({ isRunning, item, onFinalAnswerStart, onFinalAnswerStream }: { isRunning: boolean; item: TimelineItem; onFinalAnswerStart: ((turnId: string) => void) | undefined; onFinalAnswerStream: (() => void) | undefined }) {
+  const presentation = useMemo(() => projectTurnPresentation(item, isRunning), [item, isRunning])
   return (
     <article className="space-y-3" data-turn-id={item.id}>
       {item.prompt && <UserPrompt prompt={item.prompt} startedAt={item.startedAt} />}
@@ -64,7 +152,7 @@ function TurnItem({ isRunning, item, onFinalAnswerStart, onFinalAnswerStream }: 
       <FinalAnswer isRunning={isRunning} onStart={() => onFinalAnswerStart?.(item.id)} onStream={onFinalAnswerStream} parts={presentation.finalAnswer} turnId={item.id} />
     </article>
   )
-}
+})
 
 function FinalAnswer({ isRunning, onStart, onStream, parts, turnId }: { isRunning: boolean; onStart: () => void; onStream: (() => void) | undefined; parts: Extract<TimelineItem['parts'][number], { kind: 'assistant_text' }>[]; turnId: string }) {
   const hadAnswer = useRef(false)
