@@ -237,10 +237,6 @@ function memoizedHistoryItems(entries: PiSessionHistoryEntry[]) {
   return items
 }
 
-function sameTiming(left: TurnTiming | undefined, right: TurnTiming) {
-  return left?.startedAt === right.startedAt && left?.completedAt === right.completedAt
-}
-
 export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turns: RuntimeTurn[], _systemEvents: PiRuntimeEvent[]): TimelineItem[] {
   const historyKey = history ?? emptyHistory
   let cachedForHistory = timelineItemCache.get(historyKey)
@@ -262,10 +258,7 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
     const fallbackPersisted = history && turn.historyTurnCount !== undefined && items.length <= turn.historyTurnCount && items.at(-1)?.prompt === turn.prompt ? items.at(-1) : undefined
     const persisted = indexedPersisted ?? fallbackPersisted
     if (persisted) {
-      // History can arrive before the final runtime event. Keep its canonical content,
-      // but retain the browser-clock timing captured for the live turn.
-      const index = indexedPersisted ? turn.historyTurnCount! : items.length - 1
-      if (!sameTiming(persisted.runtimeTiming, runtimeTiming)) items[index] = { ...persisted, runtimeTiming }
+      // A persisted Pi Turn owns its timestamps. Browser timing is only a live fallback.
       continue
     }
     if (turn.historyTurnCount !== undefined && items.length > turn.historyTurnCount) continue

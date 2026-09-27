@@ -10,7 +10,7 @@ const history = {
     { id: 'user-1', parentId: null, raw: { message: { content: 'question', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
     { id: 'custom-1', parentId: 'user-1', raw: { type: 'custom' }, timestamp: '2026-09-22T00:00:01.000Z', type: 'custom' },
     { id: 'thinking-1', parentId: 'user-1', raw: { assistantMessageEvent: { delta: 'reasoning', type: 'thinking_delta' }, type: 'message_update' }, timestamp: '2026-09-22T00:00:02.000Z', type: 'message_update' },
-    { id: 'assistant-1', parentId: 'user-1', raw: { message: { content: 'answer', role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:03.000Z', type: 'message' },
+    { id: 'assistant-1', parentId: 'user-1', raw: { message: { content: 'answer', role: 'assistant', stopReason: 'stop' }, type: 'message' }, timestamp: '2026-09-22T00:00:03.000Z', type: 'message' },
   ],
   hasEarlier: false,
   revision: 'fixture',
@@ -49,7 +49,7 @@ describe('SessionTimeline', () => {
         { id: 'user-1', parentId: null, raw: { message: { content: 'question', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
         { id: 'assistant-1', parentId: 'user-1', raw: { message: { content: [{ thinking: 'historical reasoning', type: 'thinking' }, { id: 'call-1', name: 'read', type: 'toolCall' }], role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:01.000Z', type: 'message' },
         { id: 'tool-1', parentId: 'assistant-1', raw: { message: { content: [], isError: false, role: 'toolResult', toolCallId: 'call-1', toolName: 'read' }, type: 'message' }, timestamp: '2026-09-22T00:00:02.000Z', type: 'message' },
-        { id: 'assistant-2', parentId: 'tool-1', raw: { message: { content: [{ text: 'answer', type: 'text' }], role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:03.000Z', type: 'message' },
+        { id: 'assistant-2', parentId: 'tool-1', raw: { message: { content: [{ text: 'answer', type: 'text' }], role: 'assistant', stopReason: 'stop' }, type: 'message' }, timestamp: '2026-09-22T00:00:03.000Z', type: 'message' },
       ],
     }
     const markup = render(<SessionTimeline error={false} history={refreshed} isLoading={false} onRetry={() => undefined} />)

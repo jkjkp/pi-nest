@@ -98,13 +98,14 @@ describe('projectTurnPresentation', () => {
 })
 
 describe('turn elapsed time', () => {
-  it('uses a terminal event for total completed Turn duration and falls back to the final observed event', () => {
+  it('uses a terminal event for total completed Turn duration and leaves an unfinished Turn unknown', () => {
     const ended = item([], [event('message_update', 1), event('turn_end', 45)])
-    const fallback = item([], [event('message_update', 12)])
+    const unfinished = item([], [event('message_update', 12)])
 
     expect(turnCompletedAt(ended)).toBe('2026-09-22T00:00:45.000Z')
     expect(turnElapsed(ended, false)).toBe(45_000)
-    expect(turnElapsed(fallback, false)).toBe(12_000)
+    expect(turnCompletedAt(unfinished)).toBeUndefined()
+    expect(turnElapsed(unfinished, false)).toBeUndefined()
   })
 
   it('uses browser-clock runtime timing through completion instead of falling back to event time', () => {
@@ -117,13 +118,28 @@ describe('turn elapsed time', () => {
     expect(turnElapsed(completed, false)).toBe(26_000)
   })
 
-  it('does not make duration go backwards when persisted history replaces a completed live turn', () => {
+  it('uses Pi history time when a recovered browser completion crosses midnight', () => {
     const [persisted] = timelineItems([
-      { id: 'user-1', parentId: null, raw: { message: { content: 'go', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:05.000Z', type: 'message' },
-      { id: 'turn-end', parentId: 'user-1', raw: { type: 'turn_end' }, timestamp: '2026-09-22T00:00:12.000Z', type: 'turn_end' },
-    ], [{ completedAt: '2026-09-22T00:00:26.000Z', events: [], historyTurnCount: 0, id: 'pending:session-1', prompt: 'go', startedAt: '2026-09-22T00:00:00.000Z' }], [])
+      { id: 'user-1', parentId: null, raw: { message: { content: 'go', role: 'user' }, type: 'message' }, timestamp: '2026-09-26T15:24:55.129Z', type: 'message' },
+      { id: 'turn-end', parentId: 'user-1', raw: { type: 'agent_settled' }, timestamp: '2026-09-26T15:25:24.435Z', type: 'agent_settled' },
+    ], [{ completedAt: '2026-09-27T05:15:12.000Z', events: [], historyTurnCount: 0, id: 'pending:session-1', prompt: 'go', startedAt: '2026-09-26T15:24:55.129Z' }], [])
 
-    expect(turnElapsed(persisted!, false)).toBe(26_000)
+    expect(turnElapsed(persisted!, false)).toBe(29_306)
+  })
+
+  it('uses persisted assistant stop reasons instead of later recovery records', () => {
+    const [first, second] = timelineItems([
+      { id: 'user-1', parentId: null, raw: { message: { content: '你是', role: 'user' }, type: 'message' }, timestamp: '2026-09-24T14:44:57.037Z', type: 'message' },
+      { id: 'assistant-1', parentId: 'user-1', raw: { message: { content: '我是助手', role: 'assistant', stopReason: 'stop' }, type: 'message' }, timestamp: '2026-09-24T14:44:57.850Z', type: 'message' },
+      { id: 'recovery', parentId: 'assistant-1', raw: { type: 'custom' }, timestamp: '2026-09-24T14:52:48.698Z', type: 'custom' },
+      { id: 'system-2', parentId: 'recovery', raw: { message: { content: '', role: 'system' }, type: 'message' }, timestamp: '2026-09-26T13:53:10.892Z', type: 'message' },
+      { id: 'user-2', parentId: 'system-2', raw: { message: { content: 'thinking 会保存吗', role: 'user' }, type: 'message' }, timestamp: '2026-09-26T13:53:10.896Z', type: 'message' },
+      { id: 'assistant-2', parentId: 'user-2', raw: { message: { content: '会保存', role: 'assistant', stopReason: 'stop' }, type: 'message' }, timestamp: '2026-09-26T13:53:24.841Z', type: 'message' },
+      { id: 'custom-2', parentId: 'assistant-2', raw: { type: 'custom' }, timestamp: '2026-09-26T14:23:51.983Z', type: 'custom' },
+    ], [], [])
+
+    expect(turnElapsed(first!, false)).toBe(813)
+    expect(turnElapsed(second!, false)).toBe(13_945)
   })
 
   it('formats Turn and short activity durations for people', () => {

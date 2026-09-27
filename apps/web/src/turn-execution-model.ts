@@ -112,8 +112,12 @@ export function projectTurnPresentation(item: TimelineItem, isRunning: boolean):
 }
 
 export function turnCompletedAt(item: TimelineItem) {
-  const terminal = [...item.events].reverse().find((event) => ['turn_end', 'agent_end', 'agent_settled', 'aborted'].includes(eventType(event)))
-  return terminal?.observedAt ?? item.events.at(-1)?.observedAt
+  const terminal = [...item.events].reverse().find((event) => {
+    if (['turn_end', 'agent_end', 'agent_settled', 'aborted'].includes(eventType(event))) return true
+    const message = record(event.event.message)
+    return message?.role === 'assistant' && typeof message.stopReason === 'string'
+  })
+  return terminal?.observedAt
 }
 
 export function turnElapsed(item: TimelineItem, isRunning: boolean, now = Date.now()) {
