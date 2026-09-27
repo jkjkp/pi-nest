@@ -31,7 +31,10 @@ const projectCwdSchema = z.object({ cwd: z.string().trim().min(1).max(4_096) }).
 const historyQuerySchema = z.object({
   before: z.string().trim().min(1).max(512).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
+  revision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict()
+
+const turnIndexQuerySchema = z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict()
 
 const settingsSchema = z.object({
   compactionEnabled: z.boolean().optional(),
@@ -47,6 +50,10 @@ type SessionResolution =
   | { kind: 'found'; session: PiSessionSummary }
   | { kind: 'missing' }
   | { kind: 'failed' }
+
+function historyRevisionChanged(cause: unknown) {
+  return cause instanceof PiSessionHistorySourceChangedError || cause instanceof Error && cause.name === 'PiSessionHistoryRevisionError'
+}
 
 async function resolveSession(sessionId: string): Promise<SessionResolution> {
   try {
@@ -148,6 +155,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
           expectedCwd: resolved.session.cwd,
           expectedSessionId: resolved.session.id,
           ...(query.data.limit === undefined ? {} : { limit: query.data.limit }),
+          ...(query.data.revision === undefined ? {} : { revision: query.data.revision }),
           sessionFile: resolved.session.sessionFile,
         })
         context.header('Cache-Control', 'no-store')
@@ -157,7 +165,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
         })
       } catch (cause) {
         if (cause instanceof PiSessionHistoryCursorError) return context.json({ error: 'Invalid history page request' }, 400)
-        if (cause instanceof PiSessionHistorySourceChangedError) {
+        if (historyRevisionChanged(cause)) {
           return context.json({ error: 'Pi session changed while reading history' }, 409)
         }
         return context.json({ error: 'Failed to read Pi session history' }, 500)
@@ -165,6 +173,8 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
     })
     .get('/sessions/:sessionId/turn-index', async (context) => {
       const sessionId = context.req.param('sessionId')
+      const query = turnIndexQuerySchema.safeParse(context.req.query())
+      if (!query.success) return context.json({ error: 'Invalid Turn index request' }, 400)
       if (runtime.isPromptActive(sessionId)) return context.json({ error: 'Pi session is running' }, 409)
 
       const resolved = await resolveSession(sessionId)
@@ -176,12 +186,13 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
         const turnIndex = readPiSessionTurnIndex({
           expectedCwd: resolved.session.cwd,
           expectedSessionId: resolved.session.id,
+          ...(query.data.revision === undefined ? {} : { revision: query.data.revision }),
           sessionFile: resolved.session.sessionFile,
         })
         context.header('Cache-Control', 'no-store')
         return context.json(turnIndex)
       } catch (cause) {
-        if (cause instanceof PiSessionHistorySourceChangedError) return context.json({ error: 'Pi session changed while reading history' }, 409)
+        if (historyRevisionChanged(cause)) return context.json({ error: 'Pi session changed while reading history' }, 409)
         return context.json({ error: 'Failed to read Pi session history' }, 500)
       }
     })
