@@ -6,7 +6,7 @@ export { createPiSession, deletePiSession, renamePiSession, revealPiWorkspace } 
 export type { PiCreatedSession, PiDeletedSession, PiSessionMutationOptions } from './manage-session.js'
 export { readPiSettings, updatePiSettings } from './settings.js'
 export type { PiRuntimeSettings, PiSettingsSnapshot, PiSettingsUpdate } from './settings.js'
-export { defaultPiSessionHistoryTurnLimit, PiSessionHistoryCursorError, PiSessionHistorySourceChangedError, readPiSessionHistory, readPiSessionTurnIndex } from './read-session-history.js'
+export { defaultPiSessionHistoryTurnLimit, PiSessionHistoryCursorError, PiSessionHistoryRevisionError, PiSessionHistorySourceChangedError, readPiSessionHistory, readPiSessionTurnIndex } from './read-session-history.js'
 export type {
   PiSessionHistory,
   PiSessionHistoryEntry,

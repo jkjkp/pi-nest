@@ -16,6 +16,7 @@ export type PiSessionHistory = {
   beforeCursor?: string
   entries: PiSessionHistoryEntry[]
   hasEarlier: boolean
+  revision: string
 }
 
 export type PiSessionHistoryOptions = {
@@ -23,6 +24,7 @@ export type PiSessionHistoryOptions = {
   expectedCwd?: string
   expectedSessionId: string
   limit?: number
+  revision?: string
   sessionFile: string
 }
 
@@ -33,7 +35,7 @@ export type PiSessionTurnIndexEntry = {
   startedAt: string
 }
 
-export type PiSessionTurnIndex = { entries: PiSessionTurnIndexEntry[] }
+export type PiSessionTurnIndex = { entries: PiSessionTurnIndexEntry[]; revision: string }
 
 export type PiSessionTurnIndexOptions = Omit<PiSessionHistoryOptions, 'before' | 'limit'>
 
@@ -50,6 +52,13 @@ export class PiSessionHistoryCursorError extends Error {
   constructor() {
     super('Pi native session history cursor is invalid')
     this.name = 'PiSessionHistoryCursorError'
+  }
+}
+
+export class PiSessionHistoryRevisionError extends Error {
+  constructor() {
+    super('Pi native session history revision is no longer current')
+    this.name = 'PiSessionHistoryRevisionError'
   }
 }
 
@@ -108,11 +117,12 @@ function promptPreview(entry: SessionEntry) {
   return text.replace(/\s+/g, ' ').trim().slice(0, 160) || '无用户正文'
 }
 
-function withContextEntries<T>({ expectedCwd, expectedSessionId, sessionFile }: PiSessionTurnIndexOptions, read: (entries: SessionEntry[]) => T): T {
+function withContextEntries<T>({ expectedCwd, expectedSessionId, revision, sessionFile }: PiSessionTurnIndexOptions, read: (entries: SessionEntry[], revision: string) => T): T {
   let temporaryDirectory: string | undefined
 
   try {
     const hashBefore = fingerprint(sessionFile)
+    if (revision !== undefined && revision !== hashBefore) throw new PiSessionHistoryRevisionError()
     temporaryDirectory = mkdtempSync(join(tmpdir(), 'pi-nest-history-'))
     chmodSync(temporaryDirectory, 0o700)
     const temporarySessionFile = join(temporaryDirectory, 'session.jsonl')
@@ -132,9 +142,9 @@ function withContextEntries<T>({ expectedCwd, expectedSessionId, sessionFile }: 
 
     const contextEntries = session.buildContextEntries()
     if (hashBefore !== fingerprint(sessionFile)) throw new PiSessionHistorySourceChangedError()
-    return read(contextEntries)
+    return read(contextEntries, hashBefore)
   } catch (cause) {
-    if (cause instanceof PiSessionHistorySourceChangedError || cause instanceof PiSessionHistoryCursorError) throw cause
+    if (cause instanceof PiSessionHistoryRevisionError || cause instanceof PiSessionHistorySourceChangedError || cause instanceof PiSessionHistoryCursorError) throw cause
     throw new Error('Failed to read Pi session history', { cause })
   } finally {
     if (temporaryDirectory) rmSync(temporaryDirectory, { force: true, recursive: true })
@@ -146,9 +156,10 @@ export function readPiSessionHistory({
   expectedCwd,
   expectedSessionId,
   limit = defaultPiSessionHistoryTurnLimit,
+  revision,
   sessionFile,
 }: PiSessionHistoryOptions): PiSessionHistory {
-  return withContextEntries({ expectedCwd, expectedSessionId, sessionFile }, (contextEntries) => {
+  return withContextEntries({ expectedCwd, expectedSessionId, revision, sessionFile }, (contextEntries, snapshotRevision) => {
     const contextTurns = turns(contextEntries)
     const end = before === undefined ? contextTurns.length : contextTurns.findIndex((turn) => turnStartId(turn[0]!) === before)
     if (end < 0) throw new PiSessionHistoryCursorError()
@@ -159,17 +170,19 @@ export function readPiSessionHistory({
       ...(start > 0 ? { beforeCursor: turnStartId(page[0]![0]!) } : {}),
       entries: page.flat().map(mapEntry),
       hasEarlier: start > 0,
+      revision: snapshotRevision,
     }
   })
 }
 
 export function readPiSessionTurnIndex(options: PiSessionTurnIndexOptions): PiSessionTurnIndex {
-  return withContextEntries(options, (entries) => ({
+  return withContextEntries(options, (entries, revision) => ({
     entries: turns(entries).map((turn, index) => {
       const entry = turn[0]!
       const startedAt = (entry as unknown as Record<string, unknown>).timestamp
       if (typeof startedAt !== 'string') throw new Error('Pi SDK returned an invalid native session entry')
       return { id: turnStartId(entry), index: index + 1, promptPreview: promptPreview(entry), startedAt }
     }),
+    revision,
   }))
 }

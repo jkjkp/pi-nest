@@ -80,8 +80,9 @@ describe('readPiSessionHistory', () => {
       expectedCwd: '/working',
       expectedSessionId: 'session-1',
       sessionFile: sourceSessionFile,
-    })).toEqual({
+    })).toMatchObject({
       hasEarlier: false,
+      revision: expect.any(String),
       entries: [
         {
           id: 'user-1',
@@ -193,12 +194,21 @@ describe('readPiSessionHistory', () => {
     ]))
     const { readPiSessionTurnIndex } = await import('./read-session-history.js')
 
-    expect(readPiSessionTurnIndex({ expectedSessionId: 'session-1', sessionFile: sourceSessionFile })).toEqual({
+    expect(readPiSessionTurnIndex({ expectedSessionId: 'session-1', sessionFile: sourceSessionFile })).toMatchObject({
+      revision: expect.any(String),
       entries: [
         { id: 'user-1', index: 1, promptPreview: 'first prompt', startedAt: '2026-09-21T00:00:00.000Z' },
         { id: 'user-2', index: 2, promptPreview: 'second prompt', startedAt: '2026-09-21T00:00:02.000Z' },
       ],
     })
+  })
+
+  it('rejects a page or index request from a different source revision', async () => {
+    open.mockReturnValue(session([]))
+    const { PiSessionHistoryRevisionError, readPiSessionHistory, readPiSessionTurnIndex } = await import('./read-session-history.js')
+
+    expect(() => readPiSessionHistory({ expectedSessionId: 'session-1', revision: '0'.repeat(64), sessionFile: sourceSessionFile })).toThrow(PiSessionHistoryRevisionError)
+    expect(() => readPiSessionTurnIndex({ expectedSessionId: 'session-1', revision: '0'.repeat(64), sessionFile: sourceSessionFile })).toThrow(PiSessionHistoryRevisionError)
   })
 
   it('fails safely when SDK binding validation fails and cleans the temporary copy', async () => {
