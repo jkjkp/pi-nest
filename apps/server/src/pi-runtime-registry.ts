@@ -144,11 +144,19 @@ export class PiRuntimeRegistry {
 
   async respondToExtension(sessionId: string, response: Record<string, unknown>) {
     const id = typeof response.id === 'string' ? response.id : undefined
-    if (!id || !this.isPromptActive(sessionId) || !this.pendingExtensionDialogs.get(sessionId)?.has(id)) return false
+    const pending = id ? this.pendingExtensionDialogs.get(sessionId) : undefined
+    if (!id || !pending?.delete(id)) return false
     const entry = this.entries.get(sessionId)
-    if (!entry) return false
-    await entry.host.respondToExtension(response)
-    this.pendingExtensionDialogs.get(sessionId)?.delete(id)
+    if (!entry) {
+      pending.add(id)
+      return false
+    }
+    try {
+      await entry.host.respondToExtension(response)
+    } catch (cause) {
+      pending.add(id)
+      throw cause
+    }
     return true
   }
 

@@ -28,6 +28,7 @@ function hostMock() {
     }),
     onFailure: vi.fn((listener) => { failures.add(listener); return () => failures.delete(listener) }),
     prompt: vi.fn().mockResolvedValue({ model: undefined, stopReason: 'stop' }),
+    respondToExtension: vi.fn().mockResolvedValue(undefined),
     start: vi.fn().mockResolvedValue({}),
     emit: (event: Record<string, unknown>) => { for (const listener of listeners) listener({ event, observedAt: 'now', sessionId: session.id }) },
     fail: (failure: { kind: string; message: string }) => { for (const listener of failures) listener(failure) },
@@ -36,6 +37,33 @@ function hostMock() {
 }
 
 describe('PiRuntimeRegistry', () => {
+  it('accepts one pending extension response after the prompt has settled', async () => {
+    const host = hostMock()
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const events: number[] = []
+    await registry.subscribe(session.id, 0, (event) => events.push(event.sequence), () => undefined)
+    await registry.startPrompt(session, 'make a plan')
+    host.emit({ id: 'plan-choice', method: 'select', options: ['Implement here'], title: 'Plan ready', type: 'extension_ui_request' })
+    await vi.waitFor(() => expect(events).toEqual([1]))
+
+    await expect(registry.respondToExtension(session.id, { id: 'plan-choice', type: 'extension_ui_response', value: 'Implement here' })).resolves.toBe(true)
+    expect(host.respondToExtension).toHaveBeenCalledWith({ id: 'plan-choice', type: 'extension_ui_response', value: 'Implement here' })
+    await expect(registry.respondToExtension(session.id, { id: 'plan-choice', type: 'extension_ui_response', value: 'Implement here' })).resolves.toBe(false)
+    await registry.close()
+  })
+
+  it('keeps a pending dialog available when Pi stdin rejects its response', async () => {
+    const host = hostMock()
+    host.respondToExtension.mockRejectedValueOnce(new Error('stdin closed'))
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    await registry.resume(session)
+    host.emit({ id: 'dialog-1', method: 'confirm', title: 'Continue?', type: 'extension_ui_request' })
+    await vi.waitFor(() => expect(registry.respondToExtension(session.id, { confirmed: true, id: 'dialog-1', type: 'extension_ui_response' })).rejects.toThrow('stdin closed'))
+
+    await expect(registry.respondToExtension(session.id, { confirmed: true, id: 'dialog-1', type: 'extension_ui_response' })).resolves.toBe(true)
+    await registry.close()
+  })
+
   it('watches a cold session without creating a Pi host, and only resume creates it', async () => {
     const host = hostMock()
     const createHost = vi.fn(() => host as unknown as PiRuntimeHost)

@@ -186,4 +186,16 @@ describe('RuntimeWebSocketBroker', () => {
     expect(registry.respondToExtension).toHaveBeenCalledWith('session-1', { id: 'dialog-1', type: 'extension_ui_response', value: 'yes' })
     expect(client.sent).toContainEqual({ command: 'get_available_models', data: { models: [{ id: 'model-2', name: 'Model 2', provider: 'test' }] }, id: 'm1', sessionId: 'session-1', type: 'ack' })
   })
+
+  it('forwards cancellation unchanged for a pending extension dialog', async () => {
+    const registry = runtime()
+    const broker = new RuntimeWebSocketBroker(registry as never)
+    const client = socket()
+    broker.open(client)
+    await broker.message(client, JSON.stringify({ id: 'w1', sessionId: 'session-1', type: 'watch' }))
+    await broker.message(client, JSON.stringify({ cancelled: true, dialogId: 'dialog-1', id: 'c1', sessionId: 'session-1', type: 'extension_ui_response' }))
+
+    expect(registry.respondToExtension).toHaveBeenCalledWith('session-1', { cancelled: true, id: 'dialog-1', type: 'extension_ui_response' })
+    expect(client.sent).toContainEqual({ command: 'extension_ui_response', id: 'c1', sessionId: 'session-1', type: 'ack' })
+  })
 })
