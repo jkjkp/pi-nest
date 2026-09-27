@@ -6,7 +6,7 @@ type SessionRunControllerOptions = {
   runtime: RuntimeWebSocketClient
 }
 
-type StartSessionRunOptions = { historyTurnCount?: number; prompt: string; sessionId: string }
+type StartSessionRunOptions = { historyTurnCount?: number; prompt: string; sessionId: string; startedAt?: string }
 type ActiveRun = { stopReason: string | undefined }
 
 export type SessionRunController = {
@@ -45,12 +45,12 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     void invalidateHistory(sessionId)
   }
 
-  function beginRun({ historyTurnCount, prompt, sessionId }: StartSessionRunOptions) {
+  function beginRun({ historyTurnCount, prompt, sessionId, startedAt }: StartSessionRunOptions) {
     activeRuns.set(sessionId, { stopReason: undefined })
     useWorkspaceStore.getState().setRun(sessionId, {
       status: 'running',
       systemEvents: [],
-      turns: [{ events: [], ...(historyTurnCount === undefined ? {} : { historyTurnCount }), id: `pending:${sessionId}`, prompt, startedAt: new Date().toISOString() }],
+      turns: [{ events: [], ...(historyTurnCount === undefined ? {} : { historyTurnCount }), id: `pending:${sessionId}`, prompt, startedAt: startedAt ?? new Date().toISOString() }],
     })
   }
 
@@ -73,7 +73,14 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   })
 
   runtime.onError((error) => {
-    if ((error.code === 'RESUME_GAP' || error.code === 'RUNTIME_RESTARTED') && error.sessionId) {
+    if (error.code === 'RUNTIME_RESTARTED' && error.sessionId) {
+      activeRuns.delete(error.sessionId)
+      useWorkspaceStore.getState().updateRun(error.sessionId, { error: 'Pi 运行服务已重启，本轮已中断。', status: 'error' })
+      useWorkspaceStore.getState().setWatchState(error.sessionId, 'watching')
+      void invalidateHistory(error.sessionId)
+      return
+    }
+    if (error.code === 'RESUME_GAP' && error.sessionId) {
       activeRuns.delete(error.sessionId)
       useWorkspaceStore.getState().clearRun(error.sessionId)
       useWorkspaceStore.getState().setWatchState(error.sessionId, 'watching')
@@ -93,6 +100,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
 
   runtime.onSessionSnapshot((snapshot) => {
     useWorkspaceStore.getState().setWatchState(snapshot.sessionId, 'ready')
+    if (snapshot.activeTurn && !activeRuns.has(snapshot.sessionId)) beginRun({ ...snapshot.activeTurn, sessionId: snapshot.sessionId })
   })
 
   runtime.onRuntimeStatus((status) => {

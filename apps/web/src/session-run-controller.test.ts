@@ -25,7 +25,7 @@ function runtimeMock() {
     onSessionSnapshot: vi.fn((listener: (snapshot: any) => void) => { snapshots.add(listener); return () => snapshots.delete(listener) }),
     prompt: vi.fn().mockResolvedValue(undefined),
     emit: (event: PiRuntimeEvent) => { for (const listener of events) listener(event) },
-    fail: (error: { message: string; sessionId?: string }) => { for (const listener of errors) listener(error) },
+    fail: (error: { code?: string; message: string; sessionId?: string }) => { for (const listener of errors) listener(error) },
     snapshot: (snapshot: any) => { for (const listener of snapshots) listener(snapshot) },
     resync: (message: { sessionId: string }) => { for (const listener of resyncs) listener(message) },
     status: (status: { error?: string; lifecycle: any; revision: number; sessionId: string }) => { for (const listener of statuses) listener(status) },
@@ -95,6 +95,19 @@ describe('session run controller', () => {
     expect(run?.turns).toHaveLength(1)
     expect(run?.turns[0]).toMatchObject({ id: 'pending:session-a', prompt: 'first prompt' })
     expect(run?.turns[0]?.events.map((event) => event.turnId)).toEqual(['runtime-turn-1', 'runtime-turn-2'])
+  })
+
+  it('rebuilds an active Turn from its snapshot and makes a runtime restart visible', () => {
+    const runtime = runtimeMock()
+    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+
+    runtime.snapshot({ activeTurn: { prompt: 'resume me', startedAt: '2026-09-27T06:12:41.000Z' }, runtime: { lifecycle: 'active', revision: 2 }, sessionId: 'session-a' })
+    runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { delta: 'thinking', type: 'thinking_delta' } }, observedAt: 'now', sequence: 5, sessionId: 'session-a', turnId: 'turn-1' })
+
+    expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'running', turns: [{ prompt: 'resume me', startedAt: '2026-09-27T06:12:41.000Z' }] })
+    expect(useWorkspaceStore.getState().runs['session-a']?.turns[0]?.events).toHaveLength(1)
+    runtime.fail({ code: 'RUNTIME_RESTARTED', message: 'Pi runtime server restarted', sessionId: 'session-a' })
+    expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ error: 'Pi 运行服务已重启，本轮已中断。', status: 'error' })
   })
 
   it('keeps an active old foreground session as a background watch', async () => {

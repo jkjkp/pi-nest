@@ -11,8 +11,10 @@ export type RuntimeLifecycle = 'notLoaded' | 'loading' | 'idle' | 'active' | 'fa
 export type RuntimeFailureKind = 'process_error' | 'process_exit' | 'protocol_error' | 'rpc_error' | 'rpc_timeout' | 'startup_timeout'
 export type RuntimeStatus = { error?: string; failureKind?: RuntimeFailureKind; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
 export type SessionSnapshot = {
+  activeTurn?: { prompt: string; startedAt: string }
   atSequence: number
   extensionUi: { freshness: 'known' | 'restored' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
+  replayAfter?: number
   runtime: Omit<RuntimeStatus, 'sessionId'>
   sessionId: string
 }
@@ -289,9 +291,18 @@ export class RuntimeWebSocketClient {
 
   private handleSnapshot(message: { type: 'session_snapshot' } & SessionSnapshot) {
     if (!Number.isInteger(message.atSequence) || message.atSequence < 0) return
+    const watch = this.watched.get(message.sessionId)
+    if (watch && Number.isInteger(message.replayAfter) && message.replayAfter! >= 0 && message.replayAfter! < watch.after) {
+      watch.after = message.replayAfter!
+      this.saveWatches()
+    }
+    const activeTurn = message.activeTurn && typeof message.activeTurn.prompt === 'string' && typeof message.activeTurn.startedAt === 'string'
+      ? { prompt: message.activeTurn.prompt, startedAt: message.activeTurn.startedAt }
+      : undefined
     this.projectionFloors.set(message.sessionId, message.atSequence)
     this.uiFreshness.set(message.sessionId, message.extensionUi.freshness)
     const snapshot: SessionSnapshot = {
+      ...(activeTurn ? { activeTurn } : {}),
       atSequence: message.atSequence,
       extensionUi: {
         freshness: message.extensionUi.freshness,
@@ -299,6 +310,7 @@ export class RuntimeWebSocketClient {
         widgets: Object.fromEntries(Object.entries(message.extensionUi.widgets).map(([key, lines]) => [key, [...lines]])),
       },
       runtime: { ...message.runtime },
+      ...(Number.isInteger(message.replayAfter) && message.replayAfter! >= 0 ? { replayAfter: message.replayAfter } : {}),
       sessionId: message.sessionId,
     }
     for (const listener of this.sessionSnapshots) listener(snapshot)
