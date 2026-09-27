@@ -15,6 +15,7 @@ import { SessionInspector } from './session-inspector.js'
 import { SessionNavigation } from './session-navigation.js'
 import type { SessionRunController } from './session-run-controller.js'
 import { SessionTimeline } from './session-timeline.js'
+import { ExtensionUiInline } from './runtime-extension-ui.js'
 import type { TurnJumpAlignment } from './timeline-pagination.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { createSession, deleteSession, fetchSessionHistory, fetchSessionTurnIndex, fetchSessions, renameSession, revealProjectInFinder } from './workspace-api.js'
@@ -494,6 +495,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           <div className="shrink-0 px-4 sm:px-6">
             <div className="conversation-stage mb-4">
               <div className="conversation-stage-content">
+                <ExtensionUiInline sessionId={selectedSessionId} />
                 <div className="flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:px-6">
               <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
               <Textarea
