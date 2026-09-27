@@ -133,6 +133,18 @@ describe('timelineItems', () => {
     expect(streamed[0]?.runtimeTiming).toEqual(initial[0]?.runtimeTiming)
   })
 
+  it('reuses historical projections and navigation while the latest Turn streams', () => {
+    const history = [{ id: 'user-1', parentId: null, raw: { message: { content: 'old', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' }]
+    const initialTurns = [{ events: [runtime(1, { type: 'message_update', assistantMessageEvent: { delta: 'one', type: 'text_delta' } }, 'live')], historyTurnCount: 1, id: 'live', prompt: 'new', startedAt: '2026-09-22T00:01:00.000Z' }]
+    const initial = timelineItems(history, initialTurns, [])
+    const navigation = timelineNavigationEntries(initial)
+    const streamed = timelineItems(history, [{ ...initialTurns[0]!, events: [...initialTurns[0]!.events, runtime(2, { type: 'message_update', assistantMessageEvent: { delta: ' two', type: 'text_delta' } }, 'live')] }], [])
+
+    expect(timelineItems(history, initialTurns, [])).toBe(initial)
+    expect(streamed[0]).toBe(initial[0])
+    expect(timelineNavigationEntries(streamed)).toBe(navigation)
+  })
+
   it('replaces the provisional live turn with history while retaining its browser-clock timing', () => {
     const items = timelineItems([
       { id: 'user-1', parentId: null, raw: { message: { content: 'old', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
@@ -141,6 +153,15 @@ describe('timelineItems', () => {
 
     expect(items.map((item) => item.id)).toEqual(['user-1', 'user-2'])
     expect(items[1]).toMatchObject({ runtimeTiming: { completedAt: '2026-09-22T00:01:26.000Z', startedAt: '2026-09-22T00:01:00.000Z' }, startedAt: '2026-09-22T00:01:00.000Z' })
+  })
+
+  it('reconciles the latest runtime Turn when a paged history omits earlier Turns', () => {
+    const items = timelineItems([
+      { id: 'user-41', parentId: null, raw: { message: { content: 'new', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:01:00.000Z', type: 'message' },
+    ], [{ events: [], historyTurnCount: 40, id: 'pending:session-1', prompt: 'new', startedAt: '2026-09-22T00:01:00.000Z' }], [])
+
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ id: 'user-41', runtimeTiming: { startedAt: '2026-09-22T00:01:00.000Z' } })
   })
 
   it('keeps full user text for the history panel while deriving a bounded navigation label', () => {

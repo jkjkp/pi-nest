@@ -53,6 +53,13 @@ export type TimelineNavigationEntry = {
   startedAt: string
 }
 
+const emptyHistory: PiSessionHistoryEntry[] = []
+const emptyTimeline: TimelineItem[] = []
+const historyItemCache = new WeakMap<PiSessionHistoryEntry[], TimelineItem[]>()
+const timelineItemCache = new WeakMap<PiSessionHistoryEntry[], WeakMap<RuntimeTurn[], TimelineItem[]>>()
+const navigationCache = new WeakMap<TimelineItem[], TimelineNavigationEntry[]>()
+let previousNavigation: { entries: TimelineNavigationEntry[]; items: TimelineItem[] } | undefined
+
 function record(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 }
@@ -222,18 +229,43 @@ function historyItems(entries: PiSessionHistoryEntry[]): TimelineItem[] {
   return items
 }
 
+function memoizedHistoryItems(entries: PiSessionHistoryEntry[]) {
+  const cached = historyItemCache.get(entries)
+  if (cached) return cached
+  const items = historyItems(entries)
+  historyItemCache.set(entries, items)
+  return items
+}
+
+function sameTiming(left: TurnTiming | undefined, right: TurnTiming) {
+  return left?.startedAt === right.startedAt && left?.completedAt === right.completedAt
+}
+
 export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turns: RuntimeTurn[], _systemEvents: PiRuntimeEvent[]): TimelineItem[] {
-  const items = history ? historyItems(history) : []
+  const historyKey = history ?? emptyHistory
+  let cachedForHistory = timelineItemCache.get(historyKey)
+  if (!cachedForHistory) {
+    cachedForHistory = new WeakMap()
+    timelineItemCache.set(historyKey, cachedForHistory)
+  }
+  const cached = cachedForHistory.get(turns)
+  if (cached) return cached
+
+  const historyProjection = history ? memoizedHistoryItems(history) : emptyTimeline
+  const items: TimelineItem[] = turns.length > 0 ? [...historyProjection] : historyProjection
   for (const turn of turns) {
     // A local turn exists only after an explicit user prompt has been accepted.
     // Runtime events may enrich it, but cannot create another conversation node.
     if (!turn.prompt?.trim()) continue
     const runtimeTiming = { ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }), startedAt: turn.startedAt }
-    const persisted = turn.historyTurnCount === undefined ? undefined : items[turn.historyTurnCount]
+    const indexedPersisted = turn.historyTurnCount === undefined ? undefined : items[turn.historyTurnCount]
+    const fallbackPersisted = history && turn.historyTurnCount !== undefined && items.length <= turn.historyTurnCount && items.at(-1)?.prompt === turn.prompt ? items.at(-1) : undefined
+    const persisted = indexedPersisted ?? fallbackPersisted
     if (persisted) {
       // History can arrive before the final runtime event. Keep its canonical content,
       // but retain the browser-clock timing captured for the live turn.
-      persisted.runtimeTiming = runtimeTiming
+      const index = indexedPersisted ? turn.historyTurnCount! : items.length - 1
+      if (!sameTiming(persisted.runtimeTiming, runtimeTiming)) items[index] = { ...persisted, runtimeTiming }
       continue
     }
     if (turn.historyTurnCount !== undefined && items.length > turn.historyTurnCount) continue
@@ -241,17 +273,30 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
     for (const event of turn.events) projectEvent(item, runtimeEvent(event))
     items.push(item)
   }
+  cachedForHistory.set(turns, items)
   return items
 }
 
 export function timelineNavigationEntries(items: TimelineItem[]): TimelineNavigationEntry[] {
-  return items.map((item, index) => ({
+  const cached = navigationCache.get(items)
+  if (cached) return cached
+  if (previousNavigation && items.length === previousNavigation.items.length && items.every((item, index) => {
+    const entry = previousNavigation!.entries[index]
+    return entry?.id === item.id && entry.prompt === (item.prompt ?? '') && entry.startedAt === item.startedAt
+  })) {
+    navigationCache.set(items, previousNavigation.entries)
+    return previousNavigation.entries
+  }
+  const entries = items.map((item, index) => ({
     id: item.id,
     index: index + 1,
     prompt: item.prompt ?? '',
     promptPreview: navigationPreview(item.prompt),
     startedAt: item.startedAt,
   }))
+  navigationCache.set(items, entries)
+  previousNavigation = { entries, items }
+  return entries
 }
 
 function navigationPreview(prompt: string | undefined) {

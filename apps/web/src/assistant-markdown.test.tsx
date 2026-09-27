@@ -5,6 +5,10 @@ import { AssistantMarkdown } from './assistant-markdown.js'
 import { MermaidDiagram } from './mermaid-diagram.js'
 
 describe('AssistantMarkdown', () => {
+  it('memoizes unchanged completed Markdown', () => {
+    expect(AssistantMarkdown).toMatchObject({ $$typeof: Symbol.for('react.memo') })
+  })
+
   it('renders only the supported Markdown reading primitives', () => {
     const markup = renderToStaticMarkup(<AssistantMarkdown isStreaming={false} source={'# Heading\n\n**bold** and `code` and *plain emphasis*\n\n- one\n- two\n\n| key | value |\n| --- | --- |\n| a | b |\n\n[link](https://example.com)\n\n<script>alert(1)</script>'} />)
 

@@ -1,4 +1,4 @@
-import { Children, isValidElement, type ComponentProps } from 'react'
+import { Children, isValidElement, memo, type ComponentProps } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -54,10 +54,10 @@ function markdownComponents(isStreaming: boolean): Components {
   }
 }
 
-export function AssistantMarkdown({ isStreaming, source }: { isStreaming: boolean; source: string }) {
+export const AssistantMarkdown = memo(function AssistantMarkdown({ isStreaming, source }: { isStreaming: boolean; source: string }) {
   return (
     <ReactMarkdown allowedElements={allowedElements} components={markdownComponents(isStreaming)} remarkPlugins={[remarkGfm]} skipHtml unwrapDisallowed urlTransform={safeUrl}>
       {source}
     </ReactMarkdown>
   )
-}
+})

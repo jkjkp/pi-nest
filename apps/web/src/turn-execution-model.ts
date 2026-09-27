@@ -14,6 +14,8 @@ export type TurnPresentation = {
   hasExecution: boolean
 }
 
+const presentationCache = new WeakMap<TimelineItem, { completed?: TurnPresentation; running?: TurnPresentation }>()
+
 function record(value: unknown) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 }
@@ -81,7 +83,7 @@ function activity(part: TimelinePart, index: number): TurnActivity {
   return { changes, id, kind: 'file_change', label: changes.length ? `编辑 ${changes.length} 个文件` : '文件修改' }
 }
 
-export function projectTurnPresentation(item: TimelineItem, isRunning: boolean): TurnPresentation {
+function createTurnPresentation(item: TimelineItem, isRunning: boolean): TurnPresentation {
   const lastExecutionIndex = item.parts.reduce((last, part, index) => part.kind === 'assistant_text' ? last : index, -1)
   if (lastExecutionIndex < 0) return { activities: [], finalAnswer: item.parts.filter((part): part is Extract<TimelinePart, { kind: 'assistant_text' }> => part.kind === 'assistant_text'), hasExecution: false }
 
@@ -96,6 +98,17 @@ export function projectTurnPresentation(item: TimelineItem, isRunning: boolean):
     finalAnswer: item.parts.flatMap((part, index) => part.kind === 'assistant_text' && finalIndexes.has(index) ? [part] : []),
     hasExecution: true,
   }
+}
+
+export function projectTurnPresentation(item: TimelineItem, isRunning: boolean): TurnPresentation {
+  const cached = presentationCache.get(item)
+  const key = isRunning ? 'running' : 'completed'
+  if (cached?.[key]) return cached[key]
+  const presentation = createTurnPresentation(item, isRunning)
+  const entry = cached ?? {}
+  entry[key] = presentation
+  presentationCache.set(item, entry)
+  return presentation
 }
 
 export function turnCompletedAt(item: TimelineItem) {

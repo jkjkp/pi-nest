@@ -17,6 +17,14 @@ function tool(name: string, second: number): Extract<TimelinePart, { kind: 'tool
 function bash(second: number): Extract<TimelinePart, { kind: 'bash' }> { return { events: [event('bash_execution_start', second, { command: 'pnpm test' }), event('bash_execution_end', second + 8, { command: 'pnpm test', exitCode: 0, stdout: '65 passed' })], kind: 'bash' } }
 
 describe('projectTurnPresentation', () => {
+  it('memoizes each completed and running projection independently', () => {
+    const turn = item([text('answer', 1)])
+
+    expect(projectTurnPresentation(turn, false)).toBe(projectTurnPresentation(turn, false))
+    expect(projectTurnPresentation(turn, true)).toBe(projectTurnPresentation(turn, true))
+    expect(projectTurnPresentation(turn, true)).not.toBe(projectTurnPresentation(turn, false))
+  })
+
   it('keeps execution activities ordered and places post-execution assistant text in the final answer', () => {
     const presentation = projectTurnPresentation(item([thinking('checking', 1), tool('read_file', 2), thinking('editing', 3), bash(4), { events: [event('file_changes', 13, { changes: [{ added: 2, path: 'a.ts', removed: 1 }] })], kind: 'file_change' }, text('final', 14)]), false)
 
