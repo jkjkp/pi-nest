@@ -19,6 +19,8 @@ import { useWorkspaceStore } from './workspace-store.js'
 describe('workspace presentation helpers', () => {
   it('keeps every session state readable without relying on color', () => {
     expect(sessionStatusLabel('running')).toBe('● 推理中')
+    expect(sessionStatusLabel('submitted')).toBe('◌ 已提交，正在连接 Pi')
+    expect(sessionStatusLabel('awaiting_agent')).toBe('◌ Pi 已接收，正在准备执行')
     expect(sessionStatusLabel('complete')).toBe('✓ 已完成')
     expect(sessionStatusLabel('error')).toBe('× 请求失败')
     expect(sessionStatusLabel('aborted')).toBe('— 已中止')

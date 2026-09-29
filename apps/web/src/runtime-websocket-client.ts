@@ -1,6 +1,7 @@
 export type PiRuntimeEvent = {
   event: Record<string, unknown>
   observedAt: string
+  runId?: string
   sequence: number
   sessionId: string
   turnId?: string
@@ -11,14 +12,16 @@ export type RuntimeLifecycle = 'notLoaded' | 'loading' | 'idle' | 'active' | 'fa
 export type RuntimeFailureKind = 'process_error' | 'process_exit' | 'protocol_error' | 'rpc_error' | 'rpc_timeout' | 'startup_timeout'
 export type RuntimeStatus = { error?: string; failureKind?: RuntimeFailureKind; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
 export type SessionSnapshot = {
-  activeTurn?: { prompt: string; startedAt: string }
+  activeTurn?: { prompt?: string; runId: string; startedAt: string; waitingForExtension?: true }
   atSequence: number
   extensionUi: { freshness: 'known' | 'restored' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
+  pendingExtensionDialogs?: PiRuntimeEvent[]
   replayAfter?: number
   runtime: Omit<RuntimeStatus, 'sessionId'>
   sessionId: string
 }
 type RuntimeAck = { command: string; data?: unknown; id: string; sessionId: string; type: 'ack' }
+export type RuntimePromptAck = { runId: string }
 export type ResyncRequired = { reason: 'event_buffer_expired' | 'sequence_gap'; sessionId: string; type: 'resync_required' }
 type RuntimeMessage = RuntimeAck | RuntimeError | ResyncRequired | ({ type: 'pi_event' } & PiRuntimeEvent) | ({ type: 'session_snapshot' } & SessionSnapshot) | ({ type: 'runtime_status' } & RuntimeStatus)
 type RuntimeSocket = Pick<WebSocket, 'close' | 'readyState' | 'send'> & { addEventListener: WebSocket['addEventListener'] }
@@ -98,7 +101,7 @@ function savedWatches(): Array<[string, Watch]> {
     return Object.entries(value).flatMap(([sessionId, watch]) => {
       if (!watch || typeof watch !== 'object' || Array.isArray(watch)) return []
       const value = watch as Record<string, unknown>
-      return typeof value.after === 'number' && Number.isInteger(value.after) && (value.role === 'foreground' || value.role === 'background') ? [[sessionId, { after: value.after, role: value.role }]] : []
+      return typeof value.after === 'number' && Number.isInteger(value.after) && (value.role === 'foreground' || value.role === 'background') ? [[sessionId, { after: 0, role: value.role }]] : []
     })
   } catch {
     return []
@@ -183,7 +186,7 @@ export class RuntimeWebSocketClient {
 
   resumeRuntime(sessionId: string) { return this.command('resume', sessionId) }
 
-  prompt(sessionId: string, message: string) { return this.command('prompt', sessionId, message) }
+  prompt(sessionId: string, message: string) { return this.command<RuntimePromptAck>('prompt', sessionId, message) }
   abort(sessionId: string) { return this.command('abort', sessionId) }
   steer(sessionId: string, message: string) { return this.command('steer', sessionId, message) }
   followUp(sessionId: string, message: string) { return this.command('follow_up', sessionId, message) }
@@ -292,12 +295,14 @@ export class RuntimeWebSocketClient {
   private handleSnapshot(message: { type: 'session_snapshot' } & SessionSnapshot) {
     if (!Number.isInteger(message.atSequence) || message.atSequence < 0) return
     const watch = this.watched.get(message.sessionId)
-    if (watch && Number.isInteger(message.replayAfter) && message.replayAfter! >= 0 && message.replayAfter! < watch.after) {
-      watch.after = message.replayAfter!
+    if (watch) {
+      watch.after = Number.isInteger(message.replayAfter) && message.replayAfter! >= 0 && message.replayAfter! <= message.atSequence
+        ? message.replayAfter!
+        : message.atSequence
       this.saveWatches()
     }
-    const activeTurn = message.activeTurn && typeof message.activeTurn.prompt === 'string' && typeof message.activeTurn.startedAt === 'string'
-      ? { prompt: message.activeTurn.prompt, startedAt: message.activeTurn.startedAt }
+    const activeTurn = message.activeTurn && typeof message.activeTurn.runId === 'string' && typeof message.activeTurn.startedAt === 'string' && (message.activeTurn.prompt === undefined || typeof message.activeTurn.prompt === 'string')
+      ? { ...(typeof message.activeTurn.prompt === 'string' ? { prompt: message.activeTurn.prompt } : {}), runId: message.activeTurn.runId, startedAt: message.activeTurn.startedAt, ...(message.activeTurn.waitingForExtension === true ? { waitingForExtension: true as const } : {}) }
       : undefined
     this.projectionFloors.set(message.sessionId, message.atSequence)
     this.uiFreshness.set(message.sessionId, message.extensionUi.freshness)
@@ -309,6 +314,9 @@ export class RuntimeWebSocketClient {
         statuses: { ...message.extensionUi.statuses },
         widgets: Object.fromEntries(Object.entries(message.extensionUi.widgets).map(([key, lines]) => [key, [...lines]])),
       },
+      pendingExtensionDialogs: Array.isArray(message.pendingExtensionDialogs)
+        ? message.pendingExtensionDialogs.filter((dialog): dialog is PiRuntimeEvent => Boolean(dialog) && typeof dialog === 'object' && typeof dialog.sessionId === 'string' && typeof dialog.sequence === 'number' && Boolean(dialog.event) && typeof dialog.event === 'object')
+        : [],
       runtime: { ...message.runtime },
       ...(Number.isInteger(message.replayAfter) && message.replayAfter! >= 0 ? { replayAfter: message.replayAfter } : {}),
       sessionId: message.sessionId,

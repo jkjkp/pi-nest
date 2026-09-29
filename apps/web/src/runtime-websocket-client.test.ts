@@ -140,7 +140,7 @@ describe('RuntimeWebSocketClient', () => {
     vi.unstubAllGlobals()
   })
 
-  it('keeps raw replay for turns while protecting a snapshot projection from older UI events', async () => {
+  it('treats an idle snapshot as final state instead of replaying buffered events', async () => {
     vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
     const socket = new FakeSocket()
     const socketFactory = vi.fn(() => socket as never)
@@ -172,7 +172,10 @@ describe('RuntimeWebSocketClient', () => {
     await watch
     expect(snapshots).toHaveLength(1)
     expect(statuses).toEqual([{ lifecycle: 'active', revision: 2, sessionId: 'session-a' }])
-    expect(events).toEqual([1, 2, 3])
+    expect(events).toEqual([])
+    expect(client.watchedSessions()).toEqual([{ after: 3, role: 'foreground', sessionId: 'session-a' }])
+    socket.receive({ event: { type: 'live' }, observedAt: 'later', sequence: 4, sessionId: 'session-a', type: 'pi_event' })
+    expect(events).toEqual([4])
     expect(client.shouldApplyExtensionUi({ event: {}, observedAt: 'old', sequence: 3, sessionId: 'session-a' })).toBe(false)
     expect(client.shouldApplyExtensionUi({ event: {}, observedAt: 'new', sequence: 4, sessionId: 'session-a' })).toBe(true)
     vi.unstubAllGlobals()
@@ -192,7 +195,7 @@ describe('RuntimeWebSocketClient', () => {
     await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledOnce())
     socket.open()
     await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 7 }, sessionId: 'session-a', type: 'watch' }))
-    socket.receive({ activeTurn: { prompt: 'continue', startedAt: '2026-09-27T06:12:41.000Z' }, atSequence: 9, extensionUi: { freshness: 'known', statuses: {}, widgets: {} }, replayAfter: 4, runtime: { lifecycle: 'active', revision: 2 }, sessionId: 'session-a', type: 'session_snapshot' })
+    socket.receive({ activeTurn: { prompt: 'continue', runId: 'run-1', startedAt: '2026-09-27T06:12:41.000Z' }, atSequence: 9, extensionUi: { freshness: 'known', statuses: {}, widgets: {} }, replayAfter: 4, runtime: { lifecycle: 'active', revision: 2 }, sessionId: 'session-a', type: 'session_snapshot' })
     socket.receive({ event: { type: 'turn_start' }, observedAt: 'now', sequence: 5, sessionId: 'session-a', type: 'pi_event' })
     socket.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
     await watch
