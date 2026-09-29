@@ -5,8 +5,9 @@ import { formatActivityDuration, formatElapsedTime, nextExecutionExpanded, turnE
 import { startElapsedClock } from './turn-elapsed-clock.js'
 import { shouldExecutionFollowLatest } from './turn-execution-scroll.js'
 import type { TimelineItem } from './timeline-model.js'
+import type { PromptStatus } from './workspace-store.js'
 
-export function TurnExecution({ item, isRunning, presentation }: { item: TimelineItem; isRunning: boolean; presentation: TurnPresentation }) {
+export function TurnExecution({ item, isRunning, presentation, runMessage, runStatus }: { item: TimelineItem; isRunning: boolean; presentation: TurnPresentation; runMessage?: string; runStatus?: PromptStatus }) {
   const [expanded, setExpanded] = useState(isRunning)
   const [userToggled, setUserToggled] = useState(false)
   const previousRunning = useRef(isRunning)
@@ -31,12 +32,23 @@ export function TurnExecution({ item, isRunning, presentation }: { item: Timelin
   }, [expanded, executionFollowLatest, presentation.activities])
 
   const elapsed = formatElapsedTime(turnElapsed(item, isRunning, now))
-  if (!presentation.hasExecution) return <section className="my-4 text-sm text-muted-foreground"><p>{isRunning ? `思考中 · ${elapsed}` : `用时 ${elapsed}`}</p><div className="mt-2 border-b border-border/60" /></section>
+  const statusText = runStatus === 'submitted'
+    ? '已提交，正在连接 Pi…'
+    : runStatus === 'awaiting_agent'
+      ? runMessage ?? 'Pi 已接收，正在准备执行…'
+      : runStatus === 'awaiting_input'
+        ? '等待你的回答…'
+      : isRunning && item.events.length === 0
+        ? `正在执行 · ${elapsed}`
+        : isRunning
+          ? `思考中 · ${elapsed}`
+          : elapsed === '—' ? '正在同步执行状态…' : `用时 ${elapsed}`
+  if (!presentation.hasExecution) return <section className="my-4 text-sm text-muted-foreground"><p>{statusText}</p><div className="mt-2 border-b border-border/60" /></section>
 
   return (
     <section className="my-4 text-sm" data-turn-execution="">
       <button aria-controls={contentId} aria-expanded={expanded} className="flex w-full items-center gap-1 text-left text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setUserToggled(true); if (!expanded) setExecutionFollowLatest(true); setExpanded((value) => !value) }} type="button">
-        <span>{isRunning ? `思考中 · ${elapsed}` : `用时 ${elapsed}`}</span>
+        <span>{statusText}</span>
         {expanded ? <ChevronDown aria-hidden="true" className="size-4" /> : <ChevronRight aria-hidden="true" className="size-4" />}
       </button>
       {expanded && <div className="py-3" id={contentId}>
@@ -60,6 +72,7 @@ function Activity({ activity }: { activity: TurnActivity }) {
   if (activity.kind === 'tool') return <ActivityLine icon={<Wrench aria-hidden="true" className="size-4" />} label={activity.label} status={`${activity.status}${activity.duration === undefined ? '' : ` · ${formatActivityDuration(activity.duration)}`}`} />
   if (activity.kind === 'bash') return <BashActivity activity={activity} />
   if (activity.kind === 'file_change') return <FileChangeActivity activity={activity} />
+  if (activity.kind === 'retry') return <p className="text-muted-foreground">{activity.label}</p>
   return null
 }
 

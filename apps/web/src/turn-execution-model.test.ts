@@ -70,6 +70,12 @@ describe('projectTurnPresentation', () => {
     expect(presentation.activities).toMatchObject([{ duration: 2_000, kind: 'tool', label: 'Custom Tool', status: '完成' }])
   })
 
+  it('shows Pi auto-retry as a live execution activity', () => {
+    const presentation = projectTurnPresentation(item([{ events: [event('auto_retry_start', 1)], kind: 'retry' }]), true)
+
+    expect(presentation.activities).toEqual([expect.objectContaining({ kind: 'retry', label: '连接异常，Pi 正在重试…' })])
+  })
+
   it('labels a persisted command from the native toolCall arguments', () => {
     const [persisted] = timelineItems([
       { id: 'user-1', parentId: null, raw: { message: { content: 'run tests', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },

@@ -52,14 +52,25 @@ export function selectResponse(dialog: Pick<Dialog, 'selectedValue'>) {
   return dialog.selectedValue === undefined ? undefined : { value: dialog.selectedValue }
 }
 
+// ponytail: Pi's plan extension has no semantic action field; use one when Pi RPC exposes it.
+export function planImplementationPrompt(dialog: Pick<Dialog, 'method' | 'options' | 'title'>, response: { cancelled?: boolean; value?: string }) {
+  if (response.cancelled || dialog.method !== 'select' || response.value !== 'Implement here' || !dialog.title.startsWith('Proposed plan ready.')) return undefined
+  return dialog.options?.some((option) => option.rawValue === 'Start fresh and implement') ? 'Implement the plan.' : undefined
+}
+
 export function isQuestionnaireFailure(message: string) {
   return /^Questionnaire failed:/i.test(message)
+}
+
+// pi-plan-mode mirrors this lifecycle state through setStatus beside the composer.
+export function isPlanModeLifecycleNotice(message: string) {
+  return message === 'Plan mode enabled. I will explore and plan, but not modify files.'
 }
 
 /** Native Pi RPC Extension UI bridge. It keeps protocol values untouched and lets workspace render dialogs inline. */
 export function RuntimeExtensionUi({ children, runtime }: { children: React.ReactNode; runtime: RuntimeWebSocketClient }) {
   const [dialogs, setDialogs] = useState<Dialog[]>([])
-  const [notice, setNotice] = useState<string>()
+  const [notice, setNotice] = useState<{ message: string; type: 'error' | 'info' | 'warning' }>()
   const setDraft = useWorkspaceStore((state) => state.setDraft)
   const clearExtensionUi = useWorkspaceStore((state) => state.clearExtensionUi)
   const replaceExtensionUi = useWorkspaceStore((state) => state.replaceExtensionUi)
@@ -71,10 +82,15 @@ export function RuntimeExtensionUi({ children, runtime }: { children: React.Reac
     const unsubscribeEvents = runtime.onPiEvent((event) => {
       const dialog = dialogFrom(event)
       if (dialog) {
+        if (!runtime.shouldApplyExtensionUi(event)) return
         setDialogs((current) => current.some((item) => item.id === dialog.id && item.sessionId === dialog.sessionId) ? current : [...current, dialog])
         return
       }
       const raw = event.event
+      if (raw.type === 'extension_ui_resolved' && typeof raw.dialogId === 'string') {
+        setDialogs((current) => current.filter((item) => item.id !== raw.dialogId || item.sessionId !== event.sessionId))
+        return
+      }
       if (raw.type === 'extension_ui_request' && raw.method === 'set_editor_text' && typeof raw.text === 'string') setDraft(event.sessionId, stripAnsiText(raw.text))
       if (raw.type === 'extension_ui_request' && raw.method === 'setStatus' && runtime.shouldApplyExtensionUi(event) && typeof raw.statusKey === 'string' && raw.statusKey) setExtensionStatus(event.sessionId, raw.statusKey, typeof raw.statusText === 'string' ? raw.statusText : undefined)
       if (raw.type === 'extension_ui_request' && raw.method === 'setWidget' && runtime.shouldApplyExtensionUi(event) && typeof raw.widgetKey === 'string' && raw.widgetKey) setExtensionWidget(event.sessionId, raw.widgetKey, Array.isArray(raw.widgetLines) && raw.widgetLines.every((line) => typeof line === 'string') ? raw.widgetLines : undefined)
@@ -86,28 +102,62 @@ export function RuntimeExtensionUi({ children, runtime }: { children: React.Reac
             if (item.sessionId !== event.sessionId) return item
             return { ...item, error: message, submitting: false }
           }))
-        } else setNotice(message)
+        } else if (!isPlanModeLifecycleNotice(message)) {
+          const type = raw.notifyType === 'error' || raw.notifyType === 'warning' ? raw.notifyType : 'info'
+          setNotice({ message, type })
+        }
       }
     })
     const unsubscribeSnapshots = runtime.onSessionSnapshot((snapshot) => {
       replaceExtensionUi(snapshot.sessionId, snapshot.extensionUi)
       setRuntimeState(snapshot.sessionId, snapshot.runtime)
+      const dialogs = (snapshot.pendingExtensionDialogs ?? []).flatMap((event) => {
+        const dialog = dialogFrom(event)
+        return dialog && dialog.sessionId === snapshot.sessionId ? [dialog] : []
+      })
+      setDialogs((current) => [
+        ...current.filter((item) => item.sessionId !== snapshot.sessionId),
+        ...dialogs.map((dialog) => {
+          const existing = current.find((item) => item.sessionId === dialog.sessionId && item.id === dialog.id)
+          return existing ? { ...dialog, selectedValue: existing.selectedValue ?? dialog.selectedValue, value: existing.value ?? dialog.value } : dialog
+        }),
+      ])
     })
     const unsubscribeStatus = runtime.onRuntimeStatus((status) => {
       setRuntimeState(status.sessionId, status)
-      if (status.lifecycle === 'failed') clearExtensionUi(status.sessionId)
+      if (status.lifecycle === 'failed') {
+        clearExtensionUi(status.sessionId)
+        setDialogs((current) => current.filter((item) => item.sessionId !== status.sessionId))
+      }
     })
-    const unsubscribeResync = runtime.onResyncRequired((message) => clearExtensionUi(message.sessionId))
+    const unsubscribeResync = runtime.onResyncRequired((message) => {
+      clearExtensionUi(message.sessionId)
+      setDialogs((current) => current.filter((item) => item.sessionId !== message.sessionId))
+    })
     return () => { unsubscribeEvents(); unsubscribeSnapshots(); unsubscribeStatus(); unsubscribeResync() }
   }, [runtime, clearExtensionUi, replaceExtensionUi, setDraft, setExtensionStatus, setExtensionWidget, setRuntimeState])
 
+  useEffect(() => {
+    if (!notice || notice.type !== 'info') return
+    const timer = window.setTimeout(() => setNotice(undefined), 5_000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+
   async function reply(dialog: Dialog, response: { cancelled?: boolean; confirmed?: boolean; value?: string }) {
     if (dialog.submitting) return
+    const prompt = planImplementationPrompt(dialog, response)
+    const input = prompt ? { id: `plan-implementation:${dialog.id}`, message: prompt, mode: 'plan_implementation' as const, submittedAt: new Date().toISOString() } : undefined
+    if (input) useWorkspaceStore.getState().appendPendingInput(dialog.sessionId, input)
     setDialogs((current) => current.map((item) => item.id === dialog.id && item.sessionId === dialog.sessionId ? { ...item, error: undefined, submitting: true } : item))
     try {
       await runtime.extensionUiResponse(dialog.sessionId, dialog.id, response)
       setDialogs((current) => current.filter((item) => item.id !== dialog.id || item.sessionId !== dialog.sessionId))
     } catch (cause) {
+      if (input) useWorkspaceStore.getState().removePendingInput(dialog.sessionId, input.id)
+      if (cause && typeof cause === 'object' && (cause as { code?: unknown }).code === 'EXTENSION_UI_NOT_PENDING') {
+        setDialogs((current) => current.filter((item) => item.id !== dialog.id || item.sessionId !== dialog.sessionId))
+        return
+      }
       const error = cause instanceof Error ? cause.message : 'Pi extension response failed'
       setDialogs((current) => current.map((item) => item.id === dialog.id && item.sessionId === dialog.sessionId ? { ...item, error, submitting: false } : item))
     }
@@ -119,7 +169,7 @@ export function RuntimeExtensionUi({ children, runtime }: { children: React.Reac
       : item))
   }
 
-  return <ExtensionUiContext.Provider value={{ dialogs, reply, setValue }}>{children}{notice && <div aria-live="polite" className="fixed bottom-4 right-4 z-50 rounded bg-card p-3 shadow">{notice}</div>}</ExtensionUiContext.Provider>
+  return <ExtensionUiContext.Provider value={{ dialogs, reply, setValue }}>{children}{notice && <div aria-live="polite" className="fixed bottom-4 right-4 z-50 flex max-w-md items-start gap-3 rounded bg-card p-3 shadow"><p className="min-w-0 break-words text-sm">{notice.message}</p><Button aria-label="关闭通知" className="h-auto p-0 text-muted-foreground" onClick={() => setNotice(undefined)} size="sm" type="button" variant="ghost">关闭</Button></div>}</ExtensionUiContext.Provider>
 }
 
 function optionParts(label: string) {

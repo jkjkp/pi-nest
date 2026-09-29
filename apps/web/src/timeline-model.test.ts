@@ -98,6 +98,23 @@ describe('timelineItems', () => {
     expect(duration(tool.events)).toBeUndefined()
   })
 
+  it('projects native message_end content and retry status without duplicating streamed thinking', () => {
+    const [turn] = timelineItems(undefined, [{
+      events: [
+        runtime(1, { assistantMessageEvent: { delta: 'checking', type: 'thinking_delta' }, type: 'message_update' }),
+        runtime(2, { message: { content: [{ thinking: 'checking', type: 'thinking' }, { arguments: { command: 'pnpm test' }, id: 'call-1', name: 'bash', type: 'toolCall' }], role: 'assistant' }, type: 'message_end' }),
+        runtime(3, { toolCallId: 'call-1', toolName: 'bash', type: 'tool_execution_start' }),
+        runtime(4, { type: 'auto_retry_start' }),
+      ],
+      id: 'native-plan',
+      prompt: 'Implement the plan.',
+      startedAt: '2026-09-29T08:41:14.593Z',
+    }], [])
+
+    expect(turn?.parts.map((part) => part.kind)).toEqual(['thinking', 'tool', 'retry'])
+    expect(turn?.parts[0]).toMatchObject({ text: 'checking' })
+  })
+
   it('does not turn unowned session metadata into a chat row', () => {
     expect(timelineItems(undefined, [], [runtime(1, { type: 'model_change' }, undefined)])).toEqual([])
   })

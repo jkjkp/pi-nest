@@ -17,7 +17,7 @@ import type { SessionRunController } from './session-run-controller.js'
 import { SessionTimeline } from './session-timeline.js'
 import { ExtensionUiInline } from './runtime-extension-ui.js'
 import type { TurnJumpAlignment } from './timeline-pagination.js'
-import { useWorkspaceStore } from './workspace-store.js'
+import { isRunActive, useWorkspaceStore } from './workspace-store.js'
 import { createSession, deleteSession, fetchSessionHistory, fetchSessionTurnIndex, fetchSessions, renameSession, revealProjectInFinder } from './workspace-api.js'
 import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, runtimeStatusLabel, sessionDisplayName, sessionStatusLabel, shouldFollowLatest, type ProjectSessionGroup } from './workspace.js'
 
@@ -83,11 +83,12 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const activeTurn = currentRun?.turns.at(-1)
   const modelLabel = currentRun?.model ?? '当前模型不可用'
   const status = currentRun?.status ?? 'idle'
-  const isActive = status === 'running' || status === 'aborting'
+  const isActive = isRunActive(status)
+  const isStreaming = status === 'running' || status === 'aborting'
   const extensionStatus = extensionStatusLine(extensionStatuses[selectedSessionId])
   const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
   const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
-  const historyEnabled = Boolean(selectedSession) && watchStates[selectedSessionId] === 'ready' && !isActive && runtimeStates[selectedSessionId]?.lifecycle !== 'active' && runtimeStates[selectedSessionId]?.lifecycle !== 'loading'
+  const historyEnabled = Boolean(selectedSession) && watchStates[selectedSessionId] === 'ready' && !isStreaming && runtimeStates[selectedSessionId]?.lifecycle !== 'loading' && (runtimeStates[selectedSessionId]?.lifecycle !== 'active' || status === 'awaiting_input')
   const historyQuery = useInfiniteQuery<PiSessionHistoryResponse, Error, InfiniteData<PiSessionHistoryResponse>, ReturnType<typeof sessionHistoryQueryKey>, HistoryPageParam>({
     enabled: historyEnabled,
     getNextPageParam: () => undefined,
@@ -279,7 +280,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     if (!isActive) {
       if (sessionRuns.start({ historyTurnCount, prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
     }
-    else void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败'))
+    else if (status === 'running') void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败'))
   }
 
   const jumpToTurn = useCallback((_turnId: string, scrollTo: (behavior: ScrollBehavior) => void, alignment: TurnJumpAlignment) => {
@@ -305,7 +306,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   }, [history?.revision, queryClient, selectedSessionId])
 
   function abortPrompt() {
-    if (!selectedSessionId || status !== 'running') return
+    if (!selectedSessionId || !isActive || status === 'aborting') return
     void sessionRuns.stop(selectedSessionId)
   }
 
@@ -450,9 +451,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   error={historyQuery.isError && !history}
                   hasEarlier={historyQuery.hasPreviousPage}
                   history={history}
-                  isLoading={!isActive && !history && historyQuery.isPending}
+                  isLoading={!isStreaming && !history && historyQuery.isPending}
                   isLoadingEarlier={historyQuery.isFetchingPreviousPage}
-                  isRunning={isActive}
+                  isRunning={isStreaming}
                   onLoadEarlier={() => void historyQuery.fetchPreviousPage()}
                   onFinalAnswerStart={scrollToFinalAnswer}
                   onFinalAnswerStream={followFinalAnswer}
@@ -461,9 +462,12 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   onRetry={() => void historyQuery.refetch()}
                   onPendingJumpHandled={() => setPendingJump(undefined)}
                   overlayRoot={railOverlay}
+                  pendingInputs={currentRun?.pendingInputs}
                   pendingJumpTurnId={pendingJump?.sessionId === selectedSessionId ? pendingJump.turnId : undefined}
                   scrollViewport={scrollViewport}
                   systemEvents={currentRun?.systemEvents}
+                  runStatus={status}
+                  runMessage={currentRun?.waitingMessage}
                   turnIndex={turnIndexQuery.data}
                   turns={currentRun?.turns}
                 /> : <div className="conversation-stage py-16"><p className="conversation-stage-content text-center text-sm text-muted-foreground">从左侧选择一个会话，或在项目中创建新对话。</p></div>}
@@ -524,10 +528,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                     <span className="truncate">{modelLabel}</span>
                     <ChevronDown aria-hidden="true" className="text-muted-foreground" />
                   </Button>
-                  {status === 'running' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
+                  {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
                   {status === 'running' && <Button aria-label={queueMode === 'steer' ? '发送 Steer' : '发送 Follow-up'} className="rounded-full" disabled={prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>}
-                  {status !== 'running' && status !== 'aborting' && (
+                  {!isActive && (
                     <Button aria-label="发送提示词" className="rounded-full" disabled={(!selectedSession && !isDraft) || creatingDraft || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
                   )}
                 </div>

@@ -5,6 +5,7 @@ export type TurnActivity =
   | { duration: number | undefined; events: TimelineEvent[]; id: string; kind: 'tool'; label: string; status: string }
   | { command: string | undefined; cwd: string | undefined; duration: number | undefined; events: TimelineEvent[]; exitCode: number | undefined; id: string; kind: 'bash'; status: string; stderr: string | undefined; stdout: string | undefined }
   | { changes: FileChange[]; id: string; kind: 'file_change'; label: string }
+  | { id: string; kind: 'retry'; label: string }
 
 export type FileChange = { added: number | undefined; path: string; removed: number | undefined }
 
@@ -79,6 +80,7 @@ function activity(part: TimelinePart, index: number): TurnActivity {
     const exitCode = number(part.events, 'exitCode')
     return { command: text(part.events, 'command'), cwd: text(part.events, 'cwd'), duration: duration(part.events), events: part.events, exitCode, id, kind: 'bash', status: exitCode === undefined ? '正在执行' : exitCode === 0 ? '完成' : '失败', stderr: text(part.events, 'stderr'), stdout: text(part.events, 'stdout', 'output', 'delta') }
   }
+  if (part.kind === 'retry') return { id, kind: 'retry', label: eventType(part.events.at(-1)!) === 'auto_retry_start' ? '连接异常，Pi 正在重试…' : '已结束重试' }
   const changes = fileChanges(part.events)
   return { changes, id, kind: 'file_change', label: changes.length ? `编辑 ${changes.length} 个文件` : '文件修改' }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { dialogFrom, isQuestionnaireFailure, selectResponse } from './runtime-extension-ui.js'
+import { dialogFrom, isPlanModeLifecycleNotice, isQuestionnaireFailure, planImplementationPrompt, selectResponse } from './runtime-extension-ui.js'
 
 function selectEvent(options: string[]) {
   return {
@@ -39,8 +39,24 @@ describe('RuntimeExtensionUi select mapping', () => {
     expect(selectResponse(dialogFrom(selectEvent([]))!)).toBeUndefined()
   })
 
+  it('only maps the Plan implementation action to Pi CLI’s user prompt', () => {
+    const plan = dialogFrom({
+      event: { id: 'plan', method: 'select', options: ['Implement here', 'Start fresh and implement'], title: 'Proposed plan ready. What next?', type: 'extension_ui_request' },
+      observedAt: 'now', sequence: 1, sessionId: 'session-1',
+    })!
+    const ordinary = dialogFrom(selectEvent(['Implement here', 'Start fresh and implement']))!
+
+    expect(planImplementationPrompt(plan, { value: 'Implement here' })).toBe('Implement the plan.')
+    expect(planImplementationPrompt(ordinary, { value: 'Implement here' })).toBeUndefined()
+  })
+
   it('keeps Questionnaire protocol failures out of the generic notification path', () => {
     expect(isQuestionnaireFailure('Questionnaire failed: option that was not offered')).toBe(true)
     expect(isQuestionnaireFailure('Plan ready')).toBe(false)
+  })
+
+  it('suppresses only the duplicated Plan-mode lifecycle notice', () => {
+    expect(isPlanModeLifecycleNotice('Plan mode enabled. I will explore and plan, but not modify files.')).toBe(true)
+    expect(isPlanModeLifecycleNotice('Plan mode is already active.')).toBe(false)
   })
 })

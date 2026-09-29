@@ -20,10 +20,13 @@ export type ProjectSessionGroup = {
 const sessionStatusLabels: Record<PromptStatus, string> = {
   aborted: '— 已中止',
   aborting: '● 正在停止',
+  awaiting_agent: '◌ Pi 已接收，正在准备执行',
+  awaiting_input: '◌ 等待你的回答',
   complete: '✓ 已完成',
   error: '× 请求失败',
   idle: '— 空闲',
   running: '● 推理中',
+  submitted: '◌ 已提交，正在连接 Pi',
 }
 
 export function formatUpdatedAt(updatedAt?: string) {

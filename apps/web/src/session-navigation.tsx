@@ -20,7 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 
-import type { SessionRunSummary } from './workspace-store.js'
+import { isRunActive, type SessionRunSummary } from './workspace-store.js'
 import { filterProjectsByQuery, type PiSessionSummary, type ProjectSessionGroup, sessionDisplayName } from './workspace.js'
 
 export function SessionNavigation({
@@ -378,7 +378,7 @@ function SortableSession({
     id: `session:${session.id}`,
   })
   const status = run?.status ?? 'idle'
-  const cannotDelete = selected || status === 'running' || status === 'aborting' || mutationSessionId === session.id
+  const cannotDelete = selected || isRunActive(status) || mutationSessionId === session.id
 
   return (
     <ContextMenu>

@@ -42,6 +42,14 @@ describe('SessionTimeline', () => {
     expect(running).not.toContain('思考过程')
   })
 
+  it('renders an acknowledged running input as a user bubble without an empty assistant turn', () => {
+    const markup = render(<SessionTimeline error={false} history={history} isLoading={false} isRunning onRetry={() => undefined} pendingInputs={[{ id: 'pending-1', message: '查找关于 ai 的最新的信息', mode: 'follow_up', submittedAt: '2026-09-27T11:15:55.000Z' }]} />)
+
+    expect(markup).toContain('查找关于 ai 的最新的信息')
+    expect(markup).toContain('已发送 · Follow-up')
+    expect(markup).toContain('data-pending-input="pending-1"')
+  })
+
   it('keeps a persisted execution expandable after refresh', () => {
     const refreshed = {
       ...history,

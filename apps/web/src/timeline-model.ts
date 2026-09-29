@@ -31,6 +31,7 @@ export type TimelinePart =
   | { events: TimelineEvent[]; kind: 'assistant_text'; text: string }
   | { events: TimelineEvent[]; kind: 'bash' }
   | { events: TimelineEvent[]; kind: 'file_change' }
+  | { events: TimelineEvent[]; kind: 'retry' }
   | { events: TimelineEvent[]; kind: 'thinking'; text: string }
   | { arguments?: Record<string, unknown>; events: TimelineEvent[]; kind: 'tool'; toolCallId: string | undefined; toolName: string }
 
@@ -90,7 +91,7 @@ function pushDelta(parts: TimelinePart[], kind: 'assistant_text' | 'thinking', e
   const previous = parts.at(-1)
   if (previous?.kind === kind) {
     previous.events.push(event)
-    previous.text += text
+    previous.text = text.startsWith(previous.text) ? text : previous.text + text
     return
   }
   parts.push({ events: [event], kind, text })
@@ -149,7 +150,7 @@ function projectAssistantContent(item: TimelineItem, event: TimelineEvent, conte
   return projected
 }
 
-function pushActivity(parts: TimelinePart[], kind: 'bash' | 'file_change', event: TimelineEvent) {
+function pushActivity(parts: TimelinePart[], kind: 'bash' | 'file_change' | 'retry', event: TimelineEvent) {
   const previous = parts.at(-1)
   if (previous?.kind === kind) {
     previous.events.push(event)
@@ -171,7 +172,7 @@ function diagnostic(item: TimelineItem, event: TimelineEvent, reason: TimelineDi
 }
 
 function isMetadata(type: string) {
-  return type === 'model_change' || type === 'thinking_level_change' || type === 'thinking_level_changed' || type.startsWith('compaction') || type === 'turn_start' || type === 'turn_end' || type === 'agent_start' || type === 'agent_end' || type === 'agent_settled' || type === 'aborted' || type === 'message_end'
+  return type === 'model_change' || type === 'thinking_level_change' || type === 'thinking_level_changed' || type.startsWith('compaction') || type === 'turn_start' || type === 'turn_end' || type === 'agent_start' || type === 'agent_end' || type === 'agent_settled' || type === 'aborted'
 }
 
 function projectEvent(item: TimelineItem, event: TimelineEvent) {
@@ -189,19 +190,20 @@ function projectEvent(item: TimelineItem, event: TimelineEvent) {
   if (type === 'message_update') return diagnostic(item, event, 'unrenderable_message')
 
   const nativeMessage = message(event)
-  if (type === 'message' && nativeMessage?.role === 'assistant') {
+  if ((type === 'message' || type === 'message_end') && nativeMessage?.role === 'assistant') {
     if (projectAssistantContent(item, event, nativeMessage.content)) return
     return diagnostic(item, event, 'unrenderable_message')
   }
-  if (type === 'message' && nativeMessage?.role === 'user') return
-  if (type === 'message' && nativeMessage?.role === 'toolResult') {
+  if ((type === 'message' || type === 'message_start' || type === 'message_end') && nativeMessage?.role === 'user') return
+  if ((type === 'message' || type === 'message_end') && nativeMessage?.role === 'toolResult') {
     const toolCallId = typeof nativeMessage.toolCallId === 'string' ? nativeMessage.toolCallId : undefined
     const toolName = typeof nativeMessage.toolName === 'string' ? nativeMessage.toolName : '未知工具'
     return pushTool(item.parts, event, toolCallId, toolName)
   }
-  if (type === 'message') return diagnostic(item, event, 'unrenderable_message')
+  if (type === 'message' || type === 'message_end') return diagnostic(item, event, 'unrenderable_message')
   if (type.startsWith('tool_execution_')) return pushTool(item.parts, event)
   if (type.startsWith('bash_execution_')) return pushActivity(item.parts, 'bash', event)
+  if (type === 'auto_retry_start' || type === 'auto_retry_end') return pushActivity(item.parts, 'retry', event)
   if (type === 'file_change' || type === 'file_changes' || Array.isArray(event.event.changes)) return pushActivity(item.parts, 'file_change', event)
   if (isMetadata(type)) return diagnostic(item, event, 'metadata')
   diagnostic(item, event, 'unknown')

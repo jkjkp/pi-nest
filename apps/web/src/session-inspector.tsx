@@ -3,7 +3,7 @@ import { CircleAlert } from 'lucide-react'
 
 import { ScrollArea } from '@/components/ui/scroll-area'
 
-import type { SessionRunSummary } from './workspace-store.js'
+import { isRunActive, type SessionRunSummary } from './workspace-store.js'
 import { type PiSessionSummary, formatUpdatedAt, runInspectorFields, sessionStatusLabel } from './workspace.js'
 
 export function SessionInspector({ run, session }: { run: SessionRunSummary | undefined; session: PiSessionSummary | undefined }) {
@@ -74,6 +74,7 @@ function InspectorItem({ children, label }: { children: ReactNode; label: string
 }
 
 function StatusBadge({ status }: { status: Parameters<typeof sessionStatusLabel>[0] }) {
-  const color = status === 'running' || status === 'aborting' ? 'text-warning' : status === 'complete' ? 'text-success' : status === 'error' ? 'text-destructive' : 'text-muted-foreground'
+  const current = status ?? 'idle'
+  const color = isRunActive(current) ? 'text-warning' : current === 'complete' ? 'text-success' : current === 'error' ? 'text-destructive' : 'text-muted-foreground'
   return <span className={`text-xs font-medium ${color}`}>{sessionStatusLabel(status)}</span>
 }
