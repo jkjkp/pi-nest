@@ -33,8 +33,9 @@ export class SessionEventStream {
   ) {}
 
   get hasSubscribers() { return this.listeners.size > 0 }
+  get latestSequence() { return this.sequence }
 
-  publish(raw: PiRuntimeHostEvent, beforePublish?: (event: PiRuntimeEvent) => void | Promise<void>) {
+  publish(raw: PiRuntimeHostEvent & { runId?: string }, beforePublish?: (event: PiRuntimeEvent) => void | Promise<void>) {
     return this.serial(async () => {
       if (this.unavailable) return
       const sequence = ++this.sequence

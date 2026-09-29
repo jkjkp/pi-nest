@@ -1,8 +1,9 @@
+import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { PiRuntimeHost, PiRuntimeHostError, type PiRuntimeEvent, type PiRuntimeFailureKind, type PiRuntimeHostFailure, type PiRuntimePromptResult, type PiRuntimeSession } from './pi-runtime-host.js'
+import { PiRuntimeHost, PiRuntimeHostError, type PiRuntimeEvent, type PiRuntimeFailureKind, type PiRuntimeHostEvent, type PiRuntimeHostFailure, type PiRuntimePromptResult, type PiRuntimeSession } from './pi-runtime-host.js'
 import { ProjectionSidecarStore, type ExtensionUiProjectionData } from './projection-sidecar-store.js'
 import { PiRuntimeResumeError, type PiRuntimeStreamError, SessionEventStream } from './session-event-stream.js'
 
@@ -14,7 +15,7 @@ type StreamListener = (event: PiRuntimeEvent) => void
 type StreamErrorListener = (error: PiRuntimeStreamError) => void
 type UnloadReason = 'capacityEvicted' | 'deleted' | 'failed' | 'idleExpired' | 'mutation' | 'settingsReload' | 'shutdown'
 type ExtensionUiProjection = { freshness: 'known' | 'restored'; statuses: Map<string, string>; widgets: Map<string, string[]> }
-type ActiveTurn = { firstSequence?: number; prompt: string; startedAt: string }
+type ActiveTurn = { firstSequence?: number; native?: true; prompt?: string; runId: string; startedAt: string; waitingForExtension?: true }
 type RuntimeState = {
   activeTurn?: ActiveTurn
   error?: string
@@ -30,16 +31,17 @@ type RuntimeState = {
 
 export type PiRuntimeLifecycle = 'notLoaded' | 'loading' | 'idle' | 'active' | 'failed'
 export type PiRuntimeStatus = { error?: string; failureKind?: PiRuntimeFailureKind; lifecycle: PiRuntimeLifecycle; revision: number; sessionId: string }
-export type PiRuntimePrompt = { accepted: Promise<void>; settled: Promise<PiRuntimePromptResult> }
+export type PiRuntimePrompt = { accepted: Promise<void>; runId: string; settled: Promise<PiRuntimePromptResult> }
 export type PiRuntimeExtensionUi = {
   freshness: 'known' | 'restored' | 'unknown'
   statuses: Record<string, string>
   widgets: Record<string, string[]>
 }
 export type PiRuntimeSessionSnapshot = {
-  activeTurn?: Omit<ActiveTurn, 'firstSequence'>
+  activeTurn?: Omit<ActiveTurn, 'firstSequence' | 'native'>
   atSequence: number
   extensionUi: PiRuntimeExtensionUi
+  pendingExtensionDialogs: PiRuntimeEvent[]
   replayAfter?: number
   runtime: Omit<PiRuntimeStatus, 'sessionId'>
   sessionId: string
@@ -79,7 +81,7 @@ export class PiRuntimeRegistry {
   private readonly eventBufferDirectory: Promise<string>
   private readonly expiredStreams = new Set<string>()
   private readonly locks = new Map<string, Lock>()
-  private readonly pendingExtensionDialogs = new Map<string, Set<string>>()
+  private readonly pendingExtensionDialogs = new Map<string, Map<string, PiRuntimeEvent>>()
   private readonly projectionSidecars: ProjectionSidecarStore
   private readonly projectionsReady: Promise<void>
   private readonly states = new Map<string, RuntimeState>()
@@ -103,6 +105,10 @@ export class PiRuntimeRegistry {
 
   isPromptActive(sessionId: string) {
     return this.locks.get(sessionId) === 'prompt'
+  }
+
+  isPromptStreaming(sessionId: string) {
+    return this.isPromptActive(sessionId) && !this.states.get(sessionId)?.activeTurn?.waitingForExtension
   }
 
   isAnyPromptActive() {
@@ -145,18 +151,21 @@ export class PiRuntimeRegistry {
   async respondToExtension(sessionId: string, response: Record<string, unknown>) {
     const id = typeof response.id === 'string' ? response.id : undefined
     const pending = id ? this.pendingExtensionDialogs.get(sessionId) : undefined
-    if (!id || !pending?.delete(id)) return false
+    const dialog = id ? pending?.get(id) : undefined
+    if (!id || !dialog || !pending) return false
+    pending.delete(id)
     const entry = this.entries.get(sessionId)
     if (!entry) {
-      pending.add(id)
+      pending.set(id, dialog)
       return false
     }
     try {
       await entry.host.respondToExtension(response)
     } catch (cause) {
-      pending.add(id)
+      pending.set(id, dialog)
       throw cause
     }
+    await this.publishExtensionDialogResolved(sessionId, id)
     return true
   }
 
@@ -181,15 +190,18 @@ export class PiRuntimeRegistry {
     onError: StreamErrorListener,
     onSnapshot?: (snapshot: PiRuntimeSessionSnapshot) => void,
     onStatus?: RuntimeStatusListener,
+    replayIdle = false,
   ) {
     await this.projectionsReady
     const state = this.stateFor(sessionId)
     this.cancelUnload(sessionId)
-    const replayAfter = state.activeTurn?.firstSequence === undefined ? after : Math.min(after, state.activeTurn.firstSequence - 1)
+    const firstSequence = state.activeTurn?.firstSequence
+    const replayAfter = firstSequence === undefined ? (replayIdle ? after : undefined) : Math.max(after, firstSequence - 1)
     const entry = this.streamForSubscribe(sessionId, replayAfter)
+    const subscribeAfter = replayAfter ?? entry.stream.latestSequence
     let unsubscribeStatus: (() => void) | undefined
     const unsubscribe = await entry.stream.subscribeWithSnapshot(
-      replayAfter,
+      subscribeAfter,
       (atSequence) => this.snapshot(sessionId, atSequence, replayAfter),
       (snapshot) => {
         onSnapshot?.(snapshot)
@@ -224,7 +236,7 @@ export class PiRuntimeRegistry {
 
   /** Compatibility helper for direct Registry tests; production callers use watch/unwatch. */
   async subscribe(sessionId: string, after: number, listener: StreamListener, onError: StreamErrorListener, onSnapshot?: (snapshot: PiRuntimeSessionSnapshot) => void, onStatus?: RuntimeStatusListener) {
-    return this.watch(sessionId, `legacy:${Math.random()}`, after, listener, onError, onSnapshot, onStatus)
+    return this.watch(sessionId, `legacy:${Math.random()}`, after, listener, onError, onSnapshot, onStatus, true)
   }
 
   resume(session: PiRuntimeSession): Promise<void> | undefined {
@@ -264,7 +276,9 @@ export class PiRuntimeRegistry {
     this.cancelUnload(session.id)
     this.locks.set(session.id, 'prompt')
     const state = this.stateFor(session.id)
-    state.activeTurn = { prompt: message, startedAt: new Date().toISOString() }
+    const runId = randomUUID()
+    const activeTurn: ActiveTurn = { prompt: message, runId, startedAt: new Date().toISOString() }
+    state.activeTurn = activeTurn
 
     let resolveAccepted: () => void = () => undefined
     let rejectAccepted: (cause: unknown) => void = () => undefined
@@ -284,7 +298,7 @@ export class PiRuntimeRegistry {
         return prompt.settled
       })
       .then((result) => {
-        this.transition(session.id, 'idle')
+        if (state.activeTurn === activeTurn) this.transition(session.id, 'idle')
         return result
       })
       .catch(async (cause) => {
@@ -294,13 +308,16 @@ export class PiRuntimeRegistry {
         throw cause
       })
       .finally(() => {
-        state.activeTurn = undefined
-        this.locks.delete(session.id)
-        this.scheduleUnload(session.id)
+        if (state.activeTurn === activeTurn) {
+          state.activeTurn = undefined
+          this.locks.delete(session.id)
+          this.scheduleUnload(session.id)
+        }
       })
     void settled.catch(rejectAccepted)
     return {
       accepted,
+      runId,
       settled,
     }
   }
@@ -389,9 +406,11 @@ export class PiRuntimeRegistry {
         host,
         lastUsed: ++this.usageClock,
         unsubscribe: host.onEvent((event) => {
-          void this.streamFor(session.id).stream.publish(event, async (published) => {
+          // Tag at native-event receipt, before asynchronous stream persistence can interleave a later prompt.
+          const runId = this.beginNativeTurn(session.id, event)
+          void this.streamFor(session.id).stream.publish({ ...event, ...(runId ? { runId } : {}) }, async (published) => {
             this.trackActiveTurn(session.id, published)
-            this.trackExtensionDialog(session.id, published.event)
+            this.trackExtensionDialog(session.id, published)
             await this.trackExtensionUi(session.id, published.event)
           })
         }),
@@ -409,7 +428,7 @@ export class PiRuntimeRegistry {
     if (options.expected && entry !== options.expected) return false
     if (entry) {
       this.entries.delete(sessionId)
-      this.pendingExtensionDialogs.delete(sessionId)
+      if (this.pendingExtensionDialogs.has(sessionId)) await this.clearPendingExtensionDialogs(sessionId)
       entry.unsubscribe()
       entry.failureUnsubscribe()
       await entry.host.close()
@@ -480,19 +499,25 @@ export class PiRuntimeRegistry {
     await stream.stream.close()
   }
 
-  private streamForSubscribe(sessionId: string, after: number) {
-    if (!this.streams.has(sessionId) && this.expiredStreams.has(sessionId) && after > 0) throw new PiRuntimeResumeError('RESUME_GAP')
-    if (after === 0) this.expiredStreams.delete(sessionId)
+  private streamForSubscribe(sessionId: string, after: number | undefined) {
+    if (after !== undefined && !this.streams.has(sessionId) && this.expiredStreams.has(sessionId) && after > 0) throw new PiRuntimeResumeError('RESUME_GAP')
+    if (after === undefined || after === 0) this.expiredStreams.delete(sessionId)
     return this.streamFor(sessionId)
   }
 
-  private trackExtensionDialog(sessionId: string, event: Record<string, unknown>) {
+  private trackExtensionDialog(sessionId: string, dialog: PiRuntimeEvent) {
+    const event = dialog.event
     if (event.type !== 'extension_ui_request' || typeof event.id !== 'string') return
     const method = event.method
     if (method !== 'select' && method !== 'confirm' && method !== 'input' && method !== 'editor') return
-    const pending = this.pendingExtensionDialogs.get(sessionId) ?? new Set<string>()
-    pending.add(event.id)
+    const pending = this.pendingExtensionDialogs.get(sessionId) ?? new Map<string, PiRuntimeEvent>()
+    pending.set(event.id, dialog)
     this.pendingExtensionDialogs.set(sessionId, pending)
+    const activeTurn = this.stateFor(sessionId).activeTurn
+    if (activeTurn && activeTurn.runId === dialog.runId) {
+      activeTurn.firstSequence = undefined
+      activeTurn.waitingForExtension = true
+    }
   }
 
   private stateFor(sessionId: string) {
@@ -504,21 +529,74 @@ export class PiRuntimeRegistry {
     return state
   }
 
-  private snapshot(sessionId: string, atSequence: number, replayAfter: number): PiRuntimeSessionSnapshot {
+  private snapshot(sessionId: string, atSequence: number, replayAfter: number | undefined): PiRuntimeSessionSnapshot {
     const state = this.stateFor(sessionId)
     return {
-      ...(state.activeTurn ? { activeTurn: { prompt: state.activeTurn.prompt, startedAt: state.activeTurn.startedAt } } : {}),
+      ...(state.activeTurn ? { activeTurn: { prompt: state.activeTurn.prompt, runId: state.activeTurn.runId, startedAt: state.activeTurn.startedAt, ...(state.activeTurn.waitingForExtension ? { waitingForExtension: true } : {}) } } : {}),
       atSequence,
       extensionUi: this.getExtensionUiSnapshot(sessionId),
-      ...(replayAfter < atSequence ? { replayAfter } : {}),
+      pendingExtensionDialogs: [...(this.pendingExtensionDialogs.get(sessionId)?.values() ?? [])],
+      ...(replayAfter !== undefined && replayAfter < atSequence ? { replayAfter } : {}),
       runtime: { ...(state.error ? { error: state.error } : {}), ...(state.failureKind ? { failureKind: state.failureKind } : {}), lifecycle: state.lifecycle, revision: state.revision },
       sessionId,
     }
   }
 
+  private async clearPendingExtensionDialogs(sessionId: string) {
+    const pending = this.pendingExtensionDialogs.get(sessionId)
+    this.pendingExtensionDialogs.delete(sessionId)
+    await Promise.all((pending ? [...pending.keys()] : []).map((id) => this.publishExtensionDialogResolved(sessionId, id)))
+  }
+
+  private async publishExtensionDialogResolved(sessionId: string, id: string) {
+    await this.streamFor(sessionId).stream.publish({
+      event: { dialogId: id, type: 'extension_ui_resolved' },
+      observedAt: new Date().toISOString(),
+      sessionId,
+    })
+  }
+
+  /** Pi Extensions may start an agent through pi.sendUserMessage, bypassing beginPrompt. */
+  private beginNativeTurn(sessionId: string, event: PiRuntimeHostEvent) {
+    const state = this.stateFor(sessionId)
+    const activeTurn = state.activeTurn
+    if (activeTurn) {
+      if (event.event.type === 'agent_settled') this.settleActiveTurn(sessionId, activeTurn)
+      else if (activeTurn.waitingForExtension && this.resumesStreaming(event.event)) {
+        activeTurn.firstSequence = undefined
+        activeTurn.waitingForExtension = undefined
+      }
+      return activeTurn.runId
+    }
+    const message = event.event.message
+    const isUserMessage = event.event.type === 'message' && message && typeof message === 'object' && !Array.isArray(message) && (message as Record<string, unknown>).role === 'user'
+    if (event.event.type !== 'agent_start' && !isUserMessage) return undefined
+    this.cancelUnload(sessionId)
+    state.activeTurn = { native: true, runId: randomUUID(), startedAt: event.observedAt }
+    this.locks.set(sessionId, 'prompt')
+    this.transition(sessionId, 'active')
+    return state.activeTurn.runId
+  }
+
+  private settleActiveTurn(sessionId: string, activeTurn: ActiveTurn) {
+    const state = this.stateFor(sessionId)
+    if (state.activeTurn !== activeTurn) return
+    state.activeTurn = undefined
+    this.locks.delete(sessionId)
+    this.transition(sessionId, 'idle')
+    this.scheduleUnload(sessionId)
+  }
+
   private trackActiveTurn(sessionId: string, event: PiRuntimeEvent) {
     const activeTurn = this.stateFor(sessionId).activeTurn
-    if (activeTurn && activeTurn.firstSequence === undefined && event.event.type === 'turn_start') activeTurn.firstSequence = event.sequence
+    if (activeTurn && !activeTurn.waitingForExtension && activeTurn.runId === event.runId && activeTurn.firstSequence === undefined) activeTurn.firstSequence = event.sequence
+  }
+
+  private resumesStreaming(event: Record<string, unknown>) {
+    if (event.type === 'agent_start' || event.type === 'message_update') return true
+    if (event.type !== 'message') return false
+    const message = event.message
+    return Boolean(message && typeof message === 'object' && !Array.isArray(message) && (message as Record<string, unknown>).role === 'assistant')
   }
 
   private transition(sessionId: string, lifecycle: PiRuntimeLifecycle, error?: string, failureKind?: PiRuntimeFailureKind) {

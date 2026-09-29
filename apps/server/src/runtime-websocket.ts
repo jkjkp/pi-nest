@@ -137,10 +137,10 @@ export class RuntimeWebSocketBroker {
       if (cause instanceof PiRuntimeCapacityError) return this.error(socket, command.data.id, 'RUNTIME_CAPACITY_EXCEEDED', 'Pi runtime capacity is exhausted', command.data.sessionId)
       return this.error(socket, command.data.id, 'COMMAND_FAILED', 'Pi runtime command failed', command.data.sessionId)
     }
-    const prompt = this.runtime.startPrompt(watched.session, command.data.message)
+    const prompt = this.runtime.beginPrompt(watched.session, command.data.message)
     if (!prompt) return this.error(socket, command.data.id, 'SESSION_BUSY', 'Pi session is already running', command.data.sessionId)
-    this.ack(socket, command.data.id, command.data.type, command.data.sessionId)
-    void prompt.catch(() => this.error(socket, command.data.id, 'PROMPT_FAILED', 'Pi session prompt failed', command.data.sessionId))
+    this.ack(socket, command.data.id, command.data.type, command.data.sessionId, { runId: prompt.runId })
+    void prompt.settled.catch(() => this.error(socket, command.data.id, 'PROMPT_FAILED', 'Pi session prompt failed', command.data.sessionId))
   }
 
   private async watch(socket: RuntimeSocket, state: SocketState, command: { id: string; resume?: { after: number }; sessionId: string }): Promise<void> {

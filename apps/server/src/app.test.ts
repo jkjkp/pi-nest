@@ -37,7 +37,7 @@ function runtimeMock() {
     beginPrompt: vi.fn(),
     beginMutation: vi.fn().mockResolvedValue(() => undefined),
     deleteSession: vi.fn().mockResolvedValue(undefined),
-    isPromptActive: vi.fn().mockReturnValue(false),
+    isPromptStreaming: vi.fn().mockReturnValue(false),
     startPrompt: vi.fn(),
   }
 }
@@ -82,7 +82,7 @@ describe('Pi Nest API', () => {
     expect(response.headers.get('cache-control')).toBe('no-store')
     await expect(response.json()).resolves.toEqual({ entries: [], hasEarlier: false, revision: 'a'.repeat(64), session: { cwd: '/working', id: 'session-1', updatedAt: nativeSession.updatedAt } })
     expect(readPiSessionHistory).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', sessionFile: '/pi/session.jsonl' })
-    runtime.isPromptActive.mockReturnValue(true)
+    runtime.isPromptStreaming.mockReturnValue(true)
     expect((await app().request('/api/sessions/session-1/history')).status).toBe(409)
   })
 

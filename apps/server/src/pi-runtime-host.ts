@@ -9,13 +9,14 @@ export type PiRuntimeSession = {
 export type PiRuntimeEvent = {
   event: Record<string, unknown>
   observedAt: string
+  runId?: string
   sequence: number
   sessionId: string
   turnId?: string
 }
 
 /** Raw events reported by the CLI process; transport metadata is assigned by SessionEventStream. */
-export type PiRuntimeHostEvent = Omit<PiRuntimeEvent, 'sequence' | 'turnId'>
+export type PiRuntimeHostEvent = Omit<PiRuntimeEvent, 'runId' | 'sequence' | 'turnId'>
 
 export type PiRuntimePromptResult = {
   model: { id: string; provider: string } | undefined
@@ -198,7 +199,7 @@ export class PiRuntimeHost {
   }
 
   async abort() {
-    if (!this.running || !this.process) return false
+    if (!this.process) return false
     this.abortRequested = true
     await this.process.send({ type: 'abort' })
     return true

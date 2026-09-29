@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readdir, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import type { PiRuntimeHost } from './pi-runtime-host.js'
+import type { PiRuntimeEvent, PiRuntimeHost } from './pi-runtime-host.js'
 import { PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
 
 const session = { cwd: '/fixture', id: 'session-1', sessionFile: '/fixture/session.jsonl' }
@@ -37,6 +37,25 @@ function hostMock() {
 }
 
 describe('PiRuntimeRegistry', () => {
+  it('tags native events with the prompt run ID before asynchronous stream delivery', async () => {
+    const host = hostMock()
+    const running = deferred<{ model: undefined; stopReason: string }>()
+    host.prompt.mockReturnValueOnce(running.promise)
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const events: Array<{ runId?: string }> = []
+    await registry.subscribe(session.id, 0, (event) => events.push(event), () => undefined)
+
+    const prompt = registry.beginPrompt(session, 'implement')!
+    await vi.waitFor(() => expect(host.prompt).toHaveBeenCalledWith('implement'))
+    host.emit({ type: 'turn_start' })
+    await vi.waitFor(() => expect(events).toHaveLength(1))
+    expect(events[0]?.runId).toBe(prompt.runId)
+
+    running.resolve({ model: undefined, stopReason: 'stop' })
+    await prompt.settled
+    await registry.close()
+  })
+
   it('accepts one pending extension response after the prompt has settled', async () => {
     const host = hostMock()
     const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
@@ -49,6 +68,116 @@ describe('PiRuntimeRegistry', () => {
     await expect(registry.respondToExtension(session.id, { id: 'plan-choice', type: 'extension_ui_response', value: 'Implement here' })).resolves.toBe(true)
     expect(host.respondToExtension).toHaveBeenCalledWith({ id: 'plan-choice', type: 'extension_ui_response', value: 'Implement here' })
     await expect(registry.respondToExtension(session.id, { id: 'plan-choice', type: 'extension_ui_response', value: 'Implement here' })).resolves.toBe(false)
+    await registry.close()
+  })
+
+  it('snapshots an idle pending dialog without replaying its historical request', async () => {
+    const host = hostMock()
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    await registry.resume(session)
+    const received: PiRuntimeEvent[] = []
+    await registry.watch(session.id, 'tab-live', 0, (event) => received.push(event), () => undefined)
+    host.emit({ id: 'choice-1', method: 'select', options: ['one'], title: 'Choose', type: 'extension_ui_request' })
+    await vi.waitFor(() => expect(received).toHaveLength(1))
+
+    const replayed: PiRuntimeEvent[] = []
+    const snapshots: any[] = []
+    await registry.watch(session.id, 'tab-a', 0, (event) => replayed.push(event), () => undefined, (snapshot) => snapshots.push(snapshot))
+
+    expect(replayed).toEqual([])
+    expect(snapshots[0]?.pendingExtensionDialogs).toMatchObject([{ event: { id: 'choice-1', type: 'extension_ui_request' } }])
+
+    await registry.respondToExtension(session.id, { id: 'choice-1', type: 'extension_ui_response', value: 'one' })
+    await vi.waitFor(() => expect(replayed).toContainEqual(expect.objectContaining({ event: { dialogId: 'choice-1', type: 'extension_ui_resolved' } })))
+    await registry.close()
+  })
+
+  it('does not replay thought events while an active turn waits for extension input', async () => {
+    const host = hostMock()
+    const running = deferred<{ model: undefined; stopReason: string }>()
+    host.prompt.mockReturnValueOnce(running.promise)
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    await registry.watch(session.id, 'live', 0, () => undefined, () => undefined)
+    registry.beginPrompt(session, 'make a plan')
+    await vi.waitFor(() => expect(host.prompt).toHaveBeenCalled())
+    host.emit({ type: 'turn_start' })
+    host.emit({ assistantMessageEvent: { delta: 'thinking', type: 'thinking_delta' }, type: 'message_update' })
+    host.emit({ id: 'choice-1', method: 'select', options: ['one'], title: 'Choose', type: 'extension_ui_request' })
+    await vi.waitFor(() => expect(registry.isPromptStreaming(session.id)).toBe(false))
+
+    const replayed: number[] = []
+    const snapshots: any[] = []
+    await registry.watch(session.id, 'refreshed', 0, (event) => replayed.push(event.sequence), () => undefined, (snapshot) => snapshots.push(snapshot))
+
+    expect(replayed).toEqual([])
+    expect(snapshots[0]).toMatchObject({ activeTurn: { waitingForExtension: true }, pendingExtensionDialogs: [{ event: { id: 'choice-1' } }] })
+
+    await registry.respondToExtension(session.id, { id: 'choice-1', type: 'extension_ui_response', value: 'one' })
+    host.emit({ type: 'agent_start' })
+    host.emit({ assistantMessageEvent: { delta: 'new thought', type: 'thinking_delta' }, type: 'message_update' })
+    await vi.waitFor(() => expect(registry.isPromptStreaming(session.id)).toBe(true))
+
+    const resumed: number[] = []
+    await registry.watch(session.id, 'resumed', 0, (event) => resumed.push(event.sequence), () => undefined)
+    expect(resumed).toEqual([5, 6])
+    await registry.close()
+  })
+
+  it('tracks an agent started by Pi after an extension response as a native active turn', async () => {
+    const host = hostMock()
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const events: Array<{ runId?: string }> = []
+    const statuses: string[] = []
+    await registry.watch(session.id, 'tab-a', 0, (event) => events.push(event), () => undefined, undefined, (status) => statuses.push(status.lifecycle))
+    await registry.resume(session)
+
+    host.emit({ type: 'agent_start' })
+    await vi.waitFor(() => expect(events).toHaveLength(1))
+    const runId = events[0]?.runId
+    expect(runId).toBeTypeOf('string')
+    expect(registry.isPromptActive(session.id)).toBe(true)
+    expect(registry.beginPrompt(session, 'must wait')).toBeUndefined()
+
+    const snapshots: any[] = []
+    await registry.watch(session.id, 'tab-b', 1, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
+    expect(snapshots[0]).toMatchObject({ activeTurn: { runId }, runtime: { lifecycle: 'active' } })
+    expect(snapshots[0]?.activeTurn?.prompt).toBeUndefined()
+
+    host.emit({ message: { content: 'Implement the plan.', role: 'user' }, type: 'message' })
+    host.emit({ type: 'agent_settled' })
+    await vi.waitFor(() => expect(events).toHaveLength(3))
+    expect(events.map((event) => event.runId)).toEqual([runId, runId, runId])
+    expect(statuses).toContain('active')
+    expect(statuses).toContain('idle')
+    expect(registry.isPromptActive(session.id)).toBe(false)
+    await registry.close()
+  })
+
+  it('does not let a settled plan turn consume its immediately started implementation turn', async () => {
+    const host = hostMock()
+    const running = deferred<{ model: undefined; stopReason: string }>()
+    host.prompt.mockReturnValueOnce(running.promise)
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const events: Array<{ runId?: string }> = []
+    await registry.watch(session.id, 'tab-a', 0, (event) => events.push(event), () => undefined)
+
+    const plan = registry.beginPrompt(session, 'make a plan')!
+    await vi.waitFor(() => expect(host.prompt).toHaveBeenCalledWith('make a plan'))
+    host.emit({ type: 'agent_settled' })
+    host.emit({ type: 'agent_start' })
+    host.emit({ type: 'turn_start' })
+    host.emit({ message: { content: [{ text: 'Implement the plan.', type: 'text' }], role: 'user' }, type: 'message_start' })
+    await vi.waitFor(() => expect(events).toHaveLength(4))
+
+    const implementationRunId = events[1]?.runId
+    expect(events.map((event) => event.runId)).toEqual([plan.runId, implementationRunId, implementationRunId, implementationRunId])
+    expect(implementationRunId).not.toBe(plan.runId)
+    running.resolve({ model: undefined, stopReason: 'stop' })
+    await plan.settled
+    expect(registry.isPromptActive(session.id)).toBe(true)
+
+    host.emit({ type: 'agent_settled' })
+    await vi.waitFor(() => expect(registry.isPromptActive(session.id)).toBe(false))
     await registry.close()
   })
 
@@ -139,7 +268,7 @@ describe('PiRuntimeRegistry', () => {
     await registry.resume(sessionFor('two'))
     await vi.advanceTimersByTimeAsync(5)
 
-    await expect(registry.watch('one', 'socket-a', 1, () => undefined, () => undefined)).rejects.toMatchObject({ code: 'RESUME_GAP' })
+    await expect(registry.watch('one', 'socket-a', 1, () => undefined, () => undefined)).resolves.toBeTypeOf('function')
     await registry.close()
     vi.useRealTimers()
   })
@@ -199,7 +328,7 @@ describe('PiRuntimeRegistry', () => {
 
     const replayed: number[] = []
     const snapshots: any[] = []
-    await registry.watch(session.id, 'tab-b', 2, (event) => replayed.push(event.sequence), () => undefined, (snapshot) => snapshots.push(snapshot))
+    await registry.watch(session.id, 'tab-b', 0, (event) => replayed.push(event.sequence), () => undefined, (snapshot) => snapshots.push(snapshot))
 
     expect(snapshots).toMatchObject([{ activeTurn: { prompt: 'resume this prompt' }, replayAfter: 0, runtime: { lifecycle: 'active' } }])
     expect(replayed).toEqual([1, 2])
@@ -372,7 +501,7 @@ describe('PiRuntimeRegistry', () => {
     unsubscribe()
     await vi.advanceTimersByTimeAsync(10)
     expect(first.close).toHaveBeenCalledOnce()
-    await expect(registry.watch(session.id, 'tab-b', 1, () => undefined, () => undefined)).rejects.toMatchObject({ code: 'RESUME_GAP' })
+    await expect(registry.watch(session.id, 'tab-b', 1, () => undefined, () => undefined)).resolves.toBeTypeOf('function')
 
     const recreated: number[] = []
     await registry.watch(session.id, 'tab-b', 0, (event) => recreated.push(event.sequence), () => undefined)

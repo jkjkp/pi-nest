@@ -142,7 +142,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
       const sessionId = context.req.param('sessionId')
       const query = historyQuerySchema.safeParse(context.req.query())
       if (!query.success) return context.json({ error: 'Invalid history page request' }, 400)
-      if (runtime.isPromptActive(sessionId)) return context.json({ error: 'Pi session is running' }, 409)
+      if (runtime.isPromptStreaming(sessionId)) return context.json({ error: 'Pi session is running' }, 409)
 
       const resolved = await resolveSession(sessionId)
       if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
@@ -175,7 +175,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
       const sessionId = context.req.param('sessionId')
       const query = turnIndexQuerySchema.safeParse(context.req.query())
       if (!query.success) return context.json({ error: 'Invalid Turn index request' }, 400)
-      if (runtime.isPromptActive(sessionId)) return context.json({ error: 'Pi session is running' }, 409)
+      if (runtime.isPromptStreaming(sessionId)) return context.json({ error: 'Pi session is running' }, 409)
 
       const resolved = await resolveSession(sessionId)
       if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)

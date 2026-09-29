@@ -20,7 +20,7 @@ function runtime() {
     commandWhenIdle: vi.fn().mockResolvedValue({ data: { levels: ['low', 'high'], models: [{ id: 'model-2', name: 'Model 2', provider: 'test' }] } }),
     commandWhileRunning: vi.fn().mockResolvedValue({ success: true }),
     respondToExtension: vi.fn().mockResolvedValue(true),
-    startPrompt: vi.fn().mockReturnValue(Promise.resolve({ stopReason: 'stop' })),
+    beginPrompt: vi.fn().mockReturnValue({ runId: 'run-1', settled: Promise.resolve({ stopReason: 'stop' }) }),
     resume: vi.fn().mockResolvedValue(undefined),
     unwatch: vi.fn().mockReturnValue(true),
     watch: vi.fn(async (sessionId: string, _subscriberId: string, _after: number, listener: (event: any) => void, _onError?: unknown, _snapshot?: (value: unknown) => void, _status?: (value: unknown) => void) => {
@@ -51,8 +51,8 @@ describe('RuntimeWebSocketBroker', () => {
     await broker.message(client, JSON.stringify({ id: 'a1', resume: { after: 0 }, sessionId: 'session-1', type: 'watch' }))
     await broker.message(client, JSON.stringify({ id: 'p2', message: 'hello', sessionId: 'session-1', type: 'prompt' }))
     expect(client.sent).toContainEqual({ command: 'watch', id: 'a1', sessionId: 'session-1', type: 'ack' })
-    expect(client.sent).toContainEqual({ command: 'prompt', id: 'p2', sessionId: 'session-1', type: 'ack' })
-    expect(registry.startPrompt).toHaveBeenCalledWith(nativeSession, 'hello')
+    expect(client.sent).toContainEqual({ command: 'prompt', data: { runId: 'run-1' }, id: 'p2', sessionId: 'session-1', type: 'ack' })
+    expect(registry.beginPrompt).toHaveBeenCalledWith(nativeSession, 'hello')
 
     const unknown = { type: 'future_pi_event', value: { retained: true } }
     registry.emit({ event: unknown, observedAt: 'now', sequence: 7, sessionId: 'session-1' })
@@ -100,7 +100,7 @@ describe('RuntimeWebSocketBroker', () => {
     await broker.message(client, JSON.stringify({ id: 'p1', message: 'hello', sessionId: 'session-1', type: 'prompt' }))
 
     expect(client.sent).toContainEqual({ code: 'RUNTIME_CAPACITY_EXCEEDED', id: 'p1', message: 'Pi runtime capacity is exhausted', sessionId: 'session-1', type: 'error' })
-    expect(registry.startPrompt).not.toHaveBeenCalled()
+    expect(registry.beginPrompt).not.toHaveBeenCalled()
   })
 
   it('replaces a subscription when watch resumes after a newer sequence', async () => {
@@ -152,14 +152,13 @@ describe('RuntimeWebSocketBroker', () => {
     expect(client.sent[0]).toMatchObject({ atSequence: 7, sessionId: 'session-1', type: 'session_snapshot' })
   })
 
-  it('requires a resync before replaying an impossible cursor', async () => {
+  it('uses a fresh snapshot instead of replaying an expired idle cursor', async () => {
     const registry = new PiRuntimeRegistry()
     const broker = new RuntimeWebSocketBroker(registry)
     const client = socket()
     broker.open(client)
     await broker.message(client, JSON.stringify({ id: 'a1', resume: { after: 1 }, sessionId: 'session-1', type: 'watch' }))
-    expect(client.sent.map((message) => (message as { type: string }).type)).toEqual(['resync_required', 'session_snapshot', 'ack'])
-    expect(client.sent[0]).toEqual({ reason: 'sequence_gap', sessionId: 'session-1', type: 'resync_required' })
+    expect(client.sent.map((message) => (message as { type: string }).type)).toEqual(['session_snapshot', 'ack'])
     await registry.close()
   })
 
