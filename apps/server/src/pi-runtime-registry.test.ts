@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import type { PiRuntimeEvent, PiRuntimeHost } from './pi-runtime-host.js'
-import { PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
+import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
 
 const session = { cwd: '/fixture', id: 'session-1', sessionFile: '/fixture/session.jsonl' }
 const sessionFor = (id: string) => ({ ...session, id })
@@ -37,6 +37,27 @@ function hostMock() {
 }
 
 describe('PiRuntimeRegistry', () => {
+  it('reports missing runtimes separately from locked control commands and settings updates', async () => {
+    const result = deferred<Record<string, unknown>>()
+    const host = { ...hostMock(), command: vi.fn(() => result.promise) }
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      expect(registry.commandWhenIdle(session, { type: 'get_runtime_state' })).toBeUndefined()
+      await registry.resume(session)
+      const first = registry.commandWhenIdle(session, { type: 'get_runtime_state' })!
+      expect(() => registry.commandWhenIdle(session, { type: 'get_available_models' })).toThrow(PiRuntimeBusyError)
+      result.resolve({ data: {} })
+      await first
+      const finishSettings = registry.beginGlobalSettingsUpdate()!
+      expect(() => registry.commandWhenIdle(session, { type: 'get_runtime_state' })).toThrow(PiRuntimeBusyError)
+      await finishSettings()
+      await expect(registry.commandWhenIdle(session, { type: 'get_available_models' })).resolves.toEqual({ data: {} })
+    } finally {
+      result.resolve({ data: {} })
+      await registry.close()
+    }
+  })
+
   it('tags native events with the prompt run ID before asynchronous stream delivery', async () => {
     const host = hostMock()
     const running = deferred<{ model: undefined; stopReason: string }>()

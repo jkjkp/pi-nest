@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RuntimeWebSocketBroker } from './runtime-websocket.js'
-import { PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
+import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
 
 const adapter = vi.hoisted(() => ({ listPiSessions: vi.fn() }))
 vi.mock('@pi-nest/pi-adapter', () => adapter)
@@ -168,6 +168,20 @@ describe('RuntimeWebSocketBroker', () => {
     broker.open(client)
     await broker.message(client, '{bad json')
     expect(client.sent).toEqual([{ code: 'INVALID_COMMAND', message: 'WebSocket command must be valid JSON', type: 'error' }])
+  })
+
+  it('distinguishes a busy session from an unloaded runtime', async () => {
+    const registry = runtime()
+    const broker = new RuntimeWebSocketBroker(registry as never)
+    const client = socket()
+    broker.open(client)
+    await broker.message(client, JSON.stringify({ id: 'w1', sessionId: 'session-1', type: 'watch' }))
+    registry.commandWhenIdle.mockImplementationOnce(() => { throw new PiRuntimeBusyError() })
+    await broker.message(client, JSON.stringify({ id: 'busy', sessionId: 'session-1', type: 'get_runtime_state' }))
+    registry.commandWhenIdle.mockReturnValueOnce(undefined as never)
+    await broker.message(client, JSON.stringify({ id: 'missing', sessionId: 'session-1', type: 'get_runtime_state' }))
+    expect(client.sent).toContainEqual({ code: 'SESSION_BUSY', id: 'busy', message: 'Pi 会话正在处理其他操作，请稍后重试。', sessionId: 'session-1', type: 'error' })
+    expect(client.sent).toContainEqual({ code: 'RUNTIME_NOT_LOADED', id: 'missing', message: 'Pi runtime is not loaded', sessionId: 'session-1', type: 'error' })
   })
 
   it('forwards advanced controls only after explicit resume and keeps returned data safe', async () => {

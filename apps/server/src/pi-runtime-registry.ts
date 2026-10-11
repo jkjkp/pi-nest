@@ -34,6 +34,10 @@ type RuntimeState = {
 export type PiRuntimePrompt = { accepted: Promise<void>; runId: string; settled: Promise<PiRuntimePromptResult> }
 type RuntimeStatusListener = (status: PiRuntimeStatus) => void
 
+export class PiRuntimeBusyError extends Error {
+  constructor() { super('Pi session is busy') }
+}
+
 export class PiRuntimeCapacityError extends Error {
   constructor() { super('Pi runtime capacity is exhausted') }
 }
@@ -110,7 +114,8 @@ export class PiRuntimeRegistry {
 
   /** Serializes an idle-only RPC control command with other session mutations. */
   commandWhenIdle(session: PiRuntimeSession, command: Record<string, unknown>): Promise<Record<string, unknown> | undefined> | undefined {
-    if (this.settingsUpdating || this.locks.has(session.id) || !this.entries.has(session.id)) return undefined
+    if (this.settingsUpdating || this.locks.has(session.id)) throw new PiRuntimeBusyError()
+    if (!this.entries.has(session.id)) return undefined
     this.cancelUnload(session.id)
     this.locks.set(session.id, 'mutation')
     this.transition(session.id, 'loading')

@@ -3,7 +3,7 @@ import { listPiSessions } from '@pi-nest/pi-adapter'
 import { z } from 'zod'
 
 import type { PiRuntimeEvent, PiRuntimeSession } from './pi-runtime-host.js'
-import { PiRuntimeCapacityError, PiRuntimeRegistry, type PiRuntimeSessionSnapshot, type PiRuntimeStatus } from './pi-runtime-registry.js'
+import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry, type PiRuntimeSessionSnapshot, type PiRuntimeStatus } from './pi-runtime-registry.js'
 import { PiRuntimeResumeError } from './session-event-stream.js'
 
 const commandSchema = z.discriminatedUnion('type', [
@@ -125,7 +125,8 @@ export class RuntimeWebSocketBroker {
         if (!result) return this.error(socket, command.data.id, 'RUNTIME_NOT_LOADED', 'Pi runtime is not loaded', command.data.sessionId)
         const response = await result
         return this.ack(socket, command.data.id, command.data.type, command.data.sessionId, this.safeData(command.data.type, response))
-      } catch {
+      } catch (cause) {
+        if (cause instanceof PiRuntimeBusyError) return this.error(socket, command.data.id, 'SESSION_BUSY', 'Pi 会话正在处理其他操作，请稍后重试。', command.data.sessionId)
         return this.error(socket, command.data.id, 'COMMAND_FAILED', 'Pi runtime command failed', command.data.sessionId)
       }
     }
