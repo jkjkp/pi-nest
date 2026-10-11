@@ -1,29 +1,6 @@
-export type PiRuntimeEvent = {
-  event: Record<string, unknown>
-  observedAt: string
-  runId?: string
-  sequence: number
-  sessionId: string
-  turnId?: string
-}
+import type { PiRuntimeEvent, RuntimeError, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel, RuntimeMessage, RuntimeCommandPayload } from '@pi-nest/contracts'
+export type { PiRuntimeEvent, RuntimeError, RuntimeLifecycle, RuntimeFailureKind, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel } from '@pi-nest/contracts'
 
-export type RuntimeError = { code: string; id?: string; message: string; sessionId?: string; type: 'error' }
-export type RuntimeLifecycle = 'notLoaded' | 'loading' | 'idle' | 'active' | 'failed'
-export type RuntimeFailureKind = 'process_error' | 'process_exit' | 'protocol_error' | 'rpc_error' | 'rpc_timeout' | 'startup_timeout'
-export type RuntimeStatus = { error?: string; failureKind?: RuntimeFailureKind; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
-export type SessionSnapshot = {
-  activeTurn?: { prompt?: string; runId: string; startedAt: string; waitingForExtension?: true }
-  atSequence: number
-  extensionUi: { freshness: 'known' | 'restored' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
-  pendingExtensionDialogs?: PiRuntimeEvent[]
-  replayAfter?: number
-  runtime: Omit<RuntimeStatus, 'sessionId'>
-  sessionId: string
-}
-type RuntimeAck = { command: string; data?: unknown; id: string; sessionId: string; type: 'ack' }
-export type RuntimePromptAck = { runId: string }
-export type ResyncRequired = { reason: 'event_buffer_expired' | 'sequence_gap'; sessionId: string; type: 'resync_required' }
-type RuntimeMessage = RuntimeAck | RuntimeError | ResyncRequired | ({ type: 'pi_event' } & PiRuntimeEvent) | ({ type: 'session_snapshot' } & SessionSnapshot) | ({ type: 'runtime_status' } & RuntimeStatus)
 type RuntimeSocket = Pick<WebSocket, 'close' | 'readyState' | 'send'> & { addEventListener: WebSocket['addEventListener'] }
 
 type RuntimeWebSocketClientOptions = {
@@ -33,16 +10,6 @@ type RuntimeWebSocketClientOptions = {
 }
 
 type PendingCommand = { reject: (cause: Error) => void; resolve: (data: unknown) => void }
-
-export type PiRuntimeState = {
-  followUpMode?: string
-  isCompacting: boolean
-  isStreaming: boolean
-  model?: { id?: string; provider?: string }
-  steeringMode?: string
-  thinkingLevel?: string
-}
-export type PiRuntimeModel = { id: string; name?: string; provider: string }
 
 const runtimeIdStorageKey = 'pi-nest-runtime-instance'
 const watchStorageKey = 'pi-nest-runtime-watches'
@@ -181,30 +148,30 @@ export class RuntimeWebSocketClient {
     if (!this.watched.has(sessionId)) return
     this.watched.delete(sessionId)
     this.saveWatches()
-    await this.command('unwatch', sessionId)
+    await this.command({ type: 'unwatch', sessionId })
   }
 
-  resumeRuntime(sessionId: string) { return this.command('resume', sessionId) }
+  resumeRuntime(sessionId: string) { return this.command({ type: 'resume', sessionId }) }
 
-  prompt(sessionId: string, message: string) { return this.command<RuntimePromptAck>('prompt', sessionId, message) }
-  abort(sessionId: string) { return this.command('abort', sessionId) }
-  steer(sessionId: string, message: string) { return this.command('steer', sessionId, message) }
-  followUp(sessionId: string, message: string) { return this.command('follow_up', sessionId, message) }
-  setModel(sessionId: string, provider: string, modelId: string) { return this.command('set_model', sessionId, undefined, undefined, { modelId, provider }) }
-  setThinkingLevel(sessionId: string, level: string) { return this.command('set_thinking_level', sessionId, undefined, undefined, { level }) }
-  compact(sessionId: string) { return this.command('compact', sessionId) }
-  getRuntimeState(sessionId: string) { return this.command<PiRuntimeState>('get_runtime_state', sessionId) }
-  getAvailableModels(sessionId: string) { return this.command<{ models: PiRuntimeModel[] }>('get_available_models', sessionId) }
-  getAvailableThinkingLevels(sessionId: string) { return this.command<{ levels: string[] }>('get_available_thinking_levels', sessionId) }
+  prompt(sessionId: string, message: string) { return this.command<RuntimePromptAck>({ type: 'prompt', sessionId, message }) }
+  abort(sessionId: string) { return this.command({ type: 'abort', sessionId }) }
+  steer(sessionId: string, message: string) { return this.command({ type: 'steer', sessionId, message }) }
+  followUp(sessionId: string, message: string) { return this.command({ type: 'follow_up', sessionId, message }) }
+  setModel(sessionId: string, provider: string, modelId: string) { return this.command({ type: 'set_model', sessionId, modelId, provider }) }
+  setThinkingLevel(sessionId: string, level: string) { return this.command({ type: 'set_thinking_level', sessionId, level }) }
+  compact(sessionId: string) { return this.command({ type: 'compact', sessionId }) }
+  getRuntimeState(sessionId: string) { return this.command<PiRuntimeState>({ type: 'get_runtime_state', sessionId }) }
+  getAvailableModels(sessionId: string) { return this.command<{ models: PiRuntimeModel[] }>({ type: 'get_available_models', sessionId }) }
+  getAvailableThinkingLevels(sessionId: string) { return this.command<{ levels: string[] }>({ type: 'get_available_thinking_levels', sessionId }) }
   extensionUiResponse(sessionId: string, dialogId: string, response: { cancelled?: boolean; confirmed?: boolean; value?: unknown }) {
-    return this.command('extension_ui_response', sessionId, undefined, undefined, { ...response, dialogId })
+    return this.command({ type: 'extension_ui_response', sessionId, ...response, dialogId })
   }
 
-  private async command<T = void>(type: string, sessionId: string, message?: string, after?: number, extra?: Record<string, unknown>): Promise<T> {
+  private async command<T = void>(command: RuntimeCommandPayload): Promise<T> {
     const socket = await this.connect()
     const id = `web-${++this.nextId}`
     const result = new Promise<T>((resolve, reject) => this.pending.set(id, { reject, resolve: (data) => resolve(data as T) }))
-    socket.send(JSON.stringify({ ...extra, id, ...(message === undefined ? {} : { message }), ...(after === undefined ? {} : { resume: { after } }), sessionId, type }))
+    socket.send(JSON.stringify({ ...command, id }))
     return result
   }
 
@@ -376,7 +343,7 @@ export class RuntimeWebSocketClient {
   }
 
   private async sendWatch(sessionId: string, after: number) {
-    await this.command('watch', sessionId, undefined, after)
+    await this.command({ type: 'watch', sessionId, resume: { after } })
   }
 
   private recoverWatch(sessionId: string, after: number) {

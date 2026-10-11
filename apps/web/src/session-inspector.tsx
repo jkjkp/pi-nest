@@ -3,7 +3,7 @@ import { CircleAlert } from 'lucide-react'
 
 import { ScrollArea } from '@/components/ui/scroll-area'
 
-import { isRunActive, type SessionRunSummary } from './workspace-store.js'
+import { isRunActive, type SessionRunSummary } from './session-run-model.js'
 import { type PiSessionSummary, formatUpdatedAt, runInspectorFields, sessionStatusLabel } from './workspace.js'
 
 export function SessionInspector({ run, session }: { run: SessionRunSummary | undefined; session: PiSessionSummary | undefined }) {

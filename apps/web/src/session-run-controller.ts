@@ -1,5 +1,7 @@
+import { stripAnsiText } from './ansi-text.js'
 import { isRuntimeConnectionError, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
-import { nativeUserMessage, type PromptStatus, useWorkspaceStore } from './workspace-store.js'
+import { nativeUserMessage, type PromptStatus } from './session-run-model.js'
+import { useWorkspaceStore } from './workspace-store.js'
 
 type SessionRunControllerOptions = {
   invalidateHistory: (sessionId: string) => void | Promise<void>
@@ -93,6 +95,15 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   }
 
   runtime.onPiEvent((event) => {
+    const store = useWorkspaceStore.getState()
+    const raw = event.event
+    if (raw.type === 'extension_ui_request') {
+      if (raw.method === 'set_editor_text' && typeof raw.text === 'string') store.setDraft(event.sessionId, stripAnsiText(raw.text))
+      if (runtime.shouldApplyExtensionUi(event)) {
+        if (raw.method === 'setStatus' && typeof raw.statusKey === 'string' && raw.statusKey) store.setExtensionStatus(event.sessionId, raw.statusKey, typeof raw.statusText === 'string' ? raw.statusText : undefined)
+        if (raw.method === 'setWidget' && typeof raw.widgetKey === 'string' && raw.widgetKey) store.setExtensionWidget(event.sessionId, raw.widgetKey, Array.isArray(raw.widgetLines) && raw.widgetLines.every((line) => typeof line === 'string') ? raw.widgetLines : undefined)
+      }
+    }
     let activeRun = activeRuns.get(event.sessionId)
     if (!activeRun && event.event.type === 'agent_start' && event.runId) {
       clearAwaitingAgentCheck(event.sessionId)
@@ -130,6 +141,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
 
   runtime.onError((error) => {
     if (error.code === 'RUNTIME_RESTARTED' && error.sessionId) {
+      useWorkspaceStore.getState().clearRuntimeState(error.sessionId)
       activeRuns.delete(error.sessionId)
       useWorkspaceStore.getState().updateRun(error.sessionId, { error: 'Pi 运行服务已重启，本轮已中断。', status: 'error' })
       useWorkspaceStore.getState().setWatchState(error.sessionId, 'watching')
@@ -149,6 +161,8 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   })
 
   runtime.onResyncRequired((message) => {
+    useWorkspaceStore.getState().clearRuntimeState(message.sessionId)
+    useWorkspaceStore.getState().clearExtensionUi(message.sessionId)
     clearAwaitingAgentCheck(message.sessionId)
     activeRuns.delete(message.sessionId)
     useWorkspaceStore.getState().clearRun(message.sessionId)
@@ -157,6 +171,10 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   })
 
   runtime.onSessionSnapshot((snapshot) => {
+    const store = useWorkspaceStore.getState()
+    if ((store.runtimeStates[snapshot.sessionId]?.revision ?? -1) > snapshot.runtime.revision) return
+    store.replaceExtensionUi(snapshot.sessionId, snapshot.extensionUi)
+    store.setRuntimeState(snapshot.sessionId, snapshot.runtime)
     useWorkspaceStore.getState().setWatchState(snapshot.sessionId, 'ready')
     if (snapshot.activeTurn && !activeRuns.has(snapshot.sessionId)) {
       const status = snapshot.activeTurn.waitingForExtension ? 'awaiting_input' : 'running'
@@ -169,6 +187,10 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   })
 
   runtime.onRuntimeStatus((status) => {
+    const store = useWorkspaceStore.getState()
+    if ((store.runtimeStates[status.sessionId]?.revision ?? -1) > status.revision) return
+    store.setRuntimeState(status.sessionId, status)
+    if (status.lifecycle === 'failed') store.clearExtensionUi(status.sessionId)
     if (status.lifecycle === 'active' && !activeRuns.has(status.sessionId)) {
       activeRuns.set(status.sessionId, { awaitingRunId: false, runId: undefined, stopReason: undefined })
       useWorkspaceStore.getState().setRun(status.sessionId, { pendingInputs: [], status: 'running', systemEvents: [], turns: [] })
@@ -194,7 +216,11 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     },
     getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,
     getAvailableThinkingLevels: async (sessionId) => (await runtime.getAvailableThinkingLevels(sessionId)).levels,
-    getRuntimeState: (sessionId) => runtime.getRuntimeState(sessionId),
+    getRuntimeState: async (sessionId) => {
+      const state = await runtime.getRuntimeState(sessionId)
+      if (state.model?.id && state.model.provider) useWorkspaceStore.getState().updateRun(sessionId, { model: `${state.model.provider}/${state.model.id}` })
+      return state
+    },
     openSession: (sessionId) => {
       void (async () => {
         const previous = foregroundSessionId

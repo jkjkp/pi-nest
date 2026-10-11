@@ -1,31 +1,7 @@
-import type { PiSessionSummary } from './workspace.js'
+import type { PiSessionHistoryEntry, PiSessionHistoryResponse, PiSessionTurnIndexEntry as TurnIndexEntry } from '@pi-nest/contracts'
+export type { PiSessionHistoryEntry, PiSessionHistoryResponse, PiSessionTurnIndex, PiSessionTurnIndexEntry as TurnIndexEntry } from '@pi-nest/contracts'
 
 export const historyPageSize = 40
-
-export type PiSessionHistoryEntry = {
-  id: string
-  parentId: string | null
-  raw: Record<string, unknown>
-  timestamp: string
-  type: string
-}
-
-export type PiSessionHistoryResponse = {
-  beforeCursor?: string
-  entries: PiSessionHistoryEntry[]
-  hasEarlier: boolean
-  revision: string
-  session: PiSessionSummary
-}
-
-export type TurnIndexEntry = {
-  id: string
-  index: number
-  promptPreview: string
-  startedAt: string
-}
-
-export type PiSessionTurnIndex = { entries: TurnIndexEntry[]; revision: string }
 
 export function sessionHistoryQueryKey(sessionId: string) {
   return ['session-history', sessionId] as const

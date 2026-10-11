@@ -15,6 +15,7 @@ function runtimeMock() {
     abort: vi.fn().mockResolvedValue(undefined),
     watch: vi.fn().mockImplementation(async (sessionId: string, role: 'background' | 'foreground' = 'foreground', after = watches.get(sessionId)?.after ?? 0) => { watches.set(sessionId, { after, role }) }),
     unwatch: vi.fn().mockImplementation(async (sessionId: string) => { watches.delete(sessionId) }),
+    shouldApplyExtensionUi: vi.fn(() => true),
     watchedSessions: vi.fn(() => [...watches].map(([sessionId, watch]) => ({ sessionId, ...watch }))),
     resumeRuntime: vi.fn().mockResolvedValue(undefined),
     followUp: vi.fn().mockResolvedValue(undefined),
@@ -28,7 +29,7 @@ function runtimeMock() {
     steer: vi.fn().mockResolvedValue(undefined),
     emit: (event: PiRuntimeEvent) => { for (const listener of events) listener(event) },
     fail: (error: { code?: string; message: string; sessionId?: string }) => { for (const listener of errors) listener(error) },
-    snapshot: (snapshot: any) => { for (const listener of snapshots) listener(snapshot) },
+    snapshot: (snapshot: any) => { for (const listener of snapshots) listener({ atSequence: 0, extensionUi: { freshness: 'unknown', statuses: {}, widgets: {} }, ...snapshot }) },
     resync: (message: { sessionId: string }) => { for (const listener of resyncs) listener(message) },
     status: (status: { error?: string; lifecycle: any; revision: number; sessionId: string }) => { for (const listener of statuses) listener(status) },
   }
@@ -37,7 +38,7 @@ function runtimeMock() {
 async function tick() { await Promise.resolve(); await Promise.resolve() }
 
 describe('session run controller', () => {
-  beforeEach(() => useWorkspaceStore.setState({ runs: {} }))
+  beforeEach(() => useWorkspaceStore.setState({ runs: {}, runtimeStates: {}, watchStates: {}, extensionStatuses: {}, extensionWidgets: {}, drafts: {} }))
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
   it('watches, resumes, then prompts and completes from native Pi events', async () => {
@@ -261,4 +262,51 @@ describe('session run controller', () => {
     expect(runtime.watch).toHaveBeenCalledWith('session-a', 'foreground', 3)
     expect(runtime.watch).toHaveBeenCalledWith('session-b', 'background', 4)
   })
+  it('owns runtime and extension projections without an extension UI component', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2 }, extensionUi: { freshness: 'restored', statuses: { plan: 'planning' }, widgets: { plan: ['step one'] } } })
+    expect(useWorkspaceStore.getState()).toMatchObject({
+      runtimeStates: { 'session-a': { lifecycle: 'idle', revision: 2 } },
+      watchStates: { 'session-a': 'ready' },
+      extensionStatuses: { 'session-a': { plan: 'planning' } },
+      extensionWidgets: { 'session-a': { plan: ['step one'] } },
+    })
+    const emit = (event: Record<string, unknown>) => runtime.emit({ event, sessionId: 'session-a', sequence: 3, observedAt: 'now' })
+    emit({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'plan', statusText: 'implementing' })
+    emit({ type: 'extension_ui_request', method: 'setWidget', widgetKey: 'plan', widgetLines: ['step two'] })
+    emit({ type: 'extension_ui_request', method: 'set_editor_text', text: '\u001b[31mnext prompt\u001b[0m' })
+    expect(useWorkspaceStore.getState().extensionStatuses['session-a']).toEqual({ plan: 'implementing' })
+    expect(useWorkspaceStore.getState().extensionWidgets['session-a']).toEqual({ plan: ['step two'] })
+    expect(useWorkspaceStore.getState().drafts['session-a']).toBe('next prompt')
+    runtime.shouldApplyExtensionUi.mockReturnValue(false)
+    emit({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'plan', statusText: 'old' })
+    expect(useWorkspaceStore.getState().extensionStatuses['session-a']).toEqual({ plan: 'implementing' })
+    runtime.getRuntimeState.mockResolvedValueOnce({ isCompacting: false, isStreaming: false, model: { id: 'model', provider: 'provider' } } as any)
+    await expect(controller.getRuntimeState('session-a')).resolves.toMatchObject({ model: { id: 'model' } })
+    expect(useWorkspaceStore.getState().runs['session-a']?.model).toBe('provider/model')
+  })
+
+  it('ignores older runtime revisions and clears projections on failure and resync', () => {
+    const runtime = runtimeMock()
+    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const snapshot = { sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 5 }, extensionUi: { freshness: 'known', statuses: { plan: 'current' }, widgets: { plan: ['current'] } } }
+    runtime.snapshot(snapshot)
+    runtime.status({ sessionId: 'session-a', lifecycle: 'failed', revision: 4 })
+    runtime.snapshot({ ...snapshot, runtime: { lifecycle: 'active', revision: 3 }, extensionUi: { freshness: 'known', statuses: {}, widgets: {} } })
+    expect(useWorkspaceStore.getState().runtimeStates['session-a']).toMatchObject({ lifecycle: 'idle', revision: 5 })
+    expect(useWorkspaceStore.getState().extensionStatuses['session-a']).toEqual({ plan: 'current' })
+    runtime.status({ sessionId: 'session-a', lifecycle: 'failed', revision: 6 })
+    expect(useWorkspaceStore.getState().extensionStatuses['session-a']).toEqual({})
+    expect(useWorkspaceStore.getState().extensionWidgets['session-a']).toEqual({})
+    runtime.snapshot({ ...snapshot, runtime: { lifecycle: 'idle', revision: 7 } })
+    runtime.resync({ sessionId: 'session-a' })
+    expect(useWorkspaceStore.getState().extensionStatuses['session-a']).toEqual({})
+    runtime.snapshot({ ...snapshot, runtime: { lifecycle: 'idle', revision: 0 } })
+    expect(useWorkspaceStore.getState().runtimeStates['session-a']?.revision).toBe(0)
+    runtime.fail({ code: 'RUNTIME_RESTARTED', message: 'restart', sessionId: 'session-a' })
+    runtime.snapshot({ ...snapshot, runtime: { lifecycle: 'idle', revision: 0 } })
+    expect(useWorkspaceStore.getState().runtimeStates['session-a']?.revision).toBe(0)
+  })
+
 })

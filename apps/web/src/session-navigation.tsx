@@ -20,7 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 
-import { isRunActive, type SessionRunSummary } from './workspace-store.js'
+import { isRunActive, type SessionRunSummary } from './session-run-model.js'
 import { filterProjectsByQuery, type PiSessionSummary, type ProjectSessionGroup, sessionDisplayName } from './workspace.js'
 
 export function SessionNavigation({

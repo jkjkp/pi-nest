@@ -5,7 +5,7 @@ import { formatActivityDuration, formatElapsedTime, nextExecutionExpanded, turnE
 import { startElapsedClock } from './turn-elapsed-clock.js'
 import { shouldExecutionFollowLatest } from './turn-execution-scroll.js'
 import type { TimelineItem } from './timeline-model.js'
-import type { PromptStatus } from './workspace-store.js'
+import type { PromptStatus } from './session-run-model.js'
 
 export function TurnExecution({ item, isRunning, presentation, runMessage, runStatus }: { item: TimelineItem; isRunning: boolean; presentation: TurnPresentation; runMessage?: string; runStatus?: PromptStatus }) {
   const [expanded, setExpanded] = useState(isRunning)

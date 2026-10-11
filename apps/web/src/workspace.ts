@@ -1,14 +1,8 @@
-import type { PromptStatus, SessionRunSummary } from './workspace-store.js'
-import type { RuntimeStatus } from './runtime-websocket-client.js'
+import type { PiSessionSummary, RuntimeStatus } from '@pi-nest/contracts'
+import type { PromptStatus, SessionRunSummary } from './session-run-model.js'
 import { stripAnsiLine } from './ansi-text.js'
 
-export type PiSessionSummary = {
-  cwd?: string
-  firstMessage?: string
-  id: string
-  name?: string
-  updatedAt?: string
-}
+export type { PiSessionSummary } from '@pi-nest/contracts'
 
 export type ProjectSessionGroup = {
   cwd?: string

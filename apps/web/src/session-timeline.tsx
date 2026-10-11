@@ -15,7 +15,7 @@ import { TurnExecution } from './turn-execution.js'
 import { projectTurnPresentation } from './turn-execution-model.js'
 import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
-import type { PendingInput, PromptStatus } from './workspace-store.js'
+import type { PendingInput, PromptStatus } from './session-run-model.js'
 
 export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onJumpToTurn, onJumpToUnloadedTurn, onLoadEarlier, onPendingJumpHandled, onRetry, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, scrollViewport, systemEvents = [], turnIndex, turns = [] }: {
   error: boolean

@@ -1,7 +1,6 @@
-import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { type InfiniteData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
+import { type CSSProperties, useEffect, useState } from 'react'
 import { ChevronDown, CircleX, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
-import { Link, useSearchParams } from 'react-router'
+import { Link } from 'react-router'
 
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -9,202 +8,52 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from 
 import { Textarea } from '@/components/ui/textarea'
 
 import { useComposerTextarea } from './composer-textarea.js'
-import { historyUserTurnCount, mergeSessionHistoryPage, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
-import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import { SessionInspector } from './session-inspector.js'
 import { SessionNavigation } from './session-navigation.js'
 import type { SessionRunController } from './session-run-controller.js'
 import { SessionTimeline } from './session-timeline.js'
 import { ExtensionUiInline } from './runtime-extension-ui.js'
-import type { TurnJumpAlignment } from './timeline-pagination.js'
-import { isRunActive, useWorkspaceStore } from './workspace-store.js'
-import { createSession, deleteSession, fetchSessionHistory, fetchSessionTurnIndex, fetchSessions, renameSession, revealProjectInFinder } from './workspace-api.js'
-import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, runtimeStatusLabel, sessionDisplayName, sessionStatusLabel, shouldFollowLatest, type ProjectSessionGroup } from './workspace.js'
-
-const emptySessions: Awaited<ReturnType<typeof fetchSessions>> = []
-type HistoryPageParam = { before?: string; revision?: string }
+import { useWorkspaceStore } from './workspace-store.js'
+import { useWorkspaceSession } from './use-workspace-session.js'
+import { useTimelineViewport } from './use-timeline-viewport.js'
+import { sessionDisplayName, sessionStatusLabel } from './workspace.js'
 
 export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunController }) {
-  const [searchParams, setSearchParams] = useSearchParams()
-  const queryClient = useQueryClient()
-  const selectedSessionId = searchParams.get('session') ?? ''
-  const draftProjectKey = searchParams.get('draftProject') ?? ''
-  const drafts = useWorkspaceStore((state) => state.drafts)
-  const extensionStatuses = useWorkspaceStore((state) => state.extensionStatuses)
-  const extensionWidgets = useWorkspaceStore((state) => state.extensionWidgets)
-  const collapsedProjectKeys = useWorkspaceStore((state) => state.collapsedProjectKeys)
-  const hiddenProjectCwds = useWorkspaceStore((state) => state.hiddenProjectCwds)
+  const session = useWorkspaceSession(sessionRuns)
+  const {
+    selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, modelLabel, status, isActive, isStreaming,
+    extensionStatus, extensionWidget, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
+    navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
+    mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, queueMode, setQueueMode,
+    sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
+    startDraft, removeProject, abortPrompt, openControls, handleRename, handleDelete,
+    jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, compact, loadEarlier, retryHistory,
+  } = session
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
   const inspectorWidth = useWorkspaceStore((state) => state.inspectorWidth)
   const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
-  const runs = useWorkspaceStore((state) => state.runs)
-  const runtimeStates = useWorkspaceStore((state) => state.runtimeStates)
-  const watchStates = useWorkspaceStore((state) => state.watchStates)
-  const setDraft = useWorkspaceStore((state) => state.setDraft)
-  const navigationOrder = useWorkspaceStore((state) => state.navigationOrder)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
-  const hideProject = useWorkspaceStore((state) => state.hideProject)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
-  const setNavigationOrder = useWorkspaceStore((state) => state.setNavigationOrder)
-  const setProjectCollapsed = useWorkspaceStore((state) => state.setProjectCollapsed)
-  const restoreProject = useWorkspaceStore((state) => state.restoreProject)
-  const [mutatingSessionId, setMutatingSessionId] = useState<string>()
   const [controlOpen, setControlOpen] = useState(false)
-  const [controlError, setControlError] = useState<string>()
-  const [draftError, setDraftError] = useState<string>()
-  const [draftPrompt, setDraftPrompt] = useState('')
-  const [creatingDraft, setCreatingDraft] = useState(false)
-  const [models, setModels] = useState<{ id: string; name?: string; provider: string }[]>([])
-  const [thinkingLevels, setThinkingLevels] = useState<string[]>([])
-  const [queueMode, setQueueMode] = useState<'follow_up' | 'steer'>('steer')
-  const [followLatest, setFollowLatest] = useState(true)
-  const [railOverlay, setRailOverlay] = useState<HTMLElement | null>(null)
-  const [scrollViewport, setScrollViewport] = useState<HTMLElement | null>(null)
-  const [pendingJump, setPendingJump] = useState<{ sessionId: string; turnId: string }>()
   const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
   const [desktopInspectorSheetOpen, setDesktopInspectorSheetOpen] = useState(false)
-  const messageScrollAreaRef = useRef<HTMLDivElement>(null)
-  const navigationInProgress = useRef(false)
-  const navigationFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const followLatestRef = useRef(followLatest)
-  const inspectorToggleScrollTop = useRef<number | undefined>(undefined)
-  const positionedTurn = useRef<string | undefined>(undefined)
-  const previouslyScrolledSessionId = useRef(selectedSessionId)
-  const selectedSessionIdRef = useRef(selectedSessionId)
-  const setFollowingLatest = useCallback((value: boolean) => {
-    followLatestRef.current = value
-    setFollowLatest(value)
-  }, [])
-  const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
-  const sessions = sessionsQuery.data ?? emptySessions
-  const selectedSession = sessions.find((session) => session.id === selectedSessionId)
-  const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
-  const activeTurn = currentRun?.turns.at(-1)
-  const modelLabel = currentRun?.model ?? '当前模型不可用'
-  const status = currentRun?.status ?? 'idle'
-  const isActive = isRunActive(status)
-  const isStreaming = status === 'running' || status === 'aborting'
-  const extensionStatus = extensionStatusLine(extensionStatuses[selectedSessionId])
-  const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
-  const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
-  const historyEnabled = Boolean(selectedSession) && watchStates[selectedSessionId] === 'ready' && !isStreaming && runtimeStates[selectedSessionId]?.lifecycle !== 'loading' && (runtimeStates[selectedSessionId]?.lifecycle !== 'active' || status === 'awaiting_input')
-  const historyQuery = useInfiniteQuery<PiSessionHistoryResponse, Error, InfiniteData<PiSessionHistoryResponse>, ReturnType<typeof sessionHistoryQueryKey>, HistoryPageParam>({
-    enabled: historyEnabled,
-    getNextPageParam: () => undefined,
-    getPreviousPageParam: (firstPage) => firstPage.hasEarlier ? { before: firstPage.beforeCursor, revision: firstPage.revision } : undefined,
-    initialPageParam: {},
-    queryKey: sessionHistoryQueryKey(selectedSessionId),
-    queryFn: ({ pageParam }) => fetchSessionHistory(selectedSessionId, pageParam.before, pageParam.revision),
-    retry: false,
-  })
-  const history = useMemo(() => mergeSessionHistoryPages(historyQuery.data?.pages), [historyQuery.data?.pages])
-  const turnIndexQuery = useQuery({ enabled: historyEnabled && Boolean(history?.revision), queryKey: sessionTurnIndexQueryKey(selectedSessionId, history?.revision), queryFn: () => fetchSessionTurnIndex(selectedSessionId, history!.revision), retry: false })
-  const historyTurnCount = historyUserTurnCount(history?.entries)
-
-  useEffect(() => {
-    selectedSessionIdRef.current = selectedSessionId
-  }, [selectedSessionId])
-
-  const sourceProjects = useMemo(() => groupSessionsByProject(sessions), [sessions])
-  const orderedProjects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
-  const projects = useMemo(() => orderedProjects.filter((project) => !project.cwd || !hiddenProjectCwds[project.cwd]), [hiddenProjectCwds, orderedProjects])
-  const removedProjects = useMemo(() => orderedProjects.filter((project) => Boolean(project.cwd && hiddenProjectCwds[project.cwd])), [hiddenProjectCwds, orderedProjects])
-  const draftProject = !selectedSessionId ? projects.find((project) => project.key === draftProjectKey) : undefined
-  const isDraft = Boolean(draftProject)
-  const prompt = isDraft ? draftPrompt : drafts[selectedSessionId] ?? ''
+  const {
+    setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
+    scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector,
+  } = useTimelineViewport({ selectedSessionId, history, activeTurn, isActive, inspectorOpen, setInspectorOpen })
   const promptTextareaRef = useComposerTextarea(prompt)
 
-  useEffect(() => {
-    if (isDraft || sessions.length === 0) return
-    const visibleSessions = projects.flatMap((project) => project.sessions)
-    if (visibleSessions.some((session) => session.id === selectedSessionId)) return
-    const fallback = visibleSessions[0]
-    setSearchParams(fallback ? { session: fallback.id } : {}, { replace: true })
-  }, [isDraft, projects, selectedSessionId, sessions.length, setSearchParams])
+  function selectSession(sessionId: string) {
+    setFollowingLatest(true)
+    session.selectSession(sessionId)
+  }
 
-  useEffect(() => {
-    const reconciled = reconcileNavigationOrder(navigationOrder, sourceProjects)
-    if (!navigationOrdersEqual(navigationOrder, reconciled)) setNavigationOrder(reconciled)
-  }, [navigationOrder, setNavigationOrder, sourceProjects])
-
-  const setMessageScrollArea = useCallback((node: HTMLDivElement | null) => {
-    messageScrollAreaRef.current = node
-    setScrollViewport(node?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null)
-  }, [setScrollViewport])
-
-  const setRailOverlayRoot = useCallback((node: HTMLDivElement | null) => setRailOverlay(node), [setRailOverlay])
-
-  const scrollToFinalAnswer = useCallback((turnId: string) => {
-    if (!followLatestRef.current || !scrollViewport) return
-    requestAnimationFrame(() => {
-      if (!followLatestRef.current) return
-      const answer = [...(messageScrollAreaRef.current?.querySelectorAll<HTMLElement>('[data-final-answer-turn-id]') ?? [])].find((element) => element.dataset.finalAnswerTurnId === turnId)
-      if (!answer) return
-      const offset = answer.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top
-      scrollViewport.scrollTo({ top: Math.max(0, scrollViewport.scrollTop + offset - 48) })
-    })
-  }, [scrollViewport])
-
-  const followFinalAnswer = useCallback(() => {
-    if (!followLatestRef.current || !scrollViewport) return
-    requestAnimationFrame(() => {
-      if (followLatestRef.current) scrollViewport.scrollTop = scrollViewport.scrollHeight
-    })
-  }, [scrollViewport])
-
-  useEffect(() => {
-    if (!scrollViewport) return
-    const updateFollowLatest = () => {
-      const next = shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, navigationInProgress.current)
-      setFollowingLatest(next)
-    }
-    const completeNavigation = () => {
-      clearTimeout(navigationFallback.current)
-      navigationFallback.current = undefined
-      navigationInProgress.current = false
-      updateFollowLatest()
-    }
-    const handleScroll = () => {
-      updateFollowLatest()
-      if (!navigationInProgress.current) return
-      clearTimeout(navigationFallback.current)
-      navigationFallback.current = setTimeout(completeNavigation, 150)
-    }
-    scrollViewport.addEventListener('scroll', handleScroll, { passive: true })
-    scrollViewport.addEventListener('scrollend', completeNavigation)
-    return () => {
-      clearTimeout(navigationFallback.current)
-      scrollViewport.removeEventListener('scroll', handleScroll)
-      scrollViewport.removeEventListener('scrollend', completeNavigation)
-    }
-  }, [scrollViewport, setFollowingLatest])
-
-  useLayoutEffect(() => {
-    const selectedSessionChanged = previouslyScrolledSessionId.current !== selectedSessionId
-    previouslyScrolledSessionId.current = selectedSessionId
-    if (!followLatest && !selectedSessionChanged) return
-    const frame = requestAnimationFrame(() => {
-      if (scrollViewport) scrollViewport.scrollTop = scrollViewport.scrollHeight
-    })
-
-    return () => cancelAnimationFrame(frame)
-  }, [followLatest, history, scrollViewport, selectedSessionId])
-
-  useLayoutEffect(() => {
-    const key = activeTurn ? `${selectedSessionId}:${activeTurn.startedAt}` : undefined
-    if (!isActive || !key || !scrollViewport || positionedTurn.current === key) return
-    positionedTurn.current = key
-    const frame = requestAnimationFrame(() => { scrollViewport.scrollTop = scrollViewport.scrollHeight })
-    return () => cancelAnimationFrame(frame)
-  }, [activeTurn, isActive, scrollViewport, selectedSessionId])
-
-  useEffect(() => {
-    if (!selectedSession) return
-    sessionRuns.openSession(selectedSessionId)
-  }, [selectedSession, selectedSessionId, sessionRuns])
-
-  useEffect(() => () => sessionRuns.releaseForeground(), [sessionRuns])
+  function submitPrompt() {
+    if ((!selectedSessionId && !isDraft) || !prompt.trim()) return
+    setFollowingLatest(true)
+    session.submitPrompt()
+  }
 
   useEffect(() => {
     const media = window.matchMedia('(min-width: 80rem)')
@@ -217,136 +66,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     media.addEventListener('change', closeSheetOnDesktop)
     return () => media.removeEventListener('change', closeSheetOnDesktop)
   }, [])
-
-  useLayoutEffect(() => {
-    if (inspectorToggleScrollTop.current === undefined || !scrollViewport) return
-    scrollViewport.scrollTo({ top: inspectorToggleScrollTop.current })
-    inspectorToggleScrollTop.current = undefined
-  }, [inspectorOpen, scrollViewport])
-
-  function selectSession(sessionId: string) {
-    setFollowingLatest(true)
-    setDraftPrompt('')
-    setDraftError(undefined)
-    setSearchParams({ session: sessionId })
-    setNavigationOpen(false)
-  }
-
-  function startDraft(project: ProjectSessionGroup) {
-    if (!project.cwd) return
-    setDraftPrompt('')
-    setDraftError(undefined)
-    setProjectCollapsed(project.key, false)
-    setSearchParams({ draftProject: project.key })
-    setNavigationOpen(false)
-  }
-
-  function removeProject(project: ProjectSessionGroup) {
-    if (!project.cwd) return
-    const next = projects.flatMap((candidate) => candidate.cwd === project.cwd ? [] : candidate.sessions)[0]
-    hideProject(project.cwd)
-    if (draftProject?.cwd === project.cwd || selectedSession?.cwd === project.cwd) setSearchParams(next ? { session: next.id } : {})
-  }
-
-  async function submitDraft() {
-    if (!draftProject?.cwd || draftPrompt.trim().length === 0 || creatingDraft) return
-    setCreatingDraft(true)
-    setDraftError(undefined)
-    setFollowingLatest(true)
-    try {
-      const firstPrompt = draftPrompt.trim()
-      const created = await createSession(draftProject.cwd, firstPrompt)
-      sessionRuns.adopt({ historyTurnCount: 0, prompt: firstPrompt, sessionId: created.id })
-      queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => [created, ...(current ?? []).filter((session) => session.id !== created.id)])
-      setDraftPrompt('')
-      setSearchParams({ session: created.id })
-      setNavigationOpen(false)
-    } catch (cause) {
-      setDraftError(cause instanceof Error ? cause.message : '创建 Pi 会话失败，请重试。')
-    } finally {
-      setCreatingDraft(false)
-    }
-  }
-
-  function toggleInspector() {
-    inspectorToggleScrollTop.current = scrollViewport?.scrollTop
-    setInspectorOpen(!inspectorOpen)
-  }
-
-  function submitPrompt() {
-    if (isDraft) return void submitDraft()
-    if (!selectedSessionId || prompt.trim().length === 0) return
-    setFollowingLatest(true)
-    if (!isActive) {
-      if (sessionRuns.start({ historyTurnCount, prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
-    }
-    else if (status === 'running') void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败'))
-  }
-
-  const jumpToTurn = useCallback((_turnId: string, scrollTo: (behavior: ScrollBehavior) => void, alignment: TurnJumpAlignment) => {
-    if (!scrollViewport) return
-    setFollowingLatest(false)
-    const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
-    if (behavior === 'smooth') navigationInProgress.current = true
-    scrollTo(behavior)
-    if (alignment === 'end') requestAnimationFrame(() => scrollViewport.scrollTo({ behavior, top: scrollViewport.scrollHeight }))
-  }, [scrollViewport, setFollowingLatest])
-
-  const jumpToUnloadedTurn = useCallback((turnId: string, cursor: string | undefined) => {
-    if (!selectedSessionId) return
-    const sessionId = selectedSessionId
-    void fetchSessionHistory(sessionId, cursor, history?.revision).then((page) => {
-      if (sessionId !== selectedSessionIdRef.current) return
-      queryClient.setQueryData<InfiniteData<PiSessionHistoryResponse, HistoryPageParam>>(sessionHistoryQueryKey(sessionId), (current) => ({
-        pageParams: [...(current?.pageParams ?? []), { before: cursor, revision: history?.revision }],
-        pages: mergeSessionHistoryPage(current?.pages, page),
-      }))
-      setPendingJump({ sessionId, turnId })
-    })
-  }, [history?.revision, queryClient, selectedSessionId])
-
-  function abortPrompt() {
-    if (!selectedSessionId || !isActive || status === 'aborting') return
-    void sessionRuns.stop(selectedSessionId)
-  }
-
-  async function openControls() {
-    if (!selectedSessionId) return
-    setControlError(undefined)
-    setControlOpen(true)
-    try {
-      await sessionRuns.resumeRuntime(selectedSessionId)
-      const [state, availableModels, levels] = await Promise.all([
-        sessionRuns.getRuntimeState(selectedSessionId), sessionRuns.getAvailableModels(selectedSessionId), sessionRuns.getAvailableThinkingLevels(selectedSessionId),
-      ])
-      setModels(availableModels)
-      setThinkingLevels(levels)
-      if (state.model?.id && state.model.provider) useWorkspaceStore.getState().updateRun(selectedSessionId, { model: `${state.model.provider}/${state.model.id}` })
-    } catch (cause) {
-      setControlError(cause instanceof Error ? cause.message : '无法读取 Pi 运行状态')
-    }
-  }
-
-  async function handleRename(sessionId: string, name: string) {
-    setMutatingSessionId(sessionId)
-    try {
-      await renameSession(sessionId, name)
-      await sessionsQuery.refetch()
-    } finally {
-      setMutatingSessionId(undefined)
-    }
-  }
-
-  async function handleDelete(sessionId: string) {
-    setMutatingSessionId(sessionId)
-    try {
-      await deleteSession(sessionId)
-      queryClient.removeQueries({ queryKey: sessionHistoryQueryKey(sessionId) })
-      await sessionsQuery.refetch()
-    } finally {
-      setMutatingSessionId(undefined)
-    }
-  }
 
   const navigation = (
     <SessionNavigation
@@ -454,12 +173,12 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   isLoading={!isStreaming && !history && historyQuery.isPending}
                   isLoadingEarlier={historyQuery.isFetchingPreviousPage}
                   isRunning={isStreaming}
-                  onLoadEarlier={() => void historyQuery.fetchPreviousPage()}
+                  onLoadEarlier={loadEarlier}
                   onFinalAnswerStart={scrollToFinalAnswer}
                   onFinalAnswerStream={followFinalAnswer}
                   onJumpToTurn={jumpToTurn}
                   onJumpToUnloadedTurn={jumpToUnloadedTurn}
-                  onRetry={() => void historyQuery.refetch()}
+                  onRetry={retryHistory}
                   onPendingJumpHandled={() => setPendingJump(undefined)}
                   overlayRoot={railOverlay}
                   pendingInputs={currentRun?.pendingInputs}
@@ -524,7 +243,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
                 {isActive && <div className="flex gap-1 text-xs"><Button onClick={() => setQueueMode('steer')} size="sm" type="button" variant={queueMode === 'steer' ? 'secondary' : 'ghost'}>Steer</Button><Button onClick={() => setQueueMode('follow_up')} size="sm" type="button" variant={queueMode === 'follow_up' ? 'secondary' : 'ghost'}>Follow-up</Button></div>}
                 <div className="ml-auto flex items-center gap-2">
-                  <Button aria-label="Pi 运行控制" className="hidden max-w-48 text-foreground sm:inline-flex" disabled={!selectedSession || isActive} onClick={() => void openControls()} size="sm" type="button" variant="ghost">
+                  <Button aria-label="Pi 运行控制" className="hidden max-w-48 text-foreground sm:inline-flex" disabled={!selectedSession || isActive} onClick={() => { setControlOpen(true); void openControls() }} size="sm" type="button" variant="ghost">
                     <span className="truncate">{modelLabel}</span>
                     <ChevronDown aria-hidden="true" className="text-muted-foreground" />
                   </Button>
@@ -545,9 +264,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               <SheetTitle>Pi 运行控制</SheetTitle>
               <SheetDescription>直接发送原生 Pi CLI RPC 控制命令。</SheetDescription>
               {controlError && <p className="text-sm text-destructive">{controlError}</p>}
-              <div className="space-y-2"><p className="text-sm font-medium">模型</p>{models.map((model) => <Button className="w-full justify-start" key={`${model.provider}:${model.id}`} onClick={() => selectedSessionId && void sessionRuns.setModel(selectedSessionId, model.provider, model.id).then(() => setControlOpen(false)).catch((cause) => setControlError(cause instanceof Error ? cause.message : '模型切换失败'))} variant="outline">{model.name ?? `${model.provider}/${model.id}`}</Button>)}</div>
-              <div className="space-y-2"><p className="text-sm font-medium">Thinking</p>{thinkingLevels.map((level) => <Button key={level} onClick={() => selectedSessionId && void sessionRuns.setThinkingLevel(selectedSessionId, level).then(() => setControlOpen(false)).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Thinking 切换失败'))} variant="outline">{level}</Button>)}</div>
-              <Button disabled={isActive} onClick={() => selectedSessionId && void sessionRuns.compact(selectedSessionId).then(() => setControlOpen(false)).catch((cause) => setControlError(cause instanceof Error ? cause.message : '压缩失败'))} variant="secondary">压缩上下文</Button>
+              <div className="space-y-2"><p className="text-sm font-medium">模型</p>{models.map((model) => <Button className="w-full justify-start" key={`${model.provider}:${model.id}`} onClick={() => void changeModel(model.provider, model.id).then((changed) => { if (changed) setControlOpen(false) })} variant="outline">{model.name ?? `${model.provider}/${model.id}`}</Button>)}</div>
+              <div className="space-y-2"><p className="text-sm font-medium">Thinking</p>{thinkingLevels.map((level) => <Button key={level} onClick={() => void changeThinkingLevel(level).then((changed) => { if (changed) setControlOpen(false) })} variant="outline">{level}</Button>)}</div>
+              <Button disabled={isActive} onClick={() => void compact().then((changed) => { if (changed) setControlOpen(false) })} variant="secondary">压缩上下文</Button>
             </SheetContent>
           </Sheet>
         </section>

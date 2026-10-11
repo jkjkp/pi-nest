@@ -1,16 +1,8 @@
+import type { PiRuntimeSettings, PiSettingsSnapshot, PiSessionsResponse } from '@pi-nest/contracts'
 import { historyPageSize, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
 import type { PiSessionSummary } from './workspace.js'
 
-export type PiRuntimeSettings = {
-  compactionEnabled: boolean
-  defaultModel?: string
-  defaultProvider?: string
-  defaultThinkingLevel?: string
-  followUpMode: 'all' | 'one-at-a-time'
-  retryEnabled: boolean
-  steeringMode: 'all' | 'one-at-a-time'
-}
-export type PiSettingsSnapshot = { effective: PiRuntimeSettings; global: PiRuntimeSettings; project: Partial<PiRuntimeSettings> }
+export type { PiRuntimeSettings, PiSettingsSnapshot } from '@pi-nest/contracts'
 
 async function fetchJson<T>(url: string) {
   const response = await fetch(url)
@@ -34,7 +26,7 @@ export function fetchSessionTurnIndex(sessionId: string, revision: string) {
 }
 
 export async function fetchSessions() {
-  const body = await fetchJson<{ sessions?: PiSessionSummary[] }>('/api/sessions')
+  const body = await fetchJson<Partial<PiSessionsResponse>>('/api/sessions')
   if (!Array.isArray(body.sessions)) throw new Error('Invalid session list response')
   return body.sessions
 }

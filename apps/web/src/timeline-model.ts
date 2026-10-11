@@ -1,14 +1,8 @@
+import type { RuntimeTurn } from './session-run-model.js'
 import type { PiSessionHistoryEntry } from './history.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
 
-export type RuntimeTurn = {
-  completedAt?: string
-  events: PiRuntimeEvent[]
-  historyTurnCount?: number
-  id: string
-  prompt?: string
-  startedAt: string
-}
+export type { RuntimeTurn } from './session-run-model.js'
 
 export type TurnTiming = {
   completedAt?: string
