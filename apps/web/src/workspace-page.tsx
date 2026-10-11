@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useState } from 'react'
-import { ChevronDown, CircleX, Menu, PanelRight, Send, Settings, SlidersHorizontal, Square } from 'lucide-react'
+import { CircleX, Menu, PanelRight, Send, Settings, SlidersHorizontal, Square } from 'lucide-react'
 import { Link } from 'react-router'
 
 import { Button } from '@/components/ui/button'
@@ -36,7 +36,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
-  const [modelOpen, setModelOpen] = useState(false)
   const [controlOpen, setControlOpen] = useState(false)
   const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
   const [desktopInspectorSheetOpen, setDesktopInspectorSheetOpen] = useState(false)
@@ -245,10 +244,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
                 {isActive && <div className="flex gap-1 text-xs"><Button onClick={() => setQueueMode('steer')} size="sm" type="button" variant={queueMode === 'steer' ? 'secondary' : 'ghost'}>Steer</Button><Button onClick={() => setQueueMode('follow_up')} size="sm" type="button" variant={queueMode === 'follow_up' ? 'secondary' : 'ghost'}>Follow-up</Button></div>}
                 <div className="ml-auto flex items-center gap-2">
-                  <Button aria-label="选择模型" title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} className="max-w-48 text-foreground" disabled={!selectedSession || modelStatus === 'loading' || modelStatus === 'switching'} onClick={() => { setModelOpen(true); void openModels() }} size="sm" type="button" variant="ghost">
-                    <span className="truncate">{modelLabel}</span>
-                    <ChevronDown aria-hidden="true" className="text-muted-foreground" />
-                  </Button>
+                  <ModelSelector key={selectedSessionId} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={!selectedSession} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />
                   <Button aria-label="Pi 运行控制" disabled={!selectedSession || isActive || modelStatus === 'loading' || modelStatus === 'switching'} onClick={() => { setControlOpen(true); void openControls() }} size="icon-sm" type="button" variant="ghost"><SlidersHorizontal aria-hidden="true" /></Button>
                   {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
@@ -262,7 +258,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               </div>
             </div>
           </div>
-          <ModelSelector key={selectedSessionId} open={modelOpen} onOpenChange={setModelOpen} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onRetry={() => void openModels()} onSelect={changeModel} />
           <Sheet open={controlOpen} onOpenChange={setControlOpen}>
             <SheetContent className="space-y-5 overflow-y-auto" side="right">
               <SheetTitle>Pi 运行控制</SheetTitle>

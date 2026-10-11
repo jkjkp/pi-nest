@@ -11,7 +11,7 @@ it('finishes each runtime control read before starting the next one', async () =
   const stateRead = new Promise<void>((resolve) => { release = resolve })
   const controller = {
     resumeRuntime: vi.fn(async () => undefined),
-    getRuntimeState: vi.fn(async () => { await stateRead; return { isCompacting: false, isStreaming: false } }),
+    getRuntimeState: vi.fn(async () => { await stateRead; const details = { isCompacting: false, isStreaming: false }; useWorkspaceStore.getState().setRuntimeDetails('session-1', details); return details }),
     getAvailableModels: vi.fn(async () => []),
     getAvailableThinkingLevels: vi.fn(async () => []),
   } as unknown as SessionRunController
@@ -36,5 +36,12 @@ it('finishes each runtime control read before starting the next one', async () =
   await loading
   expect(controller.getAvailableModels).toHaveBeenCalledWith('session-1')
   expect(controller.getAvailableThinkingLevels).not.toHaveBeenCalled()
+  await probe.workspace!.openModels()
+  expect(controller.getAvailableModels).toHaveBeenCalledTimes(1)
+  await probe.workspace!.openModels(true)
+  expect(controller.getAvailableModels).toHaveBeenCalledTimes(2)
+  useWorkspaceStore.getState().clearRuntimeState('session-1')
+  await probe.workspace!.openModels()
+  expect(controller.getAvailableModels).toHaveBeenCalledTimes(3)
   queryClient.clear()
 })

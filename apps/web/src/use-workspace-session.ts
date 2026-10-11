@@ -3,7 +3,7 @@ import { type InfiniteData, useInfiniteQuery, useQuery, useQueryClient } from '@
 import { useSearchParams } from 'react-router'
 import { historyUserTurnCount, mergeSessionHistoryPage, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
-import type { PiRuntimeModel } from '@pi-nest/contracts'
+import type { PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
 import { isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
@@ -47,6 +47,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const [models, setModels] = useState<PiRuntimeModel[]>([])
   const [modelStatus, setModelStatus] = useState<'unloaded' | 'loading' | 'ready' | 'error' | 'switching'>('unloaded')
   const [modelError, setModelError] = useState<string>()
+  const modelCache = useRef(new Map<string, { details: PiRuntimeState; models: PiRuntimeModel[] }>())
   const modelOperation = useRef<{ sessionId: string } | undefined>(undefined)
   const [thinkingLevels, setThinkingLevels] = useState<string[]>([])
   const [controlSessionId, setControlSessionId] = useState(selectedSessionId)
@@ -196,8 +197,16 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     void sessionRuns.stop(selectedSessionId)
   }
 
-  async function openModels() {
-    if (!selectedSessionId || isActive || modelOperation.current?.sessionId === selectedSessionId) return
+  async function openModels(refresh = false) {
+    if (!selectedSessionId || modelOperation.current?.sessionId === selectedSessionId) return
+    const cached = modelCache.current.get(selectedSessionId)
+    if (!refresh && cached && cached.details === useWorkspaceStore.getState().runtimeDetails[selectedSessionId]) {
+      setModels(cached.models)
+      setModelStatus('ready')
+      setModelError(undefined)
+      return
+    }
+    if (isActive) return
     const operation = { sessionId: selectedSessionId }
     modelOperation.current = operation
     setModelStatus('loading')
@@ -207,6 +216,8 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
       await sessionRuns.getRuntimeState(selectedSessionId)
       const availableModels = await sessionRuns.getAvailableModels(selectedSessionId)
       if (selectedSessionId !== selectedSessionIdRef.current || modelOperation.current !== operation) return
+      const details = useWorkspaceStore.getState().runtimeDetails[selectedSessionId]
+      if (details) modelCache.current.set(selectedSessionId, { details, models: availableModels })
       setModels(availableModels)
       setModelStatus('ready')
     } catch (cause) {
@@ -262,6 +273,9 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     try {
       await sessionRuns.setModel(selectedSessionId, provider, modelId)
       if (selectedSessionId !== selectedSessionIdRef.current || modelOperation.current !== operation) return false
+      const details = useWorkspaceStore.getState().runtimeDetails[selectedSessionId]
+      const cached = modelCache.current.get(selectedSessionId)
+      if (details && cached) modelCache.current.set(selectedSessionId, { ...cached, details })
       setThinkingLevels([])
       setModelStatus('ready')
       return true
