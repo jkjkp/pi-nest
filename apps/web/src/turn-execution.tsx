@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FilePenLine, Terminal, Wrench } from 'lucide-react'
 
-import { formatActivityDuration, formatElapsedTime, nextExecutionExpanded, turnElapsed, type TurnActivity, type TurnPresentation } from './turn-execution-model.js'
+import { executionPhase, formatActivityDuration, formatElapsedTime, nextExecutionExpanded, turnElapsed, type TurnActivity, type TurnPresentation } from './turn-execution-model.js'
 import { startElapsedClock } from './turn-elapsed-clock.js'
 import { shouldExecutionFollowLatest } from './turn-execution-scroll.js'
 import type { TimelineItem } from './timeline-model.js'
@@ -10,7 +10,8 @@ import type { PromptStatus } from './session-run-model.js'
 export function TurnExecution({ item, isRunning, presentation, runMessage, runStatus }: { item: TimelineItem; isRunning: boolean; presentation: TurnPresentation; runMessage?: string; runStatus?: PromptStatus }) {
   const [expanded, setExpanded] = useState(isRunning)
   const [userToggled, setUserToggled] = useState(false)
-  const previousRunning = useRef(isRunning)
+  const executionActive = isRunning || runStatus === 'awaiting_input'
+  const previousRunning = useRef(executionActive)
   const executionViewport = useRef<HTMLDivElement>(null)
   const [executionFollowLatest, setExecutionFollowLatest] = useState(true)
   const [now, setNow] = useState(() => Date.now())
@@ -22,9 +23,9 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
   }, [isRunning, item.id, item.runtimeTiming?.startedAt, item.startedAt])
 
   useEffect(() => {
-    setExpanded((current) => nextExecutionExpanded(current, previousRunning.current, isRunning, userToggled))
-    previousRunning.current = isRunning
-  }, [isRunning, userToggled])
+    setExpanded((current) => nextExecutionExpanded(current, previousRunning.current, executionActive, userToggled))
+    previousRunning.current = executionActive
+  }, [executionActive, userToggled])
 
   useLayoutEffect(() => {
     if (!expanded || !executionFollowLatest || !executionViewport.current) return
@@ -32,23 +33,16 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
   }, [expanded, executionFollowLatest, presentation.activities])
 
   const elapsed = formatElapsedTime(turnElapsed(item, isRunning, now))
-  const statusText = runStatus === 'submitted'
-    ? '已提交，正在连接 Pi…'
-    : runStatus === 'awaiting_agent'
-      ? runMessage ?? 'Pi 已接收，正在准备执行…'
-      : runStatus === 'awaiting_input'
-        ? '等待你的回答…'
-      : isRunning && item.events.length === 0
-        ? `正在执行 · ${elapsed}`
-        : isRunning
-          ? `思考中 · ${elapsed}`
-          : elapsed === '—' ? '正在同步执行状态…' : `用时 ${elapsed}`
-  if (!presentation.hasExecution) return <section className="my-4 text-sm text-muted-foreground"><p>{statusText}</p><div className="mt-2 border-b border-border/60" /></section>
+  const phase = executionPhase(item, presentation, runStatus, runMessage)
+  const statusText = isRunning ? `${phase} · ${elapsed}`
+    : runStatus === 'submitted' || runStatus === 'awaiting_agent' || runStatus === 'awaiting_input' || runStatus === 'aborting' || runStatus === 'aborted' || runStatus === 'error'
+      ? phase : elapsed === '—' ? '正在同步执行状态…' : `用时 ${elapsed}`
+  if (!presentation.hasExecution) return <section className="my-4 text-sm text-muted-foreground"><p><span aria-live="polite">{isRunning ? phase : statusText}</span>{isRunning ? ` · ${elapsed}` : null}</p><div className="mt-2 border-b border-border/60" /></section>
 
   return (
     <section className="my-4 text-sm" data-turn-execution="">
       <button aria-controls={contentId} aria-expanded={expanded} className="flex w-full items-center gap-1 text-left text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setUserToggled(true); if (!expanded) setExecutionFollowLatest(true); setExpanded((value) => !value) }} type="button">
-        <span>{statusText}</span>
+        <span><span aria-live="polite">{isRunning ? phase : statusText}</span>{isRunning ? ` · ${elapsed}` : null}</span>
         {expanded ? <ChevronDown aria-hidden="true" className="size-4" /> : <ChevronRight aria-hidden="true" className="size-4" />}
       </button>
       {expanded && <div className="py-3" id={contentId}>

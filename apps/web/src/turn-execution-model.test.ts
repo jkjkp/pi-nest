@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatActivityDuration, formatElapsedTime, nextExecutionExpanded, projectTurnPresentation, turnCompletedAt, turnElapsed } from './turn-execution-model.js'
+import { executionPhase, formatActivityDuration, formatElapsedTime, nextExecutionExpanded, projectTurnPresentation, turnCompletedAt, turnElapsed } from './turn-execution-model.js'
 import { timelineItems, type TimelineEvent, type TimelineItem, type TimelinePart } from './timeline-model.js'
 
 function event(type: string, second: number, fields: Record<string, unknown> = {}): TimelineEvent {
@@ -160,4 +160,22 @@ describe('turn elapsed time', () => {
     expect(nextExecutionExpanded(false, true, false, true)).toBe(false)
     expect(nextExecutionExpanded(true, true, false, true)).toBe(true)
   })
+})
+
+it('automatically opens a newly running turn while respecting manual collapse', () => {
+  expect(nextExecutionExpanded(false, false, true, false)).toBe(true)
+  expect(nextExecutionExpanded(false, false, true, true)).toBe(false)
+})
+
+it('derives phase from the newest event and prioritizes an active tool over old thinking', () => {
+  const waiting = item([])
+  expect(executionPhase(waiting, projectTurnPresentation(waiting, true), 'running')).toBe('等待模型响应')
+  const thinkingTurn = item([thinking('checking', 1)], [event('message_update', 1, { assistantMessageEvent: { type: 'thinking_delta', delta: 'checking' } })])
+  expect(executionPhase(thinkingTurn, projectTurnPresentation(thinkingTurn, true), 'running')).toBe('思考中')
+  const toolTurn = item([...thinkingTurn.parts, tool('read', 2)])
+  expect(executionPhase(toolTurn, projectTurnPresentation(toolTurn, true), 'running')).toContain('读取')
+  const answering = item([text('answer', 3)], [event('message_update', 3, { assistantMessageEvent: { type: 'text_delta', delta: 'answer' } })])
+  expect(executionPhase(answering, projectTurnPresentation(answering, true), 'running')).toBe('正在回答')
+  expect(executionPhase(answering, projectTurnPresentation(answering, true), 'aborting')).toBe('正在停止…')
+  expect(executionPhase(answering, projectTurnPresentation(answering, true), 'awaiting_input')).toBe('等待你的回答…')
 })

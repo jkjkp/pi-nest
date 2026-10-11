@@ -1,3 +1,4 @@
+import type { PromptStatus } from './session-run-model.js'
 import { duration, toolStatus, type TimelineEvent, type TimelineItem, type TimelinePart } from './timeline-model.js'
 
 export type TurnActivity =
@@ -144,5 +145,27 @@ export function formatActivityDuration(milliseconds: number | undefined) {
 }
 
 export function nextExecutionExpanded(expanded: boolean, wasRunning: boolean, isRunning: boolean, userToggled: boolean) {
-  return wasRunning && !isRunning && !userToggled ? false : expanded
+  if (userToggled) return expanded
+  if (!wasRunning && isRunning) return true
+  return wasRunning && !isRunning ? false : expanded
+}
+
+export function executionPhase(item: TimelineItem, presentation: TurnPresentation, status?: PromptStatus, waitingMessage?: string) {
+  if (status === 'submitted') return '已提交，正在连接 Pi…'
+  if (status === 'awaiting_agent') return waitingMessage ?? 'Pi 已接收，正在准备执行…'
+  if (status === 'awaiting_input') return '等待你的回答…'
+  if (status === 'aborting') return '正在停止…'
+  if (status === 'aborted') return '已停止'
+  if (status === 'error') return '执行失败'
+  const activeTool = [...presentation.activities].reverse().find((activity) => (activity.kind === 'tool' || activity.kind === 'bash') && activity.status === '正在执行')
+  if (activeTool?.kind === 'tool') return activeTool.label
+  if (activeTool?.kind === 'bash') return '运行命令'
+  const latest = [...item.events].reverse().find((event) => {
+    const update = record(event.event.assistantMessageEvent)
+    return typeof update?.type === 'string' && /^(thinking|text)_(start|delta|end)$/.test(update.type) || eventType(event) === 'tool_execution_end'
+  })
+  const type = record(latest?.event.assistantMessageEvent)?.type
+  if (typeof type === 'string' && type.startsWith('thinking_')) return type === 'thinking_end' ? '等待模型响应' : '思考中'
+  if (typeof type === 'string' && type.startsWith('text_')) return '正在回答'
+  return '等待模型响应'
 }
