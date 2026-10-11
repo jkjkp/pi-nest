@@ -38,6 +38,8 @@ export type SessionRunSummary = {
 export type RuntimeTurn = {
   completedAt?: string
   events: PiRuntimeEvent[]
+  submittedAt?: string
+  historyAnchorId?: string
   historyTurnCount?: number
   id: string
   prompt?: string

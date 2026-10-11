@@ -80,7 +80,8 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const extensionStatus = extensionStatusLine(extensionStatuses[selectedSessionId])
   const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
   const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
-  const historyEnabled = Boolean(selectedSession) && watchStates[selectedSessionId] === 'ready' && !isStreaming && runtimeStates[selectedSessionId]?.lifecycle !== 'loading' && (runtimeStates[selectedSessionId]?.lifecycle !== 'active' || status === 'awaiting_input')
+  const hasCachedHistory = Boolean(queryClient.getQueryData(sessionHistoryQueryKey(selectedSessionId)))
+  const historyEnabled = Boolean(selectedSession) && watchStates[selectedSessionId] === 'ready' && (!isActive || !hasCachedHistory) && runtimeStates[selectedSessionId]?.lifecycle !== 'loading' && (runtimeStates[selectedSessionId]?.lifecycle !== 'active' || !hasCachedHistory || status === 'awaiting_input')
   const historyQuery = useInfiniteQuery<PiSessionHistoryResponse, Error, InfiniteData<PiSessionHistoryResponse>, ReturnType<typeof sessionHistoryQueryKey>, HistoryPageParam>({
     enabled: historyEnabled,
     getNextPageParam: () => undefined,
@@ -174,7 +175,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     if (isDraft) return void submitDraft()
     if (!selectedSessionId || prompt.trim().length === 0) return
     if (!isActive) {
-      if (sessionRuns.start({ historyTurnCount, prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
+      if (sessionRuns.start({ historyAnchorId: history?.entries.filter((entry) => (entry.raw.message as { role?: string } | undefined)?.role === 'user').at(-1)?.id, historyTurnCount, prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
     }
     else if (status === 'running') void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败', selectedSessionId))
   }

@@ -169,7 +169,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         [sessionId]: {
           ...run,
           executionStartedAt: startedAt,
-          turns: current ? [...run.turns.slice(0, -1), { ...current, startedAt }] : run.turns,
+          turns: current ? [...run.turns.slice(0, -1), { ...current, submittedAt: current.submittedAt ?? current.startedAt, startedAt }] : run.turns,
         },
       },
     }

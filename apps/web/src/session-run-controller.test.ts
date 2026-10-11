@@ -66,10 +66,24 @@ describe('session run controller', () => {
     runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 4, sessionId: 'session-a' })
     const completed = useWorkspaceStore.getState().runs['session-a']
     expect(completed).toMatchObject({ status: 'complete', stopReason: 'stop' })
-    expect(completed?.turns[0]).toMatchObject({ completedAt: '2026-09-22T00:00:26.000Z', id: 'pending:session-a', prompt: 'hello', startedAt: '2026-09-22T00:00:00.000Z' })
+    expect(completed?.turns[0]).toMatchObject({ completedAt: '2026-09-22T00:00:26.000Z', id: expect.stringMatching(/^pending:session-a:/), prompt: 'hello', startedAt: '2026-09-22T00:00:00.000Z' })
     expect(completed?.turns[0]?.events.map((event) => event.event.type)).toEqual(['message_update', 'message_end', 'turn_end'])
     expect(completed?.systemEvents.map((event) => event.event.type)).toEqual(['agent_settled'])
     expect(invalidateHistory).toHaveBeenCalledWith('session-a')
+  })
+
+  it('retains a completed response when another prompt starts before history catches up', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ prompt: 'first', sessionId: 'session-a' })
+    await tick()
+    runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'first answer' } }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
+    runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a' })
+    const first = useWorkspaceStore.getState().runs['session-a']!.turns[0]
+    expect(controller.start({ prompt: 'second', sessionId: 'session-a' })).toBe(true)
+    expect(useWorkspaceStore.getState().runs['session-a']!.turns[0]).toBe(first)
+    expect(useWorkspaceStore.getState().runs['session-a']!.turns.at(-1)?.prompt).toBe('second')
+    await tick()
   })
 
   it('does not let a delayed settlement from another prompt complete this run', async () => {
@@ -210,7 +224,7 @@ describe('session run controller', () => {
 
     const run = useWorkspaceStore.getState().runs['session-a']
     expect(run?.turns).toHaveLength(1)
-    expect(run?.turns[0]).toMatchObject({ id: 'pending:session-a', prompt: 'first prompt' })
+    expect(run?.turns[0]).toMatchObject({ id: expect.stringMatching(/^pending:session-a:/), prompt: 'first prompt' })
     expect(run?.turns[0]?.events.map((event) => event.turnId)).toEqual(['runtime-turn-1', 'runtime-turn-2'])
   })
 

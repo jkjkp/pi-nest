@@ -194,7 +194,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 <div className="conversation-stage">
                   <section className="conversation-stage-content space-y-3">
                     {!isDraft && extensionWidget ? <pre className="rounded border bg-muted p-2 text-xs">{extensionWidget}</pre> : null}
-                    {isActive && (
+                    {isActive && !activeTurn?.prompt && (
                       <div aria-live="polite">
                         <p className="text-xs font-medium text-warning">{sessionStatusLabel(status)}</p>
                       </div>

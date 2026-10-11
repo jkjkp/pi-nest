@@ -31,6 +31,7 @@ export type TimelinePart =
 
 export type TimelineItem = {
   diagnostics: TimelineDiagnostic[]
+  displayId?: string
   events: TimelineEvent[]
   id: string
   kind: 'turn'
@@ -81,11 +82,33 @@ function update(event: TimelineEvent) {
   return record(event.event.assistantMessageEvent)
 }
 
+const messageProjection = new WeakMap<TimelineItem, { index: number; started: boolean; blocks: Map<string, TimelinePart> }>()
+
+function projectTextBlock(item: TimelineItem, kind: 'thinking' | 'assistant_text', event: TimelineEvent, text: string, contentIndex: number, delta: boolean) {
+  const state = messageProjection.get(item)
+  if (!state?.started) {
+    if (delta) pushDelta(item.parts, kind, event, text)
+    else if (kind === 'thinking') pushThinkingMessage(item.parts, event, text)
+    else pushAssistantMessage(item.parts, event, text)
+    return
+  }
+  const key = `${state.index}:${contentIndex}:${kind}`
+  const previous = state.blocks.get(key)
+  if (previous && 'text' in previous) {
+    previous.text = delta ? previous.text + text : text
+    previous.events.push(event)
+  } else {
+    const part: TimelinePart = { events: [event], kind, text }
+    state.blocks.set(key, part)
+    item.parts.push(part)
+  }
+}
+
 function pushDelta(parts: TimelinePart[], kind: 'assistant_text' | 'thinking', event: TimelineEvent, text: string) {
   const previous = parts.at(-1)
   if (previous?.kind === kind) {
     previous.events.push(event)
-    previous.text = text.startsWith(previous.text) ? text : previous.text + text
+    previous.text += text
     return
   }
   parts.push({ events: [event], kind, text })
@@ -107,10 +130,19 @@ function pushAssistantMessage(parts: TimelinePart[], event: TimelineEvent, text:
   parts.push({ events: [event], kind: 'assistant_text', text })
 }
 
+function pushThinkingMessage(parts: TimelinePart[], event: TimelineEvent, text: string) {
+  const previous = [...parts].reverse().find((part) => part.kind === 'thinking')
+  if (previous?.kind === 'thinking' && text.startsWith(previous.text)) {
+    previous.text = text
+    previous.events.push(event)
+  } else parts.push({ events: [event], kind: 'thinking', text })
+}
+
 function pushTool(parts: TimelinePart[], event: TimelineEvent, toolCallId = typeof event.event.toolCallId === 'string' ? event.event.toolCallId : undefined, toolName = typeof event.event.toolName === 'string' ? event.event.toolName : '未知工具', arguments_: Record<string, unknown> | undefined = undefined) {
   const previous = [...parts].reverse().find((part) => part.kind === 'tool' && part.toolCallId === toolCallId && part.toolName === toolName)
   if (previous?.kind === 'tool') {
     previous.events.push(event)
+    if (arguments_) previous.arguments = arguments_
     return
   }
   parts.push({ ...(arguments_ ? { arguments: arguments_ } : {}), events: [event], kind: 'tool', toolCallId, toolName })
@@ -119,20 +151,20 @@ function pushTool(parts: TimelinePart[], event: TimelineEvent, toolCallId = type
 function projectAssistantContent(item: TimelineItem, event: TimelineEvent, content: unknown) {
   if (typeof content === 'string') {
     if (!content) return false
-    pushAssistantMessage(item.parts, event, content)
+    projectTextBlock(item, 'assistant_text', event, content, 0, false)
     return true
   }
   if (!Array.isArray(content)) return false
   let projected = false
-  for (const block of content) {
+  for (const [contentIndex, block] of content.entries()) {
     const candidate = record(block)
     if (candidate?.type === 'text' && typeof candidate.text === 'string') {
-      pushAssistantMessage(item.parts, event, candidate.text)
+      projectTextBlock(item, 'assistant_text', event, candidate.text, contentIndex, false)
       projected = true
       continue
     }
     if (candidate?.type === 'thinking' && typeof candidate.thinking === 'string') {
-      pushDelta(item.parts, 'thinking', event, candidate.thinking)
+      projectTextBlock(item, 'thinking', event, candidate.thinking, contentIndex, false)
       projected = true
       continue
     }
@@ -173,12 +205,21 @@ function projectEvent(item: TimelineItem, event: TimelineEvent) {
   item.events.push(event)
   const type = eventType(event)
   const assistantUpdate = update(event)
+  if (type === 'message_start' && message(event)?.role === 'assistant') {
+    const previous = messageProjection.get(item)
+    messageProjection.set(item, { blocks: previous?.blocks ?? new Map(), index: (previous?.index ?? -1) + 1, started: true })
+    return
+  }
+  if (type === 'message' && message(event)?.role === 'assistant') {
+    const previous = messageProjection.get(item)
+    if (previous?.started) previous.started = false
+  }
   if (type === 'message_update' && assistantUpdate?.type === 'text_delta' && typeof assistantUpdate.delta === 'string') {
-    pushDelta(item.parts, 'assistant_text', event, assistantUpdate.delta)
+    projectTextBlock(item, 'assistant_text', event, assistantUpdate.delta, typeof assistantUpdate.contentIndex === 'number' ? assistantUpdate.contentIndex : 0, true)
     return
   }
   if (type === 'message_update' && typeof assistantUpdate?.type === 'string' && assistantUpdate.type.includes('thinking') && typeof assistantUpdate.delta === 'string') {
-    pushDelta(item.parts, 'thinking', event, assistantUpdate.delta)
+    projectTextBlock(item, 'thinking', event, assistantUpdate.delta, typeof assistantUpdate.contentIndex === 'number' ? assistantUpdate.contentIndex : 0, true)
     return
   }
   if (type === 'message_update') return diagnostic(item, event, 'unrenderable_message')
@@ -245,22 +286,53 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
 
   const historyProjection = history ? memoizedHistoryItems(history) : emptyTimeline
   const items: TimelineItem[] = turns.length > 0 ? [...historyProjection] : historyProjection
+  const matchedHistory = new Set<string>()
   for (const turn of turns) {
     // A local turn exists only after an explicit user prompt has been accepted.
     // Runtime events may enrich it, but cannot create another conversation node.
     if (!turn.prompt?.trim()) continue
     const runtimeTiming = { ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }), startedAt: turn.startedAt }
-    const indexedPersisted = turn.historyTurnCount === undefined ? undefined : items[turn.historyTurnCount]
-    const fallbackPersisted = history && turn.historyTurnCount !== undefined && items.length <= turn.historyTurnCount && items.at(-1)?.prompt === turn.prompt ? items.at(-1) : undefined
-    const persisted = indexedPersisted ?? fallbackPersisted
-    if (persisted) {
-      // A persisted Pi Turn owns its timestamps. Browser timing is only a live fallback.
-      continue
-    }
-    if (turn.historyTurnCount !== undefined && items.length > turn.historyTurnCount) continue
-    const item = newTurn(turn.id, turn.prompt ?? promptFrom(turn.events), turn.startedAt, runtimeTiming)
+    const nativeUser = turn.events.find((event) => record(event.event.message)?.role === 'user')
+    const nativeId = record(nativeUser?.event.message)?.id
+    const anchorIndex = historyProjection.findIndex((item) => item.id === turn.historyAnchorId)
+    const persisted = historyProjection.find((item, index) => {
+      if (matchedHistory.has(item.id)) return false
+      if (typeof nativeId === 'string') return item.id === nativeId
+      if (item.prompt !== turn.prompt) return false
+      // The submission boundary survives pagination and repeated identical prompts.
+      if (turn.historyAnchorId && anchorIndex >= 0) return index > anchorIndex
+      return Date.parse(item.startedAt) >= Date.parse(turn.submittedAt ?? turn.startedAt) - 2_000
+    })
+    const item = newTurn(persisted?.id ?? turn.id, turn.prompt ?? promptFrom(turn.events), persisted?.startedAt ?? turn.startedAt, runtimeTiming)
+    item.displayId = `${turn.id}:${turn.submittedAt ?? turn.startedAt}`
     for (const event of turn.events) projectEvent(item, runtimeEvent(event))
-    items.push(item)
+    if (persisted) {
+      matchedHistory.add(persisted.id)
+      let savedIndex = 0
+      const covered = item.parts.every((part) => {
+        const index = persisted.parts.findIndex((saved, index) => {
+          if (index < savedIndex) return false
+          if (part.kind !== saved.kind) return false
+          if ('text' in part && 'text' in saved) return saved.text === part.text
+          if (part.kind === 'tool' && saved.kind === 'tool') return part.toolCallId === saved.toolCallId && toolStatus(part.events) === toolStatus(saved.events)
+          return false
+        })
+        if (index < 0) return false
+        savedIndex = index + 1
+        return true
+      })
+      // A user entry or an intermediate message_end is not a completed response.
+      if (turn.completedAt && covered && (persisted.parts.length > 0 || persisted.events.some((event) => eventType(event) === 'agent_settled'))) {
+        items[items.indexOf(persisted)] = { ...persisted, displayId: item.displayId }
+      } else {
+        if (item.parts.length === 0) item.parts = persisted.parts
+        items[items.indexOf(persisted)] = item
+      }
+    } else {
+      const index = items.findIndex((saved) => Date.parse(saved.startedAt) > Date.parse(item.startedAt))
+      if (index < 0) items.push(item)
+      else items.splice(index, 0, item)
+    }
   }
   cachedForHistory.set(turns, items)
   return items

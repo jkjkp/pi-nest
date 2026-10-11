@@ -51,7 +51,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   const virtualizer = useVirtualizer({
     count: items.length + 1,
     estimateSize: (index) => index === 0 ? 20 : 240,
-    getItemKey: (index) => index === 0 ? 'history-load-sentinel' : items[index - 1]!.id,
+    getItemKey: (index) => index === 0 ? 'history-load-sentinel' : items[index - 1]!.displayId ?? items[index - 1]!.id,
     getScrollElement: () => scrollViewport ?? null,
     initialRect: { height: 800, width: 0 },
     overscan: 8,
@@ -94,8 +94,8 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     onPendingJumpHandled?.()
   }, [items, onJumpToTurn, onPendingJumpHandled, pendingJumpTurnId, railEntries, virtualizer])
 
-  if (isLoading) return <LoadingTimeline />
-  if (error) return <HistoryError onRetry={onRetry} />
+  if (isLoading && items.length === 0) return <LoadingTimeline />
+  if (error && items.length === 0) return <HistoryError onRetry={onRetry} />
 
   if (items.length === 0 && pendingInputs.length === 0) {
     return <section className="py-8 text-center"><p className="text-sm text-muted-foreground">{isRunning ? '正在等待 Pi 原生事件…' : '当前活动分支尚无可展示的原生条目。'}</p></section>
@@ -109,7 +109,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     if (onJumpToTurn) onJumpToTurn(turnId, scrollTo, alignment)
     else scrollTo('auto')
   }
-  return <section className="conversation-stage pb-6">{overlayRoot !== null && <TurnNavigationRail activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} scrollViewport={scrollViewport} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>{virtualItems.map((virtualItem) => {
+  return <section className="conversation-stage pb-6">{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} scrollViewport={scrollViewport} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>{virtualItems.map((virtualItem) => {
     if (virtualItem.index === 0) return <div className="absolute left-0 top-0 w-full" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>
     const item = items[virtualItem.index - 1]!
     return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><TurnItem isRunning={isRunning && virtualItem.index === items.length} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} runMessage={virtualItem.index === items.length ? runMessage : undefined} runStatus={virtualItem.index === items.length ? runStatus : undefined} /></div>

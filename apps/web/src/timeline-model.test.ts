@@ -162,7 +162,7 @@ describe('timelineItems', () => {
     expect(timelineNavigationEntries(streamed)).toBe(navigation)
   })
 
-  it('replaces the provisional live turn with Pi history timestamps', () => {
+  it('retains completion timing when history contains only the submitted user', () => {
     const items = timelineItems([
       { id: 'user-1', parentId: null, raw: { message: { content: 'old', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:00:00.000Z', type: 'message' },
       { id: 'user-2', parentId: 'user-1', raw: { message: { content: 'new', role: 'user' }, type: 'message' }, timestamp: '2026-09-22T00:01:00.000Z', type: 'message' },
@@ -170,7 +170,7 @@ describe('timelineItems', () => {
 
     expect(items.map((item) => item.id)).toEqual(['user-1', 'user-2'])
     expect(items[1]).toMatchObject({ startedAt: '2026-09-22T00:01:00.000Z' })
-    expect(items[1]?.runtimeTiming).toBeUndefined()
+    expect(items[1]?.runtimeTiming?.completedAt).toBe('2026-09-22T00:01:26.000Z')
   })
 
   it('reconciles the latest runtime Turn when a paged history omits earlier Turns', () => {
@@ -180,7 +180,7 @@ describe('timelineItems', () => {
 
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ id: 'user-41' })
-    expect(items[0]?.runtimeTiming).toBeUndefined()
+    expect(items[0]?.runtimeTiming?.startedAt).toBe('2026-09-22T00:01:00.000Z')
   })
 
   it('keeps full user text for the history panel while deriving a bounded navigation label', () => {
@@ -199,4 +199,64 @@ describe('timelineItems', () => {
   it('does not turn a runtime-only blank prompt into a navigation node', () => {
     expect(timelineItems(undefined, [{ events: [], id: 'turn-1', prompt: ' '.repeat(120), startedAt: '2026-09-22T00:00:00.000Z' }], [])).toEqual([])
   })
+})
+
+describe('live history reconciliation', () => {
+  const entry = (id: string, role: string, content: unknown, timestamp = '2026-09-22T00:00:00.000Z') => ({ id, parentId: null, raw: { type: 'message', message: { role, content } }, timestamp, type: 'message' })
+  const live = (events: ReturnType<typeof runtime>[], completedAt?: string) => ({ id: 'live', prompt: 'go', startedAt: '2026-09-22T00:00:00.000Z', events, ...(completedAt ? { completedAt } : {}) })
+
+  it('renders thinking and tools before settlement despite user-only or partial assistant history', () => {
+    const events = [runtime(1, { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'checking' } }), runtime(2, { type: 'tool_execution_start', toolCallId: 'call', toolName: 'read' })]
+    const history = [entry('user', 'user', 'go')]
+    const before = timelineItems(undefined, [live(events)], [])[0]!
+    const userOnly = timelineItems(history, [live(events)], [])[0]!
+    const partial = timelineItems([...history, entry('assistant', 'assistant', [{ type: 'thinking', thinking: 'check' }])], [live(events)], [])[0]!
+    expect(userOnly.parts.map((part) => part.kind)).toEqual(['thinking', 'tool'])
+    expect(partial.parts).toEqual(userOnly.parts)
+    expect(userOnly.displayId).toBe(before.displayId)
+    expect(timelineItems(history, [], [])[0]?.parts).toEqual([])
+  })
+
+  it('keeps the completed live answer until history covers it and keeps its display key on takeover', () => {
+    const events = [runtime(1, { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'answer' } })]
+    const turns = [live(events, '2026-09-22T00:00:02.000Z')]
+    const history = [entry('user', 'user', 'go')]
+    const incomplete = timelineItems(history, turns, [])[0]!
+    const complete = timelineItems([...history, entry('assistant', 'assistant', [{ type: 'text', text: 'answer' }])], turns, [])[0]!
+    expect(incomplete.parts[0]).toMatchObject({ text: 'answer' })
+    expect(incomplete.runtimeTiming).toBeDefined()
+    expect(complete.runtimeTiming).toBeUndefined()
+    expect(complete.displayId).toBe(incomplete.displayId)
+  })
+
+  it('uses the submission anchor for identical prompts even when pagination shifts their positions', () => {
+    const history = [entry('older', 'user', 'go', '2026-09-21T00:00:00.000Z'), entry('anchor', 'user', 'go', '2026-09-21T01:00:00.000Z'), entry('new', 'user', 'go')]
+    const turns = [{ ...live([runtime(1, { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'new answer' } })]), historyAnchorId: 'anchor', historyTurnCount: 1 }]
+    expect(timelineItems(history, turns, []).map((item) => item.id)).toEqual(['older', 'anchor', 'new'])
+    expect(timelineItems(history.slice(1), turns, []).at(-1)?.parts[0]).toMatchObject({ text: 'new answer' })
+  })
+
+  it('appends repeated delta tokens and replaces only their own message block snapshots', () => {
+    const events = [
+      runtime(1, { type: 'message_start', message: { role: 'assistant' } }),
+      runtime(2, { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'a' } }),
+      runtime(3, { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'a' } }),
+      runtime(4, { type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'aa' }] } }),
+      runtime(5, { type: 'message_start', message: { role: 'assistant' } }),
+      runtime(6, { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'aa' } }),
+      runtime(7, { type: 'message_end', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'aa' }] } }),
+    ]
+    const item = timelineItems(undefined, [live(events)], [])[0]!
+    expect(item.parts.map((part) => 'text' in part ? part.text : '')).toEqual(['aa', 'aa'])
+    expect(item.runtimeTiming?.completedAt).toBeUndefined()
+  })
+})
+
+it('keeps a submitted turn key stable at execution start and gives the next submission a new key', () => {
+  const submitted = { id: 'pending:session', prompt: 'go', events: [], submittedAt: '2026-09-22T00:00:00.000Z', startedAt: '2026-09-22T00:00:00.000Z' }
+  const first = timelineItems(undefined, [submitted], [])[0]!
+  const running = timelineItems(undefined, [{ ...submitted, startedAt: '2026-09-22T00:00:05.000Z' }], [])[0]!
+  const next = timelineItems(undefined, [{ ...submitted, submittedAt: '2026-09-22T00:01:00.000Z' }], [])[0]!
+  expect(running.displayId).toBe(first.displayId)
+  expect(next.displayId).not.toBe(first.displayId)
 })

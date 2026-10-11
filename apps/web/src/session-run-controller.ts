@@ -8,7 +8,7 @@ type SessionRunControllerOptions = {
   runtime: RuntimeWebSocketClient
 }
 
-type StartSessionRunOptions = { historyTurnCount?: number; prompt: string; sessionId: string; startedAt?: string }
+type StartSessionRunOptions = { historyAnchorId?: string; historyTurnCount?: number; prompt: string; sessionId: string; startedAt?: string }
 type ActiveRun = { awaitingRunId: boolean; runId: string | undefined; stopReason: string | undefined }
 
 export type SessionRunController = {
@@ -84,13 +84,15 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     void invalidateHistory(sessionId)
   }
 
-  function beginRun({ historyTurnCount, prompt, sessionId, startedAt }: StartSessionRunOptions, status: Extract<PromptStatus, 'awaiting_agent' | 'submitted' | 'running'> = 'submitted', awaitingRunId = false, runId?: string) {
+  function beginRun({ historyAnchorId, historyTurnCount, prompt, sessionId, startedAt }: StartSessionRunOptions, status: Extract<PromptStatus, 'awaiting_agent' | 'submitted' | 'running'> = 'submitted', awaitingRunId = false, runId?: string) {
+    const completedTurns = useWorkspaceStore.getState().runs[sessionId]?.turns.filter((turn) => turn.completedAt) ?? []
+    const submittedAt = startedAt ?? new Date().toISOString()
     activeRuns.set(sessionId, { awaitingRunId, runId, stopReason: undefined })
     useWorkspaceStore.getState().setRun(sessionId, {
       status,
       systemEvents: [],
       pendingInputs: [],
-      turns: [{ events: [], ...(historyTurnCount === undefined ? {} : { historyTurnCount }), id: `pending:${sessionId}`, prompt, startedAt: startedAt ?? new Date().toISOString() }],
+      turns: [...completedTurns, { events: [], ...(historyAnchorId ? { historyAnchorId } : {}), ...(historyTurnCount === undefined ? {} : { historyTurnCount }), id: `pending:${sessionId}:${crypto.randomUUID()}`, prompt, submittedAt, startedAt: submittedAt }],
     })
   }
 
