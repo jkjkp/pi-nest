@@ -16,7 +16,8 @@
     "@pi-nest/pi-adapter": "workspace:*",
     "hono": "4.13.8",
     "ws": "8.21.3",
-    "zod": "4.6.5"
+    "zod": "4.6.5",
+    "@pi-nest/contracts": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
