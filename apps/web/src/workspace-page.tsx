@@ -8,6 +8,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from 
 import { Textarea } from '@/components/ui/textarea'
 
 import { useComposerTextarea } from './composer-textarea.js'
+import { ThinkingSelector } from './thinking-selector.js'
 import { ModelSelector } from './model-selector.js'
 import { SessionInspector } from './session-inspector.js'
 import { SessionNavigation } from './session-navigation.js'
@@ -25,9 +26,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
-    mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, queueMode, setQueueMode,
+    mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel, queueMode, setQueueMode,
     sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
-    startDraft, removeProject, abortPrompt, openModels, openControls, handleRename, handleDelete,
+    startDraft, removeProject, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, compact, loadEarlier, retryHistory,
   } = session
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
@@ -199,6 +200,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                         <p className="text-xs font-medium text-warning">{sessionStatusLabel(status)}</p>
                       </div>
                     )}
+                    {controlError && !controlOpen && <p className="text-sm text-destructive" role="alert">{controlError}</p>}
                     {currentRun?.error && (
                       <p className="flex items-center gap-2 rounded-lg border border-destructive/30 border-l-2 border-l-destructive bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">
                         <CircleX aria-hidden="true" className="size-4" />
@@ -245,12 +247,13 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 {isActive && <div className="flex gap-1 text-xs"><Button onClick={() => setQueueMode('steer')} size="sm" type="button" variant={queueMode === 'steer' ? 'secondary' : 'ghost'}>Steer</Button><Button onClick={() => setQueueMode('follow_up')} size="sm" type="button" variant={queueMode === 'follow_up' ? 'secondary' : 'ghost'}>Follow-up</Button></div>}
                 <div className="ml-auto flex items-center gap-2">
                   <ModelSelector key={selectedSessionId} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={!selectedSession} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />
-                  <Button aria-label="Pi 运行控制" disabled={!selectedSession || isActive || modelStatus === 'loading' || modelStatus === 'switching'} onClick={() => { setControlOpen(true); void openControls() }} size="icon-sm" type="button" variant="ghost"><SlidersHorizontal aria-hidden="true" /></Button>
+                  <ThinkingSelector key={`thinking:${selectedSessionId}`} open={thinkingOpen} onOpenChange={setThinkingOpen} current={currentThinkingLevel} levels={thinkingLevels} status={thinkingStatus} error={thinkingError} failure={thinkingFailure} disabled={!selectedSession || modelStatus === 'loading' || modelStatus === 'switching'} isActive={isActive} onLoad={() => void openThinking()} onRetry={() => void openThinking(true)} onSelect={changeThinkingLevel} />
+                  <Button aria-label="Pi 运行控制" disabled={!selectedSession || isActive || modelStatus === 'loading' || modelStatus === 'switching'} onClick={() => setControlOpen(true)} size="icon-sm" type="button" variant="ghost"><SlidersHorizontal aria-hidden="true" /></Button>
                   {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
                   {status === 'running' && <Button aria-label={queueMode === 'steer' ? '发送 Steer' : '发送 Follow-up'} className="rounded-full" disabled={prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>}
                   {!isActive && (
-                    <Button aria-label="发送提示词" className="rounded-full" disabled={(!selectedSession && !isDraft) || creatingDraft || modelStatus === 'loading' || modelStatus === 'switching' || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
+                    <Button aria-label="发送提示词" className="rounded-full" disabled={(!selectedSession && !isDraft) || creatingDraft || modelStatus === 'loading' || modelStatus === 'switching' || thinkingStatus === 'loading' || thinkingStatus === 'switching' || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
                   )}
                 </div>
                 </div>
@@ -261,10 +264,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           <Sheet open={controlOpen} onOpenChange={setControlOpen}>
             <SheetContent className="space-y-5 overflow-y-auto" side="right">
               <SheetTitle>Pi 运行控制</SheetTitle>
-              <SheetDescription>调整当前会话的思考等级，或压缩上下文。</SheetDescription>
+              <SheetDescription>压缩当前会话的上下文。</SheetDescription>
               {controlError && <p className="text-sm text-destructive">{controlError}</p>}
-              <div className="space-y-2"><p className="text-sm font-medium">Thinking</p>{thinkingLevels.map((level) => <Button key={level} onClick={() => void changeThinkingLevel(level).then((changed) => { if (changed) setControlOpen(false) })} variant="outline">{level}</Button>)}</div>
-              <Button disabled={isActive} onClick={() => void compact().then((changed) => { if (changed) setControlOpen(false) })} variant="secondary">压缩上下文</Button>
+
+              <Button disabled={isActive || thinkingStatus === 'loading' || thinkingStatus === 'switching'} onClick={() => void compact().then((changed) => { if (changed) setControlOpen(false) })} variant="secondary">压缩上下文</Button>
             </SheetContent>
           </Sheet>
         </section>

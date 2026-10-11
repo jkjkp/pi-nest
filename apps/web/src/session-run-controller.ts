@@ -99,6 +99,10 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   runtime.onPiEvent((event) => {
     const store = useWorkspaceStore.getState()
     const raw = event.event
+    if (raw.type === 'thinking_level_changed' && typeof raw.level === 'string' && runtime.shouldApplyExtensionUi(event)) {
+      const details = store.runtimeDetails[event.sessionId]
+      store.setRuntimeDetails(event.sessionId, { ...(details ?? { isCompacting: false, isStreaming: store.runtimeStates[event.sessionId]?.lifecycle === 'active' }), thinkingLevel: raw.level })
+    }
     if (raw.type === 'extension_ui_request') {
       if (raw.method === 'set_editor_text' && typeof raw.text === 'string') store.setDraft(event.sessionId, stripAnsiText(raw.text))
       if (runtime.shouldApplyExtensionUi(event)) {
@@ -206,10 +210,10 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     }
   })
 
-  function applyModelStatus(status: { sessionId: string; model?: { id: string; provider: string }; lifecycle: string }) {
-    if (!status.model || status.lifecycle === 'failed' || status.lifecycle === 'notLoaded') return
+  function applyModelStatus(status: { sessionId: string; model?: { id: string; provider: string }; thinkingLevel?: string; lifecycle: string }) {
+    if ((!status.model && status.thinkingLevel === undefined) || status.lifecycle === 'failed' || status.lifecycle === 'notLoaded') return
     const store = useWorkspaceStore.getState()
-    store.setRuntimeDetails(status.sessionId, { ...store.runtimeDetails[status.sessionId], isCompacting: false, isStreaming: status.lifecycle === 'active', model: status.model })
+    store.setRuntimeDetails(status.sessionId, { ...store.runtimeDetails[status.sessionId], isCompacting: false, isStreaming: status.lifecycle === 'active', ...(status.model ? { model: status.model } : {}), ...(status.thinkingLevel !== undefined ? { thinkingLevel: status.thinkingLevel } : {}) })
   }
 
   const loadingRuntimes = new Map<string, Promise<void>>()

@@ -5,6 +5,7 @@ import { historyUserTurnCount, mergeSessionHistoryPage, mergeSessionHistoryPages
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import type { PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
+import { thinkingCommand } from './thinking-command.js'
 import { isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { createSession, deleteSession, fetchSessionHistory, fetchSessionTurnIndex, fetchSessions, renameSession, revealProjectInFinder } from './workspace-api.js'
@@ -49,6 +50,11 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const [modelError, setModelError] = useState<string>()
   const modelCache = useRef(new Map<string, { details: PiRuntimeState; models: PiRuntimeModel[] }>())
   const modelOperation = useRef<{ sessionId: string } | undefined>(undefined)
+  const [thinkingOpen, setThinkingOpen] = useState(false)
+  const [thinkingStatus, setThinkingStatus] = useState<'unloaded' | 'loading' | 'ready' | 'error' | 'switching'>('unloaded')
+  const [thinkingError, setThinkingError] = useState<string>()
+  const [thinkingFailure, setThinkingFailure] = useState(0)
+  const thinkingCache = useRef(new Map<string, { model: string; levels: string[] }>())
   const [thinkingLevels, setThinkingLevels] = useState<string[]>([])
   const [controlSessionId, setControlSessionId] = useState(selectedSessionId)
   if (controlSessionId !== selectedSessionId) {
@@ -58,6 +64,10 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     setModelStatus('unloaded')
     setModelError(undefined)
     setThinkingLevels([])
+    setThinkingStatus('unloaded')
+    setThinkingError(undefined)
+    setThinkingFailure(0)
+    setThinkingOpen(false)
   }
   const [queueMode, setQueueMode] = useState<'follow_up' | 'steer'>('steer')
   const [pendingJump, setPendingJump] = useState<{ sessionId: string; turnId: string }>()
@@ -68,6 +78,14 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
   const activeTurn = currentRun?.turns.at(-1)
   const currentModel = runtimeDetails[selectedSessionId]?.model
+  const modelKey = `${currentModel?.provider}/${currentModel?.id}`
+  const [thinkingModelKey, setThinkingModelKey] = useState(modelKey)
+  if (thinkingModelKey !== modelKey) {
+    setThinkingModelKey(modelKey)
+    setThinkingLevels([])
+    setThinkingStatus('unloaded')
+    setThinkingError(undefined)
+  }
   const modelName = models.find((model) => model.id === currentModel?.id && model.provider === currentModel?.provider)?.name ?? currentModel?.id
   const modelLabel = modelStatus === 'switching' ? '正在切换…'
     : modelStatus === 'loading' ? '读取模型…'
@@ -198,6 +216,16 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   function submitPrompt() {
+    const command = thinkingCommand(prompt)
+    if (command) {
+      if (isDraft || !selectedSessionId) { setDraftError('请先进入已有会话，再调整思考等级。'); return }
+      if (isActive) { setControlError('生成结束后可调整思考等级。'); return }
+      if (modelOperation.current?.sessionId === selectedSessionId) { setControlError('正在处理会话设置，请稍后重试。'); return }
+      setThinkingOpen(true)
+      if (command.level) void changeThinkingLevel(command.level).then((changed) => { if (changed) setDraft(selectedSessionId, '') })
+      else { setDraft(selectedSessionId, ''); void openThinking() }
+      return
+    }
     if (modelOperation.current?.sessionId === selectedSessionId) return
     setControlError(undefined)
     if (isDraft) return void submitDraft()
@@ -258,18 +286,30 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     }
   }
 
-  async function openControls() {
-    if (!selectedSessionId) return
-    setControlError(undefined)
+  async function openThinking(refresh = false) {
+    if (!selectedSessionId || modelOperation.current?.sessionId === selectedSessionId) return
+    const model = `${currentModel?.provider}/${currentModel?.id}`
+    const cached = thinkingCache.current.get(selectedSessionId)
+    if (!refresh && cached?.model === model) { setThinkingLevels(cached.levels); setThinkingStatus('ready'); return }
+    if (isActive) return
+    const operation = { sessionId: selectedSessionId }
+    modelOperation.current = operation
+    setThinkingStatus('loading')
+    setThinkingError(undefined)
     try {
       await sessionRuns.resumeRuntime(selectedSessionId)
       await sessionRuns.getRuntimeState(selectedSessionId)
       const levels = await sessionRuns.getAvailableThinkingLevels(selectedSessionId)
-      if (selectedSessionId !== selectedSessionIdRef.current) return
+      const actualModel = useWorkspaceStore.getState().runtimeDetails[selectedSessionId]?.model
+      thinkingCache.current.set(selectedSessionId, { model: `${actualModel?.provider}/${actualModel?.id}`, levels })
+      if (selectedSessionId !== selectedSessionIdRef.current || modelOperation.current !== operation) return
       setThinkingLevels(levels)
+      setThinkingStatus('ready')
     } catch (cause) {
-      setControlError(cause instanceof Error ? cause.message : '无法读取 Pi 运行状态', selectedSessionId)
-    }
+      if (selectedSessionId !== selectedSessionIdRef.current || modelOperation.current !== operation) return
+      setThinkingError(cause instanceof Error ? cause.message : '无法读取思考等级，请重试。')
+      setThinkingStatus('error')
+    } finally { if (modelOperation.current === operation) modelOperation.current = undefined }
   }
 
   async function handleRename(sessionId: string, name: string) {
@@ -305,8 +345,11 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
       const details = useWorkspaceStore.getState().runtimeDetails[selectedSessionId]
       const cached = modelCache.current.get(selectedSessionId)
       if (details && cached) modelCache.current.set(selectedSessionId, { ...cached, details })
+      thinkingCache.current.delete(selectedSessionId)
       setThinkingLevels([])
-      setModelStatus('ready')
+      setThinkingStatus('unloaded')
+      setThinkingError(undefined)
+        setModelStatus('ready')
       return true
     } catch (cause) {
       if (selectedSessionId === selectedSessionIdRef.current && modelOperation.current === operation) {
@@ -320,24 +363,51 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   async function changeThinkingLevel(level: string) {
-    if (!selectedSessionId) return false
-    try { await sessionRuns.setThinkingLevel(selectedSessionId, level); setControlError(undefined, selectedSessionId); return true }
-    catch (cause) { setControlError(cause instanceof Error ? cause.message : 'Thinking 切换失败', selectedSessionId); return false }
+    if (!selectedSessionId || isActive || modelOperation.current?.sessionId === selectedSessionId) return false
+    const operation = { sessionId: selectedSessionId }
+    modelOperation.current = operation
+    setThinkingStatus('switching')
+    setThinkingError(undefined)
+    try {
+      await sessionRuns.resumeRuntime(selectedSessionId)
+      const levels = await sessionRuns.getAvailableThinkingLevels(selectedSessionId)
+      const model = useWorkspaceStore.getState().runtimeDetails[selectedSessionId]?.model
+      thinkingCache.current.set(selectedSessionId, { model: `${model?.provider}/${model?.id}`, levels })
+      if (selectedSessionId === selectedSessionIdRef.current && modelOperation.current === operation) setThinkingLevels(levels)
+      if (!levels.includes(level)) throw new Error(`未知思考等级“${level}”。可用等级：${levels.join('、') || '无'}`)
+      await sessionRuns.setThinkingLevel(selectedSessionId, level)
+      if (selectedSessionId !== selectedSessionIdRef.current || modelOperation.current !== operation) return false
+      const effective = useWorkspaceStore.getState().runtimeDetails[selectedSessionId]?.thinkingLevel
+      if (effective === undefined) throw new Error('Pi 未返回实际思考等级，请重试确认。')
+      setThinkingStatus('ready')
+      setThinkingOpen(false)
+      return true
+    } catch (cause) {
+      if (selectedSessionId === selectedSessionIdRef.current && modelOperation.current === operation) {
+        console.error('Pi thinking change failed', cause)
+        setThinkingFailure((failure) => failure + 1)
+        setThinkingStatus('ready')
+      }
+      return false
+    } finally { if (modelOperation.current === operation) modelOperation.current = undefined }
   }
 
   async function compact() {
-    if (!selectedSessionId) return false
+    if (!selectedSessionId || isActive || modelOperation.current?.sessionId === selectedSessionId) return false
+    const operation = { sessionId: selectedSessionId }
+    modelOperation.current = operation
     try { await sessionRuns.compact(selectedSessionId); setControlError(undefined, selectedSessionId); return true }
     catch (cause) { setControlError(cause instanceof Error ? cause.message : '压缩失败', selectedSessionId); return false }
+    finally { if (modelOperation.current === operation) modelOperation.current = undefined }
   }
 
   return {
     selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
-    mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, queueMode, setQueueMode,
+    mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel, queueMode, setQueueMode,
     sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
-    selectSession, startDraft, removeProject, submitPrompt, abortPrompt, openModels, openControls, handleRename, handleDelete,
+    selectSession, startDraft, removeProject, submitPrompt, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, compact,
     loadEarlier: () => { void historyQuery.fetchPreviousPage() }, retryHistory: () => { void historyQuery.refetch() },
   }

@@ -71,6 +71,21 @@ describe('session run controller', () => {
     expect(runtime.prompt).toHaveBeenCalledWith('session-a', 'hello')
   })
 
+  it('syncs thinking from snapshots and live events while filtering replayed updates', () => {
+    const runtime = runtimeMock()
+    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'active', revision: 3, thinkingLevel: 'high' } })
+    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('high')
+    runtime.shouldApplyExtensionUi.mockReturnValue(false)
+    runtime.emit({ event: { type: 'thinking_level_changed', level: 'low' }, observedAt: 'now', sequence: 1, sessionId: 'session-a' })
+    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('high')
+    runtime.shouldApplyExtensionUi.mockReturnValue(true)
+    runtime.emit({ event: { type: 'thinking_level_changed', level: 'medium' }, observedAt: 'now', sequence: 2, sessionId: 'session-a' })
+    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('medium')
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2, thinkingLevel: 'off' } })
+    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('medium')
+  })
+
   it('watches, resumes, then prompts and completes from native Pi events', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-22T00:00:00.000Z'))
