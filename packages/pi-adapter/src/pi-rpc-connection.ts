@@ -4,6 +4,8 @@ import { StringDecoder } from 'node:string_decoder'
 export type PiRpcRecord = Record<string, unknown>
 export type PiRpcFailureKind = 'process_error' | 'process_exit' | 'protocol_error' | 'rpc_timeout'
 
+export class PiRpcCommandError extends Error {}
+
 export class PiRpcConnectionError extends Error {
   constructor(readonly failureKind: PiRpcFailureKind, message: string, options?: ErrorOptions) {
     super(message, options)
@@ -190,7 +192,7 @@ export class PiRpcConnection {
     if (record.success === true) {
       pending.resolve(record as PiRpcResponse)
     } else {
-      pending.reject(new Error(typeof record.error === 'string' ? record.error : 'Pi RPC command failed'))
+      pending.reject(new PiRpcCommandError(typeof record.error === 'string' ? record.error : 'Pi RPC command failed'))
     }
   }
 

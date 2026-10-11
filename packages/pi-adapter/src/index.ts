@@ -17,5 +17,5 @@ export type {
 } from './read-session-history.js'
 export { PiRpcProcess } from './pi-rpc-process.js'
 export type { PiRpcProcessOptions, PiRpcProcessState } from './pi-rpc-process.js'
-export { PiRpcConnectionError } from './pi-rpc-connection.js'
+export { PiRpcCommandError, PiRpcConnectionError } from './pi-rpc-connection.js'
 export type { PiRpcFailureKind } from './pi-rpc-connection.js'

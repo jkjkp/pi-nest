@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream'
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { PiRpcConnection } from './pi-rpc-connection.js'
+import { PiRpcCommandError, PiRpcConnection } from './pi-rpc-connection.js'
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough()
@@ -41,6 +41,24 @@ function createConnection(child: FakeChild) {
 }
 
 describe('PiRpcConnection', () => {
+  it('distinguishes command rejection from connection failure and keeps the connection usable', async () => {
+    const child = new FakeChild()
+    const { connection } = createConnection(child)
+    const failures = vi.fn()
+    connection.onFailure(failures)
+    await connection.start()
+    const rejected = connection.send({ type: 'set_model', provider: 'test', modelId: 'missing' })
+    const command = JSON.parse(child.stdin.read().toString())
+    child.stdout.write(`${JSON.stringify({ type: 'response', id: command.id, command: 'set_model', success: false, error: 'Model not found' })}\n`)
+    await expect(rejected).rejects.toBeInstanceOf(PiRpcCommandError)
+    expect(failures).not.toHaveBeenCalled()
+    const next = connection.send({ type: 'get_state' })
+    const read = JSON.parse(child.stdin.read().toString())
+    child.stdout.write(`${JSON.stringify({ type: 'response', id: read.id, command: 'get_state', success: true, data: {} })}\n`)
+    await expect(next).resolves.toMatchObject({ success: true })
+    await connection.close()
+  })
+
   it('uses LF-only framing and preserves unknown stdout objects unchanged', async () => {
     const child = new FakeChild()
     const { connection } = createConnection(child)
