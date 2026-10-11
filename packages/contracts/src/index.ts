@@ -10,7 +10,7 @@ export type PiRuntimeEvent = {
 export type RuntimeError = { code: string; id?: string; message: string; sessionId?: string; type: 'error' }
 export type RuntimeLifecycle = 'notLoaded' | 'loading' | 'idle' | 'active' | 'failed'
 export type RuntimeFailureKind = 'process_error' | 'process_exit' | 'protocol_error' | 'rpc_error' | 'rpc_timeout' | 'startup_timeout'
-export type RuntimeStatus = { error?: string; failureKind?: RuntimeFailureKind; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
+export type RuntimeStatus = { model?: { id: string; provider: string }; error?: string; failureKind?: RuntimeFailureKind; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
 export type PiRuntimeExtensionUi = { freshness: 'known' | 'restored' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
 export type PiRuntimeSessionSnapshot = {
   activeTurn?: { prompt?: string; runId: string; startedAt: string; waitingForExtension?: true }
