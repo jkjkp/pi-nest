@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { Check, ChevronDown, RefreshCw, X } from 'lucide-react'
 import { Dialog, Popover } from 'radix-ui'
 import type { PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
+import { filterModels } from './model-search.js'
 import { Button } from '@/components/ui/button'
 
 type ModelSelectorProps = {
@@ -26,9 +27,7 @@ export function ModelSelector({ label, title, disabled, models, currentModel, st
   const listId = useId()
   const mobileContentRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const query = search.trim().toLocaleLowerCase()
-  const filtered = models.filter((model) => `${model.name ?? ''} ${model.provider} ${model.id}`.toLocaleLowerCase().includes(query)).sort((a, b) => a.provider.localeCompare(b.provider))
-  const showProviders = !query || new Set(filtered.map((model) => model.provider)).size > 1
+  const filtered = filterModels(models, search)
   const busy = status === 'loading' || status === 'switching'
   const selectionPending = useRef(false)
 
@@ -70,7 +69,7 @@ export function ModelSelector({ label, title, disabled, models, currentModel, st
   const trigger = <Button aria-label="选择模型" className="max-w-48 text-foreground" disabled={disabled} title={title} size="sm" type="button" variant="ghost"><span className="truncate">{label}</span><ChevronDown aria-hidden="true" className="text-muted-foreground" /></Button>
   const contents = <>
     <div className="flex shrink-0 items-center gap-1 border-b px-2 py-2">
-      <input aria-label="搜索模型" aria-controls={listId} aria-activedescendant={filtered[highlight] ? `${listId}-${highlight}` : undefined} aria-expanded={open} aria-autocomplete="list" role="combobox" className="h-9 min-w-0 flex-1 rounded-md bg-transparent px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" placeholder="搜索模型…" value={search} onChange={(event) => { setSearch(event.target.value); setHighlight(0) }} onKeyDown={(event) => {
+      <input aria-label="搜索模型" aria-controls={listId} aria-activedescendant={filtered[highlight] ? `${listId}-${highlight}` : undefined} aria-expanded={open} aria-autocomplete="list" role="combobox" className="h-9 min-w-0 flex-1 rounded-md bg-transparent px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" placeholder="搜索模型或厂商…" value={search} onChange={(event) => { setSearch(event.target.value); setHighlight(0) }} onKeyDown={(event) => {
         if (event.nativeEvent.isComposing || !filtered.length) return
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
           event.preventDefault()
@@ -84,7 +83,7 @@ export function ModelSelector({ label, title, disabled, models, currentModel, st
     <div ref={listRef} role="listbox" aria-label="可用模型" id={listId} className="min-h-0 overflow-y-auto overscroll-contain p-1.5">
       {filtered.map((model, index) => {
         const selected = currentModel?.provider === model.provider && currentModel.id === model.id
-        const groupStart = showProviders && (index === 0 || filtered[index - 1]?.provider !== model.provider)
+        const groupStart = index === 0 || filtered[index - 1]?.provider !== model.provider
         return <div key={`${model.provider}:${model.id}`} role="presentation">
           {groupStart && <p role="presentation" className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">{model.provider}</p>}
           <button id={`${listId}-${index}`} role="option" aria-selected={selected} aria-label={`${model.provider}/${model.id}${selected ? '，当前模型' : ''}`} data-model-index={index} disabled={busy || isActive} className={`flex min-h-9 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${highlight === index ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'} ${selected ? 'font-medium' : ''}`} onFocus={() => setHighlight(index)} onPointerMove={() => setHighlight(index)} onClick={() => void choose(model)}>
