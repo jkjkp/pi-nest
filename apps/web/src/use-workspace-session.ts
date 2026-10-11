@@ -125,6 +125,34 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     sessionRuns.openSession(selectedSessionId)
   }, [selectedSession, selectedSessionId, sessionRuns])
 
+  useEffect(() => {
+    if (!selectedSession || watchStates[selectedSessionId] !== 'ready' || modelOperation.current?.sessionId === selectedSessionId) return
+    if (runtimeDetails[selectedSessionId]?.model) return
+    if (isActive || runtimeStates[selectedSessionId]?.lifecycle === 'active' || (modelStatus !== 'unloaded' && !(modelStatus === 'ready' && runtimeStates[selectedSessionId]?.lifecycle === 'notLoaded'))) return
+    const operation = { sessionId: selectedSessionId }
+    modelOperation.current = operation
+    // oxlint-disable-next-line react/set-state-in-effect -- Initialize the external Pi runtime when this session becomes ready.
+    setModelStatus('loading')
+    setModelError(undefined)
+    void (async () => {
+      try {
+        await sessionRuns.resumeRuntime(selectedSessionId)
+        const store = useWorkspaceStore.getState()
+        if (!store.runtimeDetails[selectedSessionId] && store.runtimeStates[selectedSessionId]?.lifecycle !== 'active') await sessionRuns.getRuntimeState(selectedSessionId)
+        if (selectedSessionIdRef.current === selectedSessionId && modelOperation.current === operation) setModelStatus('ready')
+      } catch (cause) {
+        if (selectedSessionIdRef.current !== selectedSessionId || modelOperation.current !== operation) return
+        if (useWorkspaceStore.getState().runtimeStates[selectedSessionId]?.lifecycle === 'active') setModelStatus('ready')
+        else {
+          setModelError(cause instanceof Error ? cause.message : '无法读取模型，请重试。')
+          setModelStatus('error')
+        }
+      } finally {
+        if (modelOperation.current === operation) modelOperation.current = undefined
+      }
+    })()
+  }, [selectedSession, selectedSessionId, watchStates, runtimeDetails, runtimeStates, isActive, modelStatus, sessionRuns])
+
   useEffect(() => () => sessionRuns.releaseForeground(), [sessionRuns])
 
   function selectSession(sessionId: string) {

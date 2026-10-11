@@ -177,6 +177,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     if ((store.runtimeStates[snapshot.sessionId]?.revision ?? -1) > snapshot.runtime.revision) return
     store.replaceExtensionUi(snapshot.sessionId, snapshot.extensionUi)
     store.setRuntimeState(snapshot.sessionId, snapshot.runtime)
+    applyModelStatus({ ...snapshot.runtime, sessionId: snapshot.sessionId })
     useWorkspaceStore.getState().setWatchState(snapshot.sessionId, 'ready')
     if (snapshot.activeTurn && !activeRuns.has(snapshot.sessionId)) {
       const status = snapshot.activeTurn.waitingForExtension ? 'awaiting_input' : 'running'
@@ -192,6 +193,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     const store = useWorkspaceStore.getState()
     if ((store.runtimeStates[status.sessionId]?.revision ?? -1) > status.revision) return
     store.setRuntimeState(status.sessionId, status)
+    applyModelStatus(status)
     if (status.lifecycle === 'failed') store.clearExtensionUi(status.sessionId)
     if (status.lifecycle === 'active' && !activeRuns.has(status.sessionId)) {
       activeRuns.set(status.sessionId, { awaitingRunId: false, runId: undefined, stopReason: undefined })
@@ -203,6 +205,21 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       void invalidateHistory(status.sessionId)
     }
   })
+
+  function applyModelStatus(status: { sessionId: string; model?: { id: string; provider: string }; lifecycle: string }) {
+    if (!status.model || status.lifecycle === 'failed' || status.lifecycle === 'notLoaded') return
+    const store = useWorkspaceStore.getState()
+    store.setRuntimeDetails(status.sessionId, { ...store.runtimeDetails[status.sessionId], isCompacting: false, isStreaming: status.lifecycle === 'active', model: status.model })
+  }
+
+  const loadingRuntimes = new Map<string, Promise<void>>()
+  function resumeRuntime(sessionId: string) {
+    const current = loadingRuntimes.get(sessionId)
+    if (current) return current
+    const promise = runtime.resumeRuntime(sessionId).finally(() => loadingRuntimes.delete(sessionId))
+    loadingRuntimes.set(sessionId, promise)
+    return promise
+  }
 
   async function getRuntimeState(sessionId: string) {
     const state = await runtime.getRuntimeState(sessionId)
@@ -219,7 +236,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
         checkAwaitingAgent(options.sessionId, undefined)
       }
     },
-    compact: async (sessionId) => { await runtime.resumeRuntime(sessionId); await runtime.compact(sessionId) },
+    compact: async (sessionId) => { await resumeRuntime(sessionId); await runtime.compact(sessionId) },
     followUp: async (sessionId, message) => {
       await runtime.followUp(sessionId, message)
       useWorkspaceStore.getState().appendPendingInput(sessionId, { id: `pending-input:${++nextPendingInputId}`, message, mode: 'follow_up', submittedAt: new Date().toISOString() })
@@ -261,9 +278,9 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
         })
       }
     },
-    resumeRuntime: async (sessionId) => { await runtime.resumeRuntime(sessionId) },
-    setModel: async (sessionId, provider, modelId) => { await runtime.resumeRuntime(sessionId); await runtime.setModel(sessionId, provider, modelId); await getRuntimeState(sessionId) },
-    setThinkingLevel: async (sessionId, level) => { await runtime.resumeRuntime(sessionId); await runtime.setThinkingLevel(sessionId, level); await getRuntimeState(sessionId) },
+    resumeRuntime,
+    setModel: async (sessionId, provider, modelId) => { await resumeRuntime(sessionId); await runtime.setModel(sessionId, provider, modelId); await getRuntimeState(sessionId) },
+    setThinkingLevel: async (sessionId, level) => { await resumeRuntime(sessionId); await runtime.setThinkingLevel(sessionId, level); await getRuntimeState(sessionId) },
     start: (options) => {
       const { prompt, sessionId } = options
       if (activeRuns.has(sessionId)) return false
@@ -273,7 +290,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
           useWorkspaceStore.getState().setWatchState(sessionId, 'watching')
           await runtime.watch(sessionId, 'foreground')
           useWorkspaceStore.getState().setWatchState(sessionId, 'ready')
-          await runtime.resumeRuntime(sessionId)
+          await resumeRuntime(sessionId)
           const accepted = await runtime.prompt(sessionId, prompt)
           const activeRun = activeRuns.get(sessionId)
           if (!activeRun || typeof accepted?.runId !== 'string') throw new Error('Pi runtime did not acknowledge this prompt')

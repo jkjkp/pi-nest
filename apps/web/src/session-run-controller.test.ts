@@ -37,11 +37,39 @@ function runtimeMock() {
   }
 }
 
-async function tick() { await Promise.resolve(); await Promise.resolve() }
+async function tick() { for (let index = 0; index < 12; index++) await Promise.resolve() }
 
 describe('session run controller', () => {
   beforeEach(() => useWorkspaceStore.setState({ runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {}, extensionStatuses: {}, extensionWidgets: {}, drafts: {} }))
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+
+  it('restores the active model from snapshots and ignores older revisions without RPC reads', () => {
+    const runtime = runtimeMock()
+    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'active', revision: 3, model: { provider: 'test', id: 'selected' } } })
+    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.model?.id).toBe('selected')
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2, model: { provider: 'test', id: 'old' } } })
+    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.model?.id).toBe('selected')
+    runtime.status({ sessionId: 'session-b', lifecycle: 'idle', revision: 1, model: { provider: 'other', id: 'default' } } as never)
+    expect(useWorkspaceStore.getState().runtimeDetails['session-b']?.model?.id).toBe('default')
+    expect(runtime.getRuntimeState).not.toHaveBeenCalled()
+  })
+
+  it('shares runtime loading between automatic initialization and prompt submission', async () => {
+    const runtime = runtimeMock()
+    let release!: () => void
+    runtime.resumeRuntime.mockImplementation(() => new Promise<void>((resolve) => { release = resolve }))
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const loading = controller.resumeRuntime('session-a')
+    controller.start({ prompt: 'hello', sessionId: 'session-a' })
+    await tick()
+    expect(runtime.resumeRuntime).toHaveBeenCalledTimes(1)
+    expect(runtime.prompt).not.toHaveBeenCalled()
+    release()
+    await loading
+    await tick()
+    expect(runtime.prompt).toHaveBeenCalledWith('session-a', 'hello')
+  })
 
   it('watches, resumes, then prompts and completes from native Pi events', async () => {
     vi.useFakeTimers()
