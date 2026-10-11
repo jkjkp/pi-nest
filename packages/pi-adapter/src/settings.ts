@@ -1,17 +1,7 @@
+import type { PiRuntimeSettings, PiSettingsSnapshot, PiSettingsUpdate } from '@pi-nest/contracts'
+export type { PiRuntimeSettings, PiSettingsSnapshot, PiSettingsUpdate } from '@pi-nest/contracts'
+
 import { getAgentDir, SettingsManager } from '@earendil-works/pi-coding-agent'
-
-export type PiRuntimeSettings = {
-  compactionEnabled: boolean
-  defaultModel?: string
-  defaultProvider?: string
-  defaultThinkingLevel?: string
-  followUpMode: 'all' | 'one-at-a-time'
-  retryEnabled: boolean
-  steeringMode: 'all' | 'one-at-a-time'
-}
-
-export type PiSettingsSnapshot = { effective: PiRuntimeSettings; global: PiRuntimeSettings; project: Partial<PiRuntimeSettings> }
-export type PiSettingsUpdate = Partial<PiRuntimeSettings>
 
 function snapshot(manager: SettingsManager): PiRuntimeSettings {
   return {

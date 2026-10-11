@@ -1,23 +1,11 @@
+import type { PiSessionHistoryEntry, PiSessionHistory, PiSessionTurnIndexEntry, PiSessionTurnIndex } from '@pi-nest/contracts'
+export type { PiSessionHistoryEntry, PiSessionHistory, PiSessionTurnIndexEntry, PiSessionTurnIndex } from '@pi-nest/contracts'
+
 import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { SessionManager, type SessionEntry } from '@earendil-works/pi-coding-agent'
-
-export type PiSessionHistoryEntry = {
-  id: string
-  parentId: string | null
-  raw: Record<string, unknown>
-  timestamp: string
-  type: string
-}
-
-export type PiSessionHistory = {
-  beforeCursor?: string
-  entries: PiSessionHistoryEntry[]
-  hasEarlier: boolean
-  revision: string
-}
 
 export type PiSessionHistoryOptions = {
   before?: string
@@ -27,15 +15,6 @@ export type PiSessionHistoryOptions = {
   revision?: string
   sessionFile: string
 }
-
-export type PiSessionTurnIndexEntry = {
-  id: string
-  index: number
-  promptPreview: string
-  startedAt: string
-}
-
-export type PiSessionTurnIndex = { entries: PiSessionTurnIndexEntry[]; revision: string }
 
 export type PiSessionTurnIndexOptions = Omit<PiSessionHistoryOptions, 'before' | 'limit'>
 
