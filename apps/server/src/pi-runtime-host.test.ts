@@ -49,9 +49,12 @@ function hostFor(process: FakeProcess) {
 describe('PiRuntimeHost', () => {
   it('caches the Pi-selected startup model and refreshes it after a state read', async () => {
     const process = new FakeProcess()
-    process.start = async () => ({ sessionId: 'session-1', state: { sessionId: 'session-1', model: { provider: 'test', id: 'default' } } })
+    process.start = async () => ({ sessionId: 'session-1', state: { sessionId: 'session-1', model: { provider: 'test', id: 'default' }, thinkingLevel: 'medium' } })
     const host = hostFor(process)
     await host.start()
+    expect(host.currentThinkingLevel).toBe('medium')
+    process.emit({ type: 'thinking_level_changed', level: 'high' })
+    expect(host.currentThinkingLevel).toBe('high')
     expect(host.currentModel).toEqual({ provider: 'test', id: 'default' })
     host.currentModel!.id = 'mutated'
     expect(host.currentModel?.id).toBe('default')

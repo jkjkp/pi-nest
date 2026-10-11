@@ -519,7 +519,7 @@ export class PiRuntimeRegistry {
       extensionUi: this.getExtensionUiSnapshot(sessionId),
       pendingExtensionDialogs: this.extensionState.pendingDialogs(sessionId),
       ...(replayAfter !== undefined && replayAfter < atSequence ? { replayAfter } : {}),
-      runtime: { ...(this.entries.get(sessionId)?.host.currentModel ? { model: this.entries.get(sessionId)!.host.currentModel } : {}), ...(state.error ? { error: state.error } : {}), ...(state.failureKind ? { failureKind: state.failureKind } : {}), lifecycle: state.lifecycle, revision: state.revision },
+      runtime: { thinkingLevel: this.entries.get(sessionId)?.host.currentThinkingLevel, ...(this.entries.get(sessionId)?.host.currentModel ? { model: this.entries.get(sessionId)!.host.currentModel } : {}), ...(state.error ? { error: state.error } : {}), ...(state.failureKind ? { failureKind: state.failureKind } : {}), lifecycle: state.lifecycle, revision: state.revision },
       sessionId,
     }
   }
@@ -587,7 +587,7 @@ export class PiRuntimeRegistry {
     state.error = error
     state.failureKind = failureKind
     state.revision += 1
-    const status: PiRuntimeStatus = { ...(this.entries.get(sessionId)?.host.currentModel ? { model: this.entries.get(sessionId)!.host.currentModel } : {}), ...(error ? { error } : {}), ...(failureKind ? { failureKind } : {}), lifecycle, revision: state.revision, sessionId }
+    const status: PiRuntimeStatus = { thinkingLevel: this.entries.get(sessionId)?.host.currentThinkingLevel, ...(this.entries.get(sessionId)?.host.currentModel ? { model: this.entries.get(sessionId)!.host.currentModel } : {}), ...(error ? { error } : {}), ...(failureKind ? { failureKind } : {}), lifecycle, revision: state.revision, sessionId }
     for (const listener of state.listeners) listener(status)
   }
 

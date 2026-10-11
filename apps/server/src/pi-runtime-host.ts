@@ -91,6 +91,7 @@ export class PiRuntimeHost {
   private startResult: PiRpcProcessState | undefined
   private abortRequested = false
   private running = false
+  private thinkingLevel: string | undefined
   private model: { id: string; provider: string } | undefined
   private started = false
 
@@ -99,6 +100,8 @@ export class PiRuntimeHost {
     private readonly createProcess: ProcessFactory = defaultProcessFactory,
     private readonly startTimeoutMs = 30_000,
   ) {}
+
+  get currentThinkingLevel() { return this.thinkingLevel }
 
   get currentModel() {
     return this.model ? { ...this.model } : undefined
@@ -130,6 +133,7 @@ export class PiRuntimeHost {
       this.started = true
       this.startResult = state
       this.model = modelFrom(state.state)
+      this.thinkingLevel = typeof state.state.thinkingLevel === 'string' ? state.state.thinkingLevel : undefined
       return state
     } catch (cause) {
       await this.close()
@@ -184,9 +188,11 @@ export class PiRuntimeHost {
       accept()
       const state = stateFrom(await process.send({ type: 'get_state' }))
       this.model = modelFrom(state)
+      this.thinkingLevel = typeof state.thinkingLevel === 'string' ? state.thinkingLevel : undefined
       if (state.isStreaming === true) await settled
       const finalState = stateFrom(await process.send({ type: 'get_state' }))
       this.model = modelFrom(finalState)
+      this.thinkingLevel = typeof finalState.thinkingLevel === 'string' ? finalState.thinkingLevel : undefined
       return {
         model: modelFrom(finalState),
         stopReason: stopReason ?? (this.abortRequested ? 'aborted' : 'stop'),
@@ -211,7 +217,11 @@ export class PiRuntimeHost {
     await this.start()
     if (!this.process) throw new Error('Pi runtime process is unavailable')
     const response = await this.process.send(command) as Record<string, unknown>
-    if (command.type === 'get_state') this.model = modelFrom(stateFrom(response))
+    if (command.type === 'get_state') {
+      const state = stateFrom(response)
+      this.model = modelFrom(state)
+      this.thinkingLevel = typeof state.thinkingLevel === 'string' ? state.thinkingLevel : undefined
+    }
     if (command.type === 'set_model') this.model = modelFrom({ model: response.data }) ?? this.model
     return response
   }
@@ -236,6 +246,7 @@ export class PiRuntimeHost {
   }
 
   private publish(event: Record<string, unknown>) {
+    if (event.type === 'thinking_level_changed' && typeof event.level === 'string') this.thinkingLevel = event.level
     const envelope: PiRuntimeHostEvent = {
       event,
       observedAt: new Date().toISOString(),
