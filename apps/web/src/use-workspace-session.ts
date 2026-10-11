@@ -33,12 +33,24 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const setProjectCollapsed = useWorkspaceStore((state) => state.setProjectCollapsed)
   const restoreProject = useWorkspaceStore((state) => state.restoreProject)
   const [mutatingSessionId, setMutatingSessionId] = useState<string>()
-  const [controlError, setControlError] = useState<string>()
+  const [controlFailure, setControlFailure] = useState<{ sessionId: string; message: string }>()
+  const controlError = controlFailure?.sessionId === selectedSessionId ? controlFailure.message : undefined
+  function setControlError(message: string | undefined, sessionId = selectedSessionId) {
+    if (sessionId !== selectedSessionIdRef.current) return
+    setControlFailure(message === undefined ? undefined : { sessionId, message })
+  }
   const [draftError, setDraftError] = useState<string>()
   const [draftPrompt, setDraftPrompt] = useState('')
   const [creatingDraft, setCreatingDraft] = useState(false)
   const [models, setModels] = useState<{ id: string; name?: string; provider: string }[]>([])
   const [thinkingLevels, setThinkingLevels] = useState<string[]>([])
+  const [controlSessionId, setControlSessionId] = useState(selectedSessionId)
+  if (controlSessionId !== selectedSessionId) {
+    setControlSessionId(selectedSessionId)
+    setControlFailure(undefined)
+    setModels([])
+    setThinkingLevels([])
+  }
   const [queueMode, setQueueMode] = useState<'follow_up' | 'steer'>('steer')
   const [pendingJump, setPendingJump] = useState<{ sessionId: string; turnId: string }>()
   const selectedSessionIdRef = useRef(selectedSessionId)
@@ -143,12 +155,13 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   function submitPrompt() {
+    setControlError(undefined)
     if (isDraft) return void submitDraft()
     if (!selectedSessionId || prompt.trim().length === 0) return
     if (!isActive) {
       if (sessionRuns.start({ historyTurnCount, prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
     }
-    else if (status === 'running') void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败'))
+    else if (status === 'running') void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败', selectedSessionId))
   }
 
   const jumpToUnloadedTurn = useCallback((turnId: string, cursor: string | undefined) => {
@@ -174,13 +187,14 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     setControlError(undefined)
     try {
       await sessionRuns.resumeRuntime(selectedSessionId)
-      const [, availableModels, levels] = await Promise.all([
-        sessionRuns.getRuntimeState(selectedSessionId), sessionRuns.getAvailableModels(selectedSessionId), sessionRuns.getAvailableThinkingLevels(selectedSessionId),
-      ])
+      await sessionRuns.getRuntimeState(selectedSessionId)
+      const availableModels = await sessionRuns.getAvailableModels(selectedSessionId)
+      const levels = await sessionRuns.getAvailableThinkingLevels(selectedSessionId)
+      if (selectedSessionId !== selectedSessionIdRef.current) return
       setModels(availableModels)
       setThinkingLevels(levels)
     } catch (cause) {
-      setControlError(cause instanceof Error ? cause.message : '无法读取 Pi 运行状态')
+      setControlError(cause instanceof Error ? cause.message : '无法读取 Pi 运行状态', selectedSessionId)
     }
   }
 
@@ -207,20 +221,20 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
 
   async function changeModel(provider: string, modelId: string) {
     if (!selectedSessionId) return false
-    try { await sessionRuns.setModel(selectedSessionId, provider, modelId); return true }
-    catch (cause) { setControlError(cause instanceof Error ? cause.message : '模型切换失败'); return false }
+    try { await sessionRuns.setModel(selectedSessionId, provider, modelId); setControlError(undefined, selectedSessionId); return true }
+    catch (cause) { setControlError(cause instanceof Error ? cause.message : '模型切换失败', selectedSessionId); return false }
   }
 
   async function changeThinkingLevel(level: string) {
     if (!selectedSessionId) return false
-    try { await sessionRuns.setThinkingLevel(selectedSessionId, level); return true }
-    catch (cause) { setControlError(cause instanceof Error ? cause.message : 'Thinking 切换失败'); return false }
+    try { await sessionRuns.setThinkingLevel(selectedSessionId, level); setControlError(undefined, selectedSessionId); return true }
+    catch (cause) { setControlError(cause instanceof Error ? cause.message : 'Thinking 切换失败', selectedSessionId); return false }
   }
 
   async function compact() {
     if (!selectedSessionId) return false
-    try { await sessionRuns.compact(selectedSessionId); return true }
-    catch (cause) { setControlError(cause instanceof Error ? cause.message : '压缩失败'); return false }
+    try { await sessionRuns.compact(selectedSessionId); setControlError(undefined, selectedSessionId); return true }
+    catch (cause) { setControlError(cause instanceof Error ? cause.message : '压缩失败', selectedSessionId); return false }
   }
 
   return {
