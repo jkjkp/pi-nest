@@ -38,6 +38,27 @@ function hostMock() {
 }
 
 describe('PiRuntimeRegistry', () => {
+  it('includes the cached model in status and snapshots while a prompt is active', async () => {
+    const running = deferred<{ model: undefined; stopReason: string }>()
+    const host = { ...hostMock(), currentModel: { provider: 'test', id: 'chosen' }, prompt: vi.fn(() => running.promise) }
+    host.beginPrompt = vi.fn(() => ({ accepted: Promise.resolve(), settled: running.promise }))
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const statuses: any[] = [], snapshots: any[] = []
+    try {
+      const watch = await registry.watch(session.id, 'first', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot), (status) => statuses.push(status))
+      await registry.resume(session)
+      expect(statuses.at(-1)?.model?.id).toBe('chosen')
+      const prompt = registry.beginPrompt(session, 'hello')!
+      await prompt.accepted
+      const activeWatch = await registry.watch(session.id, 'second', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
+      expect(snapshots.at(-1)?.runtime).toMatchObject({ lifecycle: 'active', model: { provider: 'test', id: 'chosen' } })
+      activeWatch()
+      watch()
+      running.resolve({ model: undefined, stopReason: 'stop' })
+      await prompt.settled
+    } finally { running.resolve({ model: undefined, stopReason: 'stop' }); await registry.close() }
+  })
+
   it('reports missing runtimes separately from locked control commands and settings updates', async () => {
     const result = deferred<Record<string, unknown>>()
     const host = { ...hostMock(), command: vi.fn(() => result.promise) }

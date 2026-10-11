@@ -91,6 +91,7 @@ export class PiRuntimeHost {
   private startResult: PiRpcProcessState | undefined
   private abortRequested = false
   private running = false
+  private model: { id: string; provider: string } | undefined
   private started = false
 
   constructor(
@@ -98,6 +99,10 @@ export class PiRuntimeHost {
     private readonly createProcess: ProcessFactory = defaultProcessFactory,
     private readonly startTimeoutMs = 30_000,
   ) {}
+
+  get currentModel() {
+    return this.model ? { ...this.model } : undefined
+  }
 
   get isRunning() {
     return this.running
@@ -124,6 +129,7 @@ export class PiRuntimeHost {
       const state = await withTimeout(process.start(), this.startTimeoutMs)
       this.started = true
       this.startResult = state
+      this.model = modelFrom(state.state)
       return state
     } catch (cause) {
       await this.close()
@@ -177,8 +183,10 @@ export class PiRuntimeHost {
       await process.send({ type: 'prompt', message })
       accept()
       const state = stateFrom(await process.send({ type: 'get_state' }))
+      this.model = modelFrom(state)
       if (state.isStreaming === true) await settled
       const finalState = stateFrom(await process.send({ type: 'get_state' }))
+      this.model = modelFrom(finalState)
       return {
         model: modelFrom(finalState),
         stopReason: stopReason ?? (this.abortRequested ? 'aborted' : 'stop'),
@@ -202,7 +210,10 @@ export class PiRuntimeHost {
   async command(command: Record<string, unknown>): Promise<Record<string, unknown>> {
     await this.start()
     if (!this.process) throw new Error('Pi runtime process is unavailable')
-    return (await this.process.send(command)) as Record<string, unknown>
+    const response = await this.process.send(command) as Record<string, unknown>
+    if (command.type === 'get_state') this.model = modelFrom(stateFrom(response))
+    if (command.type === 'set_model') this.model = modelFrom({ model: response.data }) ?? this.model
+    return response
   }
 
   async respondToExtension(response: Record<string, unknown>) {

@@ -47,6 +47,19 @@ function hostFor(process: FakeProcess) {
 }
 
 describe('PiRuntimeHost', () => {
+  it('caches the Pi-selected startup model and refreshes it after a state read', async () => {
+    const process = new FakeProcess()
+    process.start = async () => ({ sessionId: 'session-1', state: { sessionId: 'session-1', model: { provider: 'test', id: 'default' } } })
+    const host = hostFor(process)
+    await host.start()
+    expect(host.currentModel).toEqual({ provider: 'test', id: 'default' })
+    host.currentModel!.id = 'mutated'
+    expect(host.currentModel?.id).toBe('default')
+    await host.command({ type: 'get_state' })
+    expect(host.currentModel?.id).toBe('model')
+    await host.close()
+  })
+
   it('separates prompt admission from agent settlement for first-session creation', async () => {
     const process = new FakeProcess()
     const host = hostFor(process)
