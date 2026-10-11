@@ -9,7 +9,7 @@ import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
 import { RuntimeSecurity } from './runtime-security.js'
 
 const adapter = vi.hoisted(() => ({ listPiSessions: vi.fn() }))
-vi.mock('@pi-nest/pi-adapter', () => adapter)
+vi.mock('@pi-nest/pi-adapter', async (importOriginal) => ({ ...await importOriginal<typeof import('@pi-nest/pi-adapter')>(), ...adapter }))
 
 const servers: Array<ReturnType<typeof serve>> = []
 

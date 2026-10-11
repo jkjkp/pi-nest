@@ -1,5 +1,5 @@
 import type { RuntimeMessage, RuntimeCommand } from '@pi-nest/contracts'
-import { listPiSessions } from '@pi-nest/pi-adapter'
+import { listPiSessions, PiRpcCommandError } from '@pi-nest/pi-adapter'
 import { z } from 'zod'
 
 import type { PiRuntimeEvent, PiRuntimeSession } from './pi-runtime-host.js'
@@ -119,7 +119,7 @@ export class RuntimeWebSocketBroker {
         ? { type: 'set_model', provider: command.data.provider, modelId: command.data.modelId }
         : command.data.type === 'set_thinking_level'
           ? { type: 'set_thinking_level', level: command.data.level }
-          : { type: command.data.type }
+          : { type: command.data.type === 'get_runtime_state' ? 'get_state' : command.data.type }
       try {
         const result = this.runtime.commandWhenIdle(watched.session, rpc)
         if (!result) return this.error(socket, command.data.id, 'RUNTIME_NOT_LOADED', 'Pi runtime is not loaded', command.data.sessionId)
@@ -127,6 +127,7 @@ export class RuntimeWebSocketBroker {
         return this.ack(socket, command.data.id, command.data.type, command.data.sessionId, this.safeData(command.data.type, response))
       } catch (cause) {
         if (cause instanceof PiRuntimeBusyError) return this.error(socket, command.data.id, 'SESSION_BUSY', 'Pi 会话正在处理其他操作，请稍后重试。', command.data.sessionId)
+        if (cause instanceof PiRpcCommandError) return this.error(socket, command.data.id, 'COMMAND_FAILED', cause.message, command.data.sessionId)
         return this.error(socket, command.data.id, 'COMMAND_FAILED', 'Pi runtime command failed', command.data.sessionId)
       }
     }

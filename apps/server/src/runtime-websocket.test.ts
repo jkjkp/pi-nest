@@ -4,7 +4,7 @@ import { RuntimeWebSocketBroker } from './runtime-websocket.js'
 import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
 
 const adapter = vi.hoisted(() => ({ listPiSessions: vi.fn() }))
-vi.mock('@pi-nest/pi-adapter', () => adapter)
+vi.mock('@pi-nest/pi-adapter', async (importOriginal) => ({ ...await importOriginal<typeof import('@pi-nest/pi-adapter')>(), ...adapter }))
 
 const nativeSession = { cwd: '/fixture', id: 'session-1', sessionFile: '/fixture/session.jsonl' }
 
@@ -17,7 +17,7 @@ function runtime() {
   const subscribers = new Map<string, Set<(event: any) => void>>()
   return {
     abort: vi.fn().mockResolvedValue(true),
-    commandWhenIdle: vi.fn().mockResolvedValue({ data: { levels: ['low', 'high'], models: [{ id: 'model-2', name: 'Model 2', provider: 'test' }] } }),
+    commandWhenIdle: vi.fn<(...args: any[]) => Promise<any> | undefined>().mockResolvedValue({ data: { levels: ['low', 'high'], models: [{ id: 'model-2', name: 'Model 2', provider: 'test' }] } }),
     commandWhileRunning: vi.fn().mockResolvedValue({ success: true }),
     respondToExtension: vi.fn().mockResolvedValue(true),
     beginPrompt: vi.fn().mockReturnValue({ runId: 'run-1', settled: Promise.resolve({ stopReason: 'stop' }) }),
@@ -182,6 +182,23 @@ describe('RuntimeWebSocketBroker', () => {
     await broker.message(client, JSON.stringify({ id: 'missing', sessionId: 'session-1', type: 'get_runtime_state' }))
     expect(client.sent).toContainEqual({ code: 'SESSION_BUSY', id: 'busy', message: 'Pi 会话正在处理其他操作，请稍后重试。', sessionId: 'session-1', type: 'error' })
     expect(client.sent).toContainEqual({ code: 'RUNTIME_NOT_LOADED', id: 'missing', message: 'Pi runtime is not loaded', sessionId: 'session-1', type: 'error' })
+  })
+
+  it('translates the web state command to native Pi get_state and preserves the web acknowledgement', async () => {
+    const registry = runtime()
+    registry.commandWhenIdle.mockImplementation(async (_session, command) => {
+      if (command.type !== 'get_state') throw new Error(`Unknown command: ${command.type}`)
+      return { data: { isStreaming: false, isCompacting: false, model: { provider: 'test', id: 'native-model' }, thinkingLevel: 'high', sessionFile: '/private/native-session.jsonl' } } as never
+    })
+    const broker = new RuntimeWebSocketBroker(registry as never)
+    const client = socket()
+    broker.open(client)
+    await broker.message(client, JSON.stringify({ id: 'watch', sessionId: 'session-1', type: 'watch' }))
+    await broker.message(client, JSON.stringify({ id: 'state', sessionId: 'session-1', type: 'get_runtime_state' }))
+    expect(registry.commandWhenIdle).toHaveBeenCalledWith(nativeSession, { type: 'get_state' })
+    const ack = client.sent.find((message: any) => message.id === 'state') as any
+    expect(ack).toMatchObject({ type: 'ack', command: 'get_runtime_state', data: { model: { provider: 'test', id: 'native-model' }, thinkingLevel: 'high' } })
+    expect(ack.data).not.toHaveProperty('sessionFile')
   })
 
   it('forwards advanced controls only after explicit resume and keeps returned data safe', async () => {

@@ -1,6 +1,8 @@
 import type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntimeStatus, PiRuntimeExtensionUi, PiRuntimeSessionSnapshot } from '@pi-nest/contracts'
 export type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntimeStatus, PiRuntimeExtensionUi, PiRuntimeSessionSnapshot } from '@pi-nest/contracts'
 
+import { PiRpcCommandError } from '@pi-nest/pi-adapter'
+
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -128,6 +130,10 @@ export class PiRuntimeRegistry {
       })
       .catch(async (cause) => {
         if (cause instanceof PiRuntimeCapacityError) throw cause
+        if (cause instanceof PiRpcCommandError) {
+          this.transition(session.id, 'idle')
+          throw cause
+        }
         this.fail(session.id, cause)
         await this.remove(session.id, 'failed')
         throw cause

@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readdir, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { PiRpcCommandError } from '@pi-nest/pi-adapter'
 import type { PiRuntimeEvent, PiRuntimeHost } from './pi-runtime-host.js'
 import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
 
@@ -56,6 +57,17 @@ describe('PiRuntimeRegistry', () => {
       result.resolve({ data: {} })
       await registry.close()
     }
+  })
+
+  it('keeps a loaded runtime usable when Pi rejects a control command', async () => {
+    const host = { ...hostMock(), command: vi.fn().mockRejectedValueOnce(new PiRpcCommandError('Model not found')).mockResolvedValue({ data: { model: { id: 'original' } } }) }
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      await registry.resume(session)
+      await expect(registry.commandWhenIdle(session, { type: 'set_model' })).rejects.toThrow('Model not found')
+      expect(host.close).not.toHaveBeenCalled()
+      await expect(registry.commandWhenIdle(session, { type: 'get_runtime_state' })).resolves.toMatchObject({ data: { model: { id: 'original' } } })
+    } finally { await registry.close() }
   })
 
   it('tags native events with the prompt run ID before asynchronous stream delivery', async () => {
