@@ -18,6 +18,8 @@ function runtimeMock() {
     shouldApplyExtensionUi: vi.fn(() => true),
     watchedSessions: vi.fn(() => [...watches].map(([sessionId, watch]) => ({ sessionId, ...watch }))),
     resumeRuntime: vi.fn().mockResolvedValue(undefined),
+    setModel: vi.fn().mockResolvedValue(undefined),
+    setThinkingLevel: vi.fn().mockResolvedValue(undefined),
     followUp: vi.fn().mockResolvedValue(undefined),
     getRuntimeState: vi.fn().mockResolvedValue({ isCompacting: false, isStreaming: false }),
     onError: vi.fn((listener: (error: { code?: string; message: string; sessionId?: string }) => void) => { errors.add(listener); return () => errors.delete(listener) }),
@@ -38,7 +40,7 @@ function runtimeMock() {
 async function tick() { await Promise.resolve(); await Promise.resolve() }
 
 describe('session run controller', () => {
-  beforeEach(() => useWorkspaceStore.setState({ runs: {}, runtimeStates: {}, watchStates: {}, extensionStatuses: {}, extensionWidgets: {}, drafts: {} }))
+  beforeEach(() => useWorkspaceStore.setState({ runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {}, extensionStatuses: {}, extensionWidgets: {}, drafts: {} }))
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
   it('watches, resumes, then prompts and completes from native Pi events', async () => {
@@ -284,7 +286,25 @@ describe('session run controller', () => {
     expect(useWorkspaceStore.getState().extensionStatuses['session-a']).toEqual({ plan: 'implementing' })
     runtime.getRuntimeState.mockResolvedValueOnce({ isCompacting: false, isStreaming: false, model: { id: 'model', provider: 'provider' } } as any)
     await expect(controller.getRuntimeState('session-a')).resolves.toMatchObject({ model: { id: 'model' } })
-    expect(useWorkspaceStore.getState().runs['session-a']?.model).toBe('provider/model')
+    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.model).toEqual({ provider: 'provider', id: 'model' })
+  })
+
+  it('reads back the confirmed model and thinking level after switching without creating a run', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    useWorkspaceStore.getState().setRuntimeDetails('session-b', { isCompacting: false, isStreaming: false, model: { id: 'other', provider: 'test' } })
+    runtime.getRuntimeState.mockResolvedValueOnce({ isCompacting: false, isStreaming: false, model: { id: 'confirmed', provider: 'test' }, thinkingLevel: 'high' } as any)
+    await controller.setModel('session-a', 'test', 'requested')
+    expect(runtime.setModel).toHaveBeenCalledWith('session-a', 'test', 'requested')
+    expect(runtime.getRuntimeState).toHaveBeenCalledWith('session-a')
+    expect(useWorkspaceStore.getState().runtimeDetails['session-a']).toMatchObject({ model: { id: 'confirmed' }, thinkingLevel: 'high' })
+    expect(useWorkspaceStore.getState().runtimeDetails['session-b']?.model?.id).toBe('other')
+    expect(useWorkspaceStore.getState().runs['session-a']).toBeUndefined()
+    runtime.setModel.mockRejectedValueOnce(new Error('invalid model'))
+    await expect(controller.setModel('session-a', 'test', 'invalid')).rejects.toThrow('invalid model')
+    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.model?.id).toBe('confirmed')
+    useWorkspaceStore.getState().clearRuntimeState('session-a')
+    expect(useWorkspaceStore.getState().runtimeDetails['session-a']).toBeUndefined()
   })
 
   it('ignores older runtime revisions and clears projections on failure and resync', () => {

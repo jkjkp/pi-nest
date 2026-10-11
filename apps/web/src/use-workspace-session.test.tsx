@@ -26,14 +26,15 @@ it('finishes each runtime control read before starting the next one', async () =
     return null
   }
   renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-1']}><Probe /></MemoryRouter></QueryClientProvider>)
-  const loading = probe.workspace!.openControls()
+  const loading = probe.workspace!.openModels()
+  await probe.workspace!.openModels()
+  expect(controller.resumeRuntime).toHaveBeenCalledTimes(1)
   await vi.waitFor(() => expect(controller.getRuntimeState).toHaveBeenCalledWith('session-1'))
   expect(controller.getAvailableModels).not.toHaveBeenCalled()
   expect(controller.getAvailableThinkingLevels).not.toHaveBeenCalled()
   release()
   await loading
   expect(controller.getAvailableModels).toHaveBeenCalledWith('session-1')
-  expect(controller.getAvailableThinkingLevels).toHaveBeenCalledWith('session-1')
-  expect(vi.mocked(controller.getAvailableModels).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(controller.getAvailableThinkingLevels).mock.invocationCallOrder[0]!)
+  expect(controller.getAvailableThinkingLevels).not.toHaveBeenCalled()
   queryClient.clear()
 })

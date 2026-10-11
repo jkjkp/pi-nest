@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useState } from 'react'
-import { ChevronDown, CircleX, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
+import { ChevronDown, CircleX, Menu, PanelRight, Send, Settings, SlidersHorizontal, Square } from 'lucide-react'
 import { Link } from 'react-router'
 
 import { Button } from '@/components/ui/button'
@@ -8,6 +8,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from 
 import { Textarea } from '@/components/ui/textarea'
 
 import { useComposerTextarea } from './composer-textarea.js'
+import { ModelSelector } from './model-selector.js'
 import { SessionInspector } from './session-inspector.js'
 import { SessionNavigation } from './session-navigation.js'
 import type { SessionRunController } from './session-run-controller.js'
@@ -21,12 +22,12 @@ import { sessionDisplayName, sessionStatusLabel } from './workspace.js'
 export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunController }) {
   const session = useWorkspaceSession(sessionRuns)
   const {
-    selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, modelLabel, status, isActive, isStreaming,
+    selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, queueMode, setQueueMode,
     sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
-    startDraft, removeProject, abortPrompt, openControls, handleRename, handleDelete,
+    startDraft, removeProject, abortPrompt, openModels, openControls, handleRename, handleDelete,
     jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, compact, loadEarlier, retryHistory,
   } = session
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
@@ -35,6 +36,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
+  const [modelOpen, setModelOpen] = useState(false)
   const [controlOpen, setControlOpen] = useState(false)
   const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
   const [desktopInspectorSheetOpen, setDesktopInspectorSheetOpen] = useState(false)
@@ -243,15 +245,16 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
                 {isActive && <div className="flex gap-1 text-xs"><Button onClick={() => setQueueMode('steer')} size="sm" type="button" variant={queueMode === 'steer' ? 'secondary' : 'ghost'}>Steer</Button><Button onClick={() => setQueueMode('follow_up')} size="sm" type="button" variant={queueMode === 'follow_up' ? 'secondary' : 'ghost'}>Follow-up</Button></div>}
                 <div className="ml-auto flex items-center gap-2">
-                  <Button aria-label="Pi 运行控制" className="hidden max-w-48 text-foreground sm:inline-flex" disabled={!selectedSession || isActive} onClick={() => { setControlOpen(true); void openControls() }} size="sm" type="button" variant="ghost">
+                  <Button aria-label="选择模型" title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} className="max-w-48 text-foreground" disabled={!selectedSession || modelStatus === 'loading' || modelStatus === 'switching'} onClick={() => { setModelOpen(true); void openModels() }} size="sm" type="button" variant="ghost">
                     <span className="truncate">{modelLabel}</span>
                     <ChevronDown aria-hidden="true" className="text-muted-foreground" />
                   </Button>
+                  <Button aria-label="Pi 运行控制" disabled={!selectedSession || isActive || modelStatus === 'loading' || modelStatus === 'switching'} onClick={() => { setControlOpen(true); void openControls() }} size="icon-sm" type="button" variant="ghost"><SlidersHorizontal aria-hidden="true" /></Button>
                   {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
                   {status === 'running' && <Button aria-label={queueMode === 'steer' ? '发送 Steer' : '发送 Follow-up'} className="rounded-full" disabled={prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>}
                   {!isActive && (
-                    <Button aria-label="发送提示词" className="rounded-full" disabled={(!selectedSession && !isDraft) || creatingDraft || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
+                    <Button aria-label="发送提示词" className="rounded-full" disabled={(!selectedSession && !isDraft) || creatingDraft || modelStatus === 'loading' || modelStatus === 'switching' || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
                   )}
                 </div>
                 </div>
@@ -259,12 +262,12 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               </div>
             </div>
           </div>
+          <ModelSelector key={selectedSessionId} open={modelOpen} onOpenChange={setModelOpen} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onRetry={() => void openModels()} onSelect={changeModel} />
           <Sheet open={controlOpen} onOpenChange={setControlOpen}>
             <SheetContent className="space-y-5 overflow-y-auto" side="right">
               <SheetTitle>Pi 运行控制</SheetTitle>
-              <SheetDescription>直接发送原生 Pi CLI RPC 控制命令。</SheetDescription>
+              <SheetDescription>调整当前会话的思考等级，或压缩上下文。</SheetDescription>
               {controlError && <p className="text-sm text-destructive">{controlError}</p>}
-              <div className="space-y-2"><p className="text-sm font-medium">模型</p>{models.map((model) => <Button className="w-full justify-start" key={`${model.provider}:${model.id}`} onClick={() => void changeModel(model.provider, model.id).then((changed) => { if (changed) setControlOpen(false) })} variant="outline">{model.name ?? `${model.provider}/${model.id}`}</Button>)}</div>
               <div className="space-y-2"><p className="text-sm font-medium">Thinking</p>{thinkingLevels.map((level) => <Button key={level} onClick={() => void changeThinkingLevel(level).then((changed) => { if (changed) setControlOpen(false) })} variant="outline">{level}</Button>)}</div>
               <Button disabled={isActive} onClick={() => void compact().then((changed) => { if (changed) setControlOpen(false) })} variant="secondary">压缩上下文</Button>
             </SheetContent>

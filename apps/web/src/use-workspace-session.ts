@@ -3,6 +3,7 @@ import { type InfiniteData, useInfiniteQuery, useQuery, useQueryClient } from '@
 import { useSearchParams } from 'react-router'
 import { historyUserTurnCount, mergeSessionHistoryPage, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
+import type { PiRuntimeModel } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
 import { isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
@@ -23,6 +24,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const collapsedProjectKeys = useWorkspaceStore((state) => state.collapsedProjectKeys)
   const hiddenProjectCwds = useWorkspaceStore((state) => state.hiddenProjectCwds)
   const runs = useWorkspaceStore((state) => state.runs)
+  const runtimeDetails = useWorkspaceStore((state) => state.runtimeDetails)
   const runtimeStates = useWorkspaceStore((state) => state.runtimeStates)
   const watchStates = useWorkspaceStore((state) => state.watchStates)
   const setDraft = useWorkspaceStore((state) => state.setDraft)
@@ -42,13 +44,18 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const [draftError, setDraftError] = useState<string>()
   const [draftPrompt, setDraftPrompt] = useState('')
   const [creatingDraft, setCreatingDraft] = useState(false)
-  const [models, setModels] = useState<{ id: string; name?: string; provider: string }[]>([])
+  const [models, setModels] = useState<PiRuntimeModel[]>([])
+  const [modelStatus, setModelStatus] = useState<'unloaded' | 'loading' | 'ready' | 'error' | 'switching'>('unloaded')
+  const [modelError, setModelError] = useState<string>()
+  const modelOperation = useRef<{ sessionId: string } | undefined>(undefined)
   const [thinkingLevels, setThinkingLevels] = useState<string[]>([])
   const [controlSessionId, setControlSessionId] = useState(selectedSessionId)
   if (controlSessionId !== selectedSessionId) {
     setControlSessionId(selectedSessionId)
     setControlFailure(undefined)
     setModels([])
+    setModelStatus('unloaded')
+    setModelError(undefined)
     setThinkingLevels([])
   }
   const [queueMode, setQueueMode] = useState<'follow_up' | 'steer'>('steer')
@@ -59,7 +66,13 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
   const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
   const activeTurn = currentRun?.turns.at(-1)
-  const modelLabel = currentRun?.model ?? '当前模型不可用'
+  const currentModel = runtimeDetails[selectedSessionId]?.model
+  const modelName = models.find((model) => model.id === currentModel?.id && model.provider === currentModel?.provider)?.name ?? currentModel?.id
+  const modelLabel = modelStatus === 'switching' ? '正在切换…'
+    : modelStatus === 'loading' ? '读取模型…'
+    : modelStatus === 'error' ? '模型读取失败'
+    : currentModel?.id && currentModel.provider ? (modelName ?? currentModel.id)
+    : runtimeDetails[selectedSessionId] ? '请选择模型' : '选择模型'
   const status = currentRun?.status ?? 'idle'
   const isActive = isRunActive(status)
   const isStreaming = status === 'running' || status === 'aborting'
@@ -155,6 +168,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   function submitPrompt() {
+    if (modelOperation.current?.sessionId === selectedSessionId) return
     setControlError(undefined)
     if (isDraft) return void submitDraft()
     if (!selectedSessionId || prompt.trim().length === 0) return
@@ -182,16 +196,36 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     void sessionRuns.stop(selectedSessionId)
   }
 
+  async function openModels() {
+    if (!selectedSessionId || isActive || modelOperation.current?.sessionId === selectedSessionId) return
+    const operation = { sessionId: selectedSessionId }
+    modelOperation.current = operation
+    setModelStatus('loading')
+    setModelError(undefined)
+    try {
+      await sessionRuns.resumeRuntime(selectedSessionId)
+      await sessionRuns.getRuntimeState(selectedSessionId)
+      const availableModels = await sessionRuns.getAvailableModels(selectedSessionId)
+      if (selectedSessionId !== selectedSessionIdRef.current || modelOperation.current !== operation) return
+      setModels(availableModels)
+      setModelStatus('ready')
+    } catch (cause) {
+      if (selectedSessionId !== selectedSessionIdRef.current || modelOperation.current !== operation) return
+      setModelError(cause instanceof Error ? cause.message : '无法读取模型，请重试。')
+      setModelStatus('error')
+    } finally {
+      if (modelOperation.current === operation) modelOperation.current = undefined
+    }
+  }
+
   async function openControls() {
     if (!selectedSessionId) return
     setControlError(undefined)
     try {
       await sessionRuns.resumeRuntime(selectedSessionId)
       await sessionRuns.getRuntimeState(selectedSessionId)
-      const availableModels = await sessionRuns.getAvailableModels(selectedSessionId)
       const levels = await sessionRuns.getAvailableThinkingLevels(selectedSessionId)
       if (selectedSessionId !== selectedSessionIdRef.current) return
-      setModels(availableModels)
       setThinkingLevels(levels)
     } catch (cause) {
       setControlError(cause instanceof Error ? cause.message : '无法读取 Pi 运行状态', selectedSessionId)
@@ -220,9 +254,26 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   async function changeModel(provider: string, modelId: string) {
-    if (!selectedSessionId) return false
-    try { await sessionRuns.setModel(selectedSessionId, provider, modelId); setControlError(undefined, selectedSessionId); return true }
-    catch (cause) { setControlError(cause instanceof Error ? cause.message : '模型切换失败', selectedSessionId); return false }
+    if (!selectedSessionId || isActive || modelOperation.current?.sessionId === selectedSessionId) return false
+    const operation = { sessionId: selectedSessionId }
+    modelOperation.current = operation
+    setModelStatus('switching')
+    setModelError(undefined)
+    try {
+      await sessionRuns.setModel(selectedSessionId, provider, modelId)
+      if (selectedSessionId !== selectedSessionIdRef.current || modelOperation.current !== operation) return false
+      setThinkingLevels([])
+      setModelStatus('ready')
+      return true
+    } catch (cause) {
+      if (selectedSessionId === selectedSessionIdRef.current && modelOperation.current === operation) {
+        setModelError(cause instanceof Error ? cause.message : '模型切换失败，请重试。')
+        setModelStatus('ready')
+      }
+      return false
+    } finally {
+      if (modelOperation.current === operation) modelOperation.current = undefined
+    }
   }
 
   async function changeThinkingLevel(level: string) {
@@ -238,12 +289,12 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   return {
-    selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, modelLabel, status, isActive, isStreaming,
+    selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, queueMode, setQueueMode,
     sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
-    selectSession, startDraft, removeProject, submitPrompt, abortPrompt, openControls, handleRename, handleDelete,
+    selectSession, startDraft, removeProject, submitPrompt, abortPrompt, openModels, openControls, handleRename, handleDelete,
     jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, compact,
     loadEarlier: () => { void historyQuery.fetchPreviousPage() }, retryHistory: () => { void historyQuery.refetch() },
   }

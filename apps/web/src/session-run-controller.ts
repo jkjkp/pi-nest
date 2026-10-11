@@ -202,6 +202,14 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     }
   })
 
+  async function getRuntimeState(sessionId: string) {
+    const state = await runtime.getRuntimeState(sessionId)
+    const store = useWorkspaceStore.getState()
+    store.setRuntimeDetails(sessionId, state)
+    if (store.runs[sessionId] && state.model?.id && state.model.provider) store.updateRun(sessionId, { model: `${state.model.provider}/${state.model.id}` })
+    return state
+  }
+
   return {
     adopt: (options) => {
       if (!activeRuns.has(options.sessionId)) {
@@ -216,11 +224,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     },
     getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,
     getAvailableThinkingLevels: async (sessionId) => (await runtime.getAvailableThinkingLevels(sessionId)).levels,
-    getRuntimeState: async (sessionId) => {
-      const state = await runtime.getRuntimeState(sessionId)
-      if (state.model?.id && state.model.provider) useWorkspaceStore.getState().updateRun(sessionId, { model: `${state.model.provider}/${state.model.id}` })
-      return state
-    },
+    getRuntimeState,
     openSession: (sessionId) => {
       void (async () => {
         const previous = foregroundSessionId
@@ -256,8 +260,8 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       }
     },
     resumeRuntime: async (sessionId) => { await runtime.resumeRuntime(sessionId) },
-    setModel: async (sessionId, provider, modelId) => { await runtime.resumeRuntime(sessionId); await runtime.setModel(sessionId, provider, modelId) },
-    setThinkingLevel: async (sessionId, level) => { await runtime.resumeRuntime(sessionId); await runtime.setThinkingLevel(sessionId, level) },
+    setModel: async (sessionId, provider, modelId) => { await runtime.resumeRuntime(sessionId); await runtime.setModel(sessionId, provider, modelId); await getRuntimeState(sessionId) },
+    setThinkingLevel: async (sessionId, level) => { await runtime.resumeRuntime(sessionId); await runtime.setThinkingLevel(sessionId, level); await getRuntimeState(sessionId) },
     start: (options) => {
       const { prompt, sessionId } = options
       if (activeRuns.has(sessionId)) return false

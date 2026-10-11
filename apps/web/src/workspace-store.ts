@@ -3,7 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 
 import type { NavigationOrder } from './navigation-order.js'
 import { isRunActive, nativeUserMessage, type PendingInput, type SessionRunSummary } from './session-run-model.js'
-import type { PiRuntimeEvent, RuntimeStatus } from '@pi-nest/contracts'
+import type { PiRuntimeEvent, PiRuntimeState, RuntimeStatus } from '@pi-nest/contracts'
 
 export { isRunActive, nativeUserMessage } from './session-run-model.js'
 export type { PromptStatus, PendingInput, SessionRunSummary } from './session-run-model.js'
@@ -25,6 +25,8 @@ type WorkspaceState = {
   navigationOpen: boolean
   navigationWidth: number
   runtimeStates: Record<string, Omit<RuntimeStatus, 'sessionId'>>
+  runtimeDetails: Record<string, PiRuntimeState>
+  setRuntimeDetails: (sessionId: string, details: PiRuntimeState) => void
   watchStates: Record<string, 'ready' | 'watching'>
   appendRunEvent: (sessionId: string, event: PiRuntimeEvent) => void
   appendPendingInput: (sessionId: string, input: PendingInput) => void
@@ -67,6 +69,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   navigationOpen: false,
   navigationWidth: 272,
   runtimeStates: {},
+  runtimeDetails: {},
   watchStates: {},
   navigationOrder: { projectOrder: [], sessionOrderByProject: {} },
   runs: {},
@@ -235,12 +238,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   setRun: (sessionId, run) => set((state) => ({ runs: { ...state.runs, [sessionId]: run } })),
   clearRuntimeState: (sessionId) => set((state) => {
     const { [sessionId]: _runtime, ...runtimeStates } = state.runtimeStates
-    return { runtimeStates }
+    const { [sessionId]: _details, ...runtimeDetails } = state.runtimeDetails
+    return { runtimeStates, runtimeDetails }
   }),
+  setRuntimeDetails: (sessionId, details) => set((state) => ({ runtimeDetails: { ...state.runtimeDetails, [sessionId]: { ...details, model: details.model ? { ...details.model } : undefined } } })),
   setRuntimeState: (sessionId, runtime) => set((state) => {
     const current = state.runtimeStates[sessionId]
     if (current && runtime.revision < current.revision) return state
-    return { runtimeStates: { ...state.runtimeStates, [sessionId]: { ...runtime } } }
+    const runtimeDetails = { ...state.runtimeDetails }
+    if (runtime.lifecycle === 'notLoaded' || runtime.lifecycle === 'failed') delete runtimeDetails[sessionId]
+    return { runtimeStates: { ...state.runtimeStates, [sessionId]: { ...runtime } }, runtimeDetails }
   }),
   setWatchState: (sessionId, watchState) => set((state) => ({ watchStates: { ...state.watchStates, [sessionId]: watchState } })),
   updateRun: (sessionId, update) =>
