@@ -1,3 +1,4 @@
+import type { RuntimeMessage, RuntimeCommand } from '@pi-nest/contracts'
 import { listPiSessions } from '@pi-nest/pi-adapter'
 import { z } from 'zod'
 
@@ -20,7 +21,7 @@ const commandSchema = z.discriminatedUnion('type', [
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_available_models') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_available_thinking_levels') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('extension_ui_response'), value: z.unknown().optional(), confirmed: z.boolean().optional(), cancelled: z.boolean().optional(), dialogId: z.string().min(1).max(256) }).strict(),
-])
+]) satisfies z.ZodType<RuntimeCommand>
 
 type RuntimeSocket = { send: (data: string) => void }
 type WatchedSession = { session: PiRuntimeSession; subscriberId: string }
@@ -216,7 +217,7 @@ export class RuntimeWebSocketBroker {
     this.send(socket, { reason, sessionId, type: 'resync_required' })
   }
 
-  private send(socket: RuntimeSocket, message: unknown) {
+  private send(socket: RuntimeSocket, message: RuntimeMessage) {
     try {
       socket.send(serialize(message))
     } catch {

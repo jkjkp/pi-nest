@@ -1,4 +1,5 @@
-import { PiRpcConnectionError, PiRpcProcess, type PiRpcFailureKind, type PiRpcProcessState } from '@pi-nest/pi-adapter'
+import type { PiRuntimeEvent, RuntimeFailureKind as PiRuntimeFailureKind } from '@pi-nest/contracts'
+import { PiRpcConnectionError, PiRpcProcess, type PiRpcProcessState } from '@pi-nest/pi-adapter'
 
 export type PiRuntimeSession = {
   cwd: string
@@ -6,14 +7,7 @@ export type PiRuntimeSession = {
   sessionFile: string
 }
 
-export type PiRuntimeEvent = {
-  event: Record<string, unknown>
-  observedAt: string
-  runId?: string
-  sequence: number
-  sessionId: string
-  turnId?: string
-}
+export type { PiRuntimeEvent } from '@pi-nest/contracts'
 
 /** Raw events reported by the CLI process; transport metadata is assigned by SessionEventStream. */
 export type PiRuntimeHostEvent = Omit<PiRuntimeEvent, 'runId' | 'sequence' | 'turnId'>
@@ -28,7 +22,7 @@ export type PiRuntimePrompt = {
   settled: Promise<PiRuntimePromptResult>
 }
 
-export type PiRuntimeFailureKind = PiRpcFailureKind | 'rpc_error' | 'startup_timeout'
+export type { RuntimeFailureKind as PiRuntimeFailureKind } from '@pi-nest/contracts'
 export type PiRuntimeHostFailure = { kind: PiRuntimeFailureKind; message: string }
 
 export class PiRuntimeHostError extends Error {

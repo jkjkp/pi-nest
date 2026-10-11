@@ -1,10 +1,14 @@
+import type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntimeStatus, PiRuntimeExtensionUi, PiRuntimeSessionSnapshot } from '@pi-nest/contracts'
+export type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntimeStatus, PiRuntimeExtensionUi, PiRuntimeSessionSnapshot } from '@pi-nest/contracts'
+
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { PiRuntimeHost, PiRuntimeHostError, type PiRuntimeEvent, type PiRuntimeFailureKind, type PiRuntimeHostEvent, type PiRuntimeHostFailure, type PiRuntimePromptResult, type PiRuntimeSession } from './pi-runtime-host.js'
-import { ProjectionSidecarStore, type ExtensionUiProjectionData } from './projection-sidecar-store.js'
+import { ProjectionSidecarStore } from './projection-sidecar-store.js'
+import { RuntimeExtensionState } from './runtime-extension-state.js'
 import { PiRuntimeResumeError, type PiRuntimeStreamError, SessionEventStream } from './session-event-stream.js'
 
 type HostFactory = (session: PiRuntimeSession) => PiRuntimeHost
@@ -14,13 +18,11 @@ type StreamEntry = { stream: SessionEventStream }
 type StreamListener = (event: PiRuntimeEvent) => void
 type StreamErrorListener = (error: PiRuntimeStreamError) => void
 type UnloadReason = 'capacityEvicted' | 'deleted' | 'failed' | 'idleExpired' | 'mutation' | 'settingsReload' | 'shutdown'
-type ExtensionUiProjection = { freshness: 'known' | 'restored'; statuses: Map<string, string>; widgets: Map<string, string[]> }
 type ActiveTurn = { firstSequence?: number; native?: true; prompt?: string; runId: string; startedAt: string; waitingForExtension?: true }
 type RuntimeState = {
   activeTurn?: ActiveTurn
   error?: string
   failureKind?: PiRuntimeFailureKind
-  extensionUi?: ExtensionUiProjection
   lifecycle: PiRuntimeLifecycle
   listeners: Set<RuntimeStatusListener>
   revision: number
@@ -29,23 +31,7 @@ type RuntimeState = {
   unloadTimer: NodeJS.Timeout | undefined
 }
 
-export type PiRuntimeLifecycle = 'notLoaded' | 'loading' | 'idle' | 'active' | 'failed'
-export type PiRuntimeStatus = { error?: string; failureKind?: PiRuntimeFailureKind; lifecycle: PiRuntimeLifecycle; revision: number; sessionId: string }
 export type PiRuntimePrompt = { accepted: Promise<void>; runId: string; settled: Promise<PiRuntimePromptResult> }
-export type PiRuntimeExtensionUi = {
-  freshness: 'known' | 'restored' | 'unknown'
-  statuses: Record<string, string>
-  widgets: Record<string, string[]>
-}
-export type PiRuntimeSessionSnapshot = {
-  activeTurn?: Omit<ActiveTurn, 'firstSequence' | 'native'>
-  atSequence: number
-  extensionUi: PiRuntimeExtensionUi
-  pendingExtensionDialogs: PiRuntimeEvent[]
-  replayAfter?: number
-  runtime: Omit<PiRuntimeStatus, 'sessionId'>
-  sessionId: string
-}
 type RuntimeStatusListener = (status: PiRuntimeStatus) => void
 
 export class PiRuntimeCapacityError extends Error {
@@ -81,8 +67,7 @@ export class PiRuntimeRegistry {
   private readonly eventBufferDirectory: Promise<string>
   private readonly expiredStreams = new Set<string>()
   private readonly locks = new Map<string, Lock>()
-  private readonly pendingExtensionDialogs = new Map<string, Map<string, PiRuntimeEvent>>()
-  private readonly projectionSidecars: ProjectionSidecarStore
+  private readonly extensionState: RuntimeExtensionState
   private readonly projectionsReady: Promise<void>
   private readonly states = new Map<string, RuntimeState>()
   private settingsUpdating = false
@@ -95,8 +80,8 @@ export class PiRuntimeRegistry {
     this.createHost = options.createHost ?? ((session) => new PiRuntimeHost(session, undefined, this.runtimeStartTimeoutMs))
     this.runtimeUnloadGraceMs = positiveInteger(options.runtimeUnloadGraceMs ?? configuredPositiveInteger('PI_NEST_RUNTIME_UNLOAD_GRACE_MS', 30 * 60_000), 'PI_NEST_RUNTIME_UNLOAD_GRACE_MS')
     this.eventBufferDirectory = this.createBufferDirectory(options.eventBufferDirectory)
-    this.projectionSidecars = new ProjectionSidecarStore({ directory: options.projectionDirectory })
-    this.projectionsReady = this.restoreProjectionSidecars()
+    this.extensionState = new RuntimeExtensionState(new ProjectionSidecarStore({ directory: options.projectionDirectory }))
+    this.projectionsReady = this.extensionState.ready
   }
 
   private readonly runtimeUnloadGraceMs: number
@@ -150,19 +135,17 @@ export class PiRuntimeRegistry {
 
   async respondToExtension(sessionId: string, response: Record<string, unknown>) {
     const id = typeof response.id === 'string' ? response.id : undefined
-    const pending = id ? this.pendingExtensionDialogs.get(sessionId) : undefined
-    const dialog = id ? pending?.get(id) : undefined
-    if (!id || !dialog || !pending) return false
-    pending.delete(id)
+    const pending = id ? this.extensionState.takeDialog(sessionId, id) : undefined
+    if (!id || !pending) return false
     const entry = this.entries.get(sessionId)
     if (!entry) {
-      pending.set(id, dialog)
+      pending.restore()
       return false
     }
     try {
       await entry.host.respondToExtension(response)
     } catch (cause) {
-      pending.set(id, dialog)
+      pending.restore()
       throw cause
     }
     await this.publishExtensionDialogResolved(sessionId, id)
@@ -351,12 +334,12 @@ export class PiRuntimeRegistry {
     await this.projectionsReady
     await Promise.all([...this.entries.keys()].map((sessionId) => this.remove(sessionId, 'shutdown')))
     this.locks.clear()
-    this.pendingExtensionDialogs.clear()
     for (const state of this.states.values()) clearTimeout(state.unloadTimer)
     await Promise.all([...this.streams.values()].map(({ stream }) => stream.close()))
     this.streams.clear()
     this.expiredStreams.clear()
     this.states.clear()
+    this.extensionState.close()
     await rm(await this.eventBufferDirectory, { force: true, recursive: true })
   }
 
@@ -372,18 +355,12 @@ export class PiRuntimeRegistry {
     }
     this.expiredStreams.delete(sessionId)
     this.states.delete(sessionId)
+    this.extensionState.forget(sessionId)
   }
 
   /** Returns a deep copy of the daemon-only extension UI projection. */
   getExtensionUiSnapshot(sessionId: string): PiRuntimeExtensionUi {
-    const extensionUi = this.stateFor(sessionId).extensionUi
-    return extensionUi
-      ? {
-          freshness: extensionUi.freshness,
-          statuses: Object.fromEntries(extensionUi.statuses),
-          widgets: Object.fromEntries([...extensionUi.widgets].map(([key, lines]) => [key, [...lines]])),
-        }
-      : { freshness: 'unknown', statuses: {}, widgets: {} }
+    return this.extensionState.snapshot(sessionId)
   }
 
   private async createBufferDirectory(directory: string | undefined) {
@@ -411,7 +388,7 @@ export class PiRuntimeRegistry {
           void this.streamFor(session.id).stream.publish({ ...event, ...(runId ? { runId } : {}) }, async (published) => {
             this.trackActiveTurn(session.id, published)
             this.trackExtensionDialog(session.id, published)
-            await this.trackExtensionUi(session.id, published.event)
+            await this.extensionState.trackProjection(session.id, published.event)
           })
         }),
       }
@@ -428,12 +405,12 @@ export class PiRuntimeRegistry {
     if (options.expected && entry !== options.expected) return false
     if (entry) {
       this.entries.delete(sessionId)
-      if (this.pendingExtensionDialogs.has(sessionId)) await this.clearPendingExtensionDialogs(sessionId)
+      if (this.extensionState.hasDialogs(sessionId)) await this.clearPendingExtensionDialogs(sessionId)
       entry.unsubscribe()
       entry.failureUnsubscribe()
       await entry.host.close()
     }
-    if (reason === 'failed' || reason === 'deleted') await this.clearExtensionUi(sessionId)
+    if (reason === 'failed' || reason === 'deleted') await this.extensionState.clearProjection(sessionId)
     if (reason !== 'shutdown') this.transition(sessionId, 'notLoaded')
     if (reason !== 'shutdown' && !options.preserveUnloadDeadline) this.scheduleUnload(sessionId)
     return true
@@ -506,13 +483,7 @@ export class PiRuntimeRegistry {
   }
 
   private trackExtensionDialog(sessionId: string, dialog: PiRuntimeEvent) {
-    const event = dialog.event
-    if (event.type !== 'extension_ui_request' || typeof event.id !== 'string') return
-    const method = event.method
-    if (method !== 'select' && method !== 'confirm' && method !== 'input' && method !== 'editor') return
-    const pending = this.pendingExtensionDialogs.get(sessionId) ?? new Map<string, PiRuntimeEvent>()
-    pending.set(event.id, dialog)
-    this.pendingExtensionDialogs.set(sessionId, pending)
+    if (!this.extensionState.trackDialog(sessionId, dialog)) return
     const activeTurn = this.stateFor(sessionId).activeTurn
     if (activeTurn && activeTurn.runId === dialog.runId) {
       activeTurn.firstSequence = undefined
@@ -535,7 +506,7 @@ export class PiRuntimeRegistry {
       ...(state.activeTurn ? { activeTurn: { prompt: state.activeTurn.prompt, runId: state.activeTurn.runId, startedAt: state.activeTurn.startedAt, ...(state.activeTurn.waitingForExtension ? { waitingForExtension: true } : {}) } } : {}),
       atSequence,
       extensionUi: this.getExtensionUiSnapshot(sessionId),
-      pendingExtensionDialogs: [...(this.pendingExtensionDialogs.get(sessionId)?.values() ?? [])],
+      pendingExtensionDialogs: this.extensionState.pendingDialogs(sessionId),
       ...(replayAfter !== undefined && replayAfter < atSequence ? { replayAfter } : {}),
       runtime: { ...(state.error ? { error: state.error } : {}), ...(state.failureKind ? { failureKind: state.failureKind } : {}), lifecycle: state.lifecycle, revision: state.revision },
       sessionId,
@@ -543,9 +514,8 @@ export class PiRuntimeRegistry {
   }
 
   private async clearPendingExtensionDialogs(sessionId: string) {
-    const pending = this.pendingExtensionDialogs.get(sessionId)
-    this.pendingExtensionDialogs.delete(sessionId)
-    await Promise.all((pending ? [...pending.keys()] : []).map((id) => this.publishExtensionDialogResolved(sessionId, id)))
+    const ids = this.extensionState.clearDialogs(sessionId)
+    await Promise.all(ids.map((id) => this.publishExtensionDialogResolved(sessionId, id)))
   }
 
   private async publishExtensionDialogResolved(sessionId: string, id: string) {
@@ -615,51 +585,5 @@ export class PiRuntimeRegistry {
       ? cause.failure
       : { kind: 'rpc_error' as const, message: cause instanceof Error && cause.message ? cause.message : 'Pi runtime failed' }
     this.transition(sessionId, 'failed', error.message, error.kind)
-  }
-
-  private async restoreProjectionSidecars() {
-    for (const [sessionId, saved] of await this.projectionSidecars.loadAll()) {
-      const state = this.stateFor(sessionId)
-      if (!state.extensionUi) state.extensionUi = { freshness: 'restored', statuses: new Map(Object.entries(saved.statuses)), widgets: new Map(Object.entries(saved.widgets).map(([key, lines]) => [key, [...lines]])) }
-    }
-  }
-
-  private async clearExtensionUi(sessionId: string) {
-    const state = this.stateFor(sessionId)
-    state.extensionUi = { freshness: 'known', statuses: new Map(), widgets: new Map() }
-    await this.projectionSidecars.delete(sessionId)
-  }
-
-  private async trackExtensionUi(sessionId: string, event: Record<string, unknown>) {
-    const state = this.stateFor(sessionId)
-    const type = event.type === 'extension_ui_request' ? event.method : event.type
-    if (type === 'setStatus') {
-      const key = event.statusKey
-      if (typeof key !== 'string' || !key) return
-      const projection = state.extensionUi ?? { freshness: 'known' as const, statuses: new Map(), widgets: new Map() }
-      state.extensionUi = projection
-      projection.freshness = 'known'
-      if (typeof event.statusText === 'string') projection.statuses.set(key, event.statusText)
-      else projection.statuses.delete(key)
-      await this.persistExtensionUi(sessionId, projection)
-      return
-    }
-    if (type !== 'setWidget') return
-    const key = event.widgetKey
-    if (typeof key !== 'string' || !key) return
-    const projection = state.extensionUi ?? { freshness: 'known' as const, statuses: new Map(), widgets: new Map() }
-    state.extensionUi = projection
-    projection.freshness = 'known'
-    if (Array.isArray(event.widgetLines) && event.widgetLines.every((line) => typeof line === 'string')) projection.widgets.set(key, [...event.widgetLines])
-    else projection.widgets.delete(key)
-    await this.persistExtensionUi(sessionId, projection)
-  }
-
-  private async persistExtensionUi(sessionId: string, value: ExtensionUiProjection) {
-    const projection: ExtensionUiProjectionData = {
-      statuses: Object.fromEntries(value.statuses),
-      widgets: Object.fromEntries([...value.widgets].map(([key, lines]) => [key, [...lines]])),
-    }
-    await this.projectionSidecars.save(sessionId, projection)
   }
 }

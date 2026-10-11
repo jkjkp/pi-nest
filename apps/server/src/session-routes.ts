@@ -1,3 +1,4 @@
+import type { PiSessionsResponse, PiSessionHistoryResponse } from '@pi-nest/contracts'
 import {
   createPiSession,
   deletePiSession,
@@ -80,7 +81,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
 
         return context.json({
           sessions: sessions.map(({ id, cwd, name, firstMessage, updatedAt }) => ({ id, cwd, name, firstMessage, updatedAt })),
-        })
+        } satisfies PiSessionsResponse)
       } catch {
         return context.json({ error: 'Failed to list Pi sessions' }, 500)
       }
@@ -162,7 +163,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
         return context.json({
           ...history,
           session: { id: resolved.session.id, cwd: resolved.session.cwd, updatedAt: resolved.session.updatedAt },
-        })
+        } satisfies PiSessionHistoryResponse)
       } catch (cause) {
         if (cause instanceof PiSessionHistoryCursorError) return context.json({ error: 'Invalid history page request' }, 400)
         if (historyRevisionChanged(cause)) {
