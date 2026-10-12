@@ -20,6 +20,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 
+import { NavigationTitle } from './navigation-title.js'
 import { isRunActive, type SessionRunSummary } from './session-run-model.js'
 import { filterProjectsByQuery, type PiSessionSummary, type ProjectSessionGroup, sessionDisplayName } from './workspace.js'
 
@@ -280,7 +281,7 @@ function SortableProject({
   runs: Record<string, SessionRunSummary>
   selectedSessionId: string
 }) {
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({
     data: { kind: 'project', projectKey: project.key },
     disabled,
     id: `project:${project.key}`,
@@ -312,7 +313,7 @@ function SortableProject({
       >
         <ChevronRight aria-hidden="true" className={`size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`} />
         <Folder aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate">{project.name}</span>
+        <NavigationTitle stopped={isDragging || menuOpen}>{project.name}</NavigationTitle>
       </button>
       <div className="flex w-[4.5rem] shrink-0 items-center justify-end gap-0.5 pr-1">
         <DropdownMenu onOpenChange={setMenuOpen} open={menuOpen}>
@@ -372,16 +373,17 @@ function SortableSession({
   selected: boolean
   session: PiSessionSummary
 }) {
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
+  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({
     data: { kind: 'session', projectKey },
     disabled,
     id: `session:${session.id}`,
   })
+  const [menuOpen, setMenuOpen] = useState(false)
   const status = run?.status ?? 'idle'
   const cannotDelete = selected || isRunActive(status) || mutationSessionId === session.id
 
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={setMenuOpen}>
       <ContextMenuTrigger asChild>
         <div className="flex items-center gap-1" ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
           <Button
@@ -393,7 +395,7 @@ function SortableSession({
             {...attributes}
             {...listeners}
           >
-            <span className="min-w-0 flex-1 truncate text-sm font-medium">{sessionDisplayName(session)}</span>
+            <NavigationTitle className="text-sm font-medium" stopped={isDragging || menuOpen}>{sessionDisplayName(session)}</NavigationTitle>
           </Button>
         </div>
       </ContextMenuTrigger>

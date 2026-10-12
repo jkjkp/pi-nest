@@ -143,3 +143,15 @@ textarea {
     transition-duration: 0.01ms !important;
   }
 }
+
+.navigation-title[data-overflow="true"] {
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 20px), transparent 100%);
+}
+
+.navigation-title[data-overflow="true"][data-position="moving"] {
+  mask-image: linear-gradient(to right, transparent 0, #000 20px, #000 calc(100% - 20px), transparent 100%);
+}
+
+.navigation-title[data-overflow="true"][data-position="end"] {
+  mask-image: linear-gradient(to right, transparent 0, #000 20px, #000 100%);
+}
