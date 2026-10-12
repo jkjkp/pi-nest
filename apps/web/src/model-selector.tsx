@@ -80,7 +80,7 @@ export function ModelSelector({ label, title, disabled, models, currentModel, st
       <Button aria-label="刷新模型列表" title="刷新模型列表" disabled={busy || isActive} onClick={refresh} size="icon-sm" variant="ghost"><RefreshCw aria-hidden="true" className={status === 'loading' ? 'animate-spin' : ''} /></Button>
       {mobile && <Button aria-label="关闭模型选择" onClick={() => setOpen(false)} size="icon-sm" variant="ghost"><X aria-hidden="true" /></Button>}
     </div>
-    <div ref={listRef} role="listbox" aria-label="可用模型" id={listId} className="min-h-0 overflow-y-auto overscroll-contain p-1.5">
+    <div ref={listRef} role="listbox" aria-label="可用模型" id={listId} className="model-list-scroll min-h-0 overflow-y-auto overscroll-contain p-1.5">
       {filtered.map((model, index) => {
         const selected = currentModel?.provider === model.provider && currentModel.id === model.id
         const groupStart = index === 0 || filtered[index - 1]?.provider !== model.provider
