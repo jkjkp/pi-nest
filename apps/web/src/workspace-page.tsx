@@ -160,8 +160,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </div>
           </header>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
-            <ScrollArea className="h-full">
-              <div className="w-full space-y-4 px-4 pt-6 pb-[calc(var(--composer-height)+1.5rem)] sm:px-6">
+            <ScrollArea className="timeline-scroll h-full">
+              <div className="w-full space-y-4 px-4 pt-6 pb-[calc(var(--composer-height)+3rem)] sm:px-6">
                 {isDraft ? (
                   <div className="conversation-stage py-16">
                     <section className="conversation-stage-content grid min-h-56 place-items-center rounded-2xl border border-dashed bg-muted/20 p-8 text-center">

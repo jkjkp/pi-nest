@@ -46,6 +46,20 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
     return () => { observer.disconnect(); pane.style.removeProperty('--composer-height') }
   }, [composer])
 
+  useEffect(() => {
+    const messages = messageScrollAreaRef.current
+    if (!messages || !composer) return
+    const blockHiddenInteraction = (event: MouseEvent) => {
+      if (!(event.target instanceof Node) || !scrollViewport?.contains(event.target)) return
+      if (event.clientY < composer.getBoundingClientRect().top) return
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    const events = ['pointerdown', 'click', 'dblclick', 'contextmenu'] as const
+    for (const type of events) messages.addEventListener(type, blockHiddenInteraction, true)
+    return () => { for (const type of events) messages.removeEventListener(type, blockHiddenInteraction, true) }
+  }, [composer, scrollViewport])
+
   const setRailOverlayRoot = useCallback((node: HTMLDivElement | null) => setRailOverlay(node), [setRailOverlay])
 
   const scrollToFinalAnswer = useCallback((turnId: string) => {

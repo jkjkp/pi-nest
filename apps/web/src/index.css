@@ -155,3 +155,8 @@ textarea {
 .navigation-title[data-overflow="true"][data-position="end"] {
   mask-image: linear-gradient(to right, transparent 0, #000 20px, #000 100%);
 }
+
+.timeline-scroll > [data-slot="scroll-area-viewport"] {
+  mask-image: linear-gradient(to bottom, #000 0, #000 max(0px, calc(100% - var(--composer-height) - 32px)), transparent max(0px, calc(100% - var(--composer-height))), transparent 100%);
+  scroll-padding-bottom: calc(var(--composer-height) + 32px);
+}
