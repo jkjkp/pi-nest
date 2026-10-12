@@ -260,3 +260,34 @@ it('keeps a submitted turn key stable at execution start and gives the next subm
   expect(running.displayId).toBe(first.displayId)
   expect(next.displayId).not.toBe(first.displayId)
 })
+
+it('retains partial output and deduplicates a model error across live events and persisted history', () => {
+  const message = { role: 'assistant', stopReason: 'error', errorMessage: '403: 您无权访问glm-5.3-highspeed。', provider: 'zai-coding-cn', model: 'glm-5.3-highspeed', content: [] }
+  const turns = [{ id: 'turn-1', prompt: 'go', startedAt: '2026-09-22T00:00:00.000Z', completedAt: '2026-09-22T00:00:03.000Z', events: [
+    runtime(1, { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'partial' } }),
+    runtime(2, { type: 'message_end', message }),
+    runtime(3, { type: 'message_end', message }),
+  ] }]
+  const live = timelineItems(undefined, turns, [])[0]!
+  expect(live.modelErrors).toHaveLength(1)
+  expect(live.parts[0]).toMatchObject({ kind: 'assistant_text', text: 'partial' })
+  const history = [
+    { id: 'u1', parentId: null, timestamp: turns[0]!.startedAt, type: 'message', raw: { type: 'message', message: { role: 'user', content: 'go' } } },
+    { id: 'a1', parentId: 'u1', timestamp: '2026-09-22T00:00:03.000Z', type: 'message', raw: { type: 'message', message } },
+  ]
+  expect(timelineItems(history, [], [])[0]?.modelErrors).toEqual(live.modelErrors)
+  expect(timelineItems(history, turns, [])[0]?.modelErrors).toHaveLength(1)
+  expect(timelineItems(undefined, [{ ...turns[0]!, events: [] }], [])[0]?.modelErrors).toBeUndefined()
+})
+
+it('does not let a stale history response erase a live error after partial output', () => {
+  const history = [
+    { id: 'u1', parentId: null, timestamp: '2026-09-22T00:00:00.000Z', type: 'message', raw: { type: 'message', message: { role: 'user', content: 'go' } } },
+    { id: 'a1', parentId: 'u1', timestamp: '2026-09-22T00:00:01.000Z', type: 'message', raw: { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] } } },
+  ]
+  const turns = [{ id: 'turn-1', prompt: 'go', startedAt: history[0]!.timestamp, completedAt: '2026-09-22T00:00:03.000Z', events: [
+    runtime(1, { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'partial' } }),
+    runtime(2, { type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: '403: denied', content: [] } }),
+  ] }]
+  expect(timelineItems(history, turns, [])[0]?.modelErrors).toHaveLength(1)
+})

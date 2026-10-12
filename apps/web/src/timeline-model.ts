@@ -1,3 +1,4 @@
+import { modelCallError, type ModelCallError } from './model-call-error.js'
 import type { RuntimeTurn } from './session-run-model.js'
 import type { PiSessionHistoryEntry } from './history.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
@@ -31,6 +32,7 @@ export type TimelinePart =
 
 export type TimelineItem = {
   diagnostics: TimelineDiagnostic[]
+  modelErrors?: ModelCallError[]
   displayId?: string
   events: TimelineEvent[]
   id: string
@@ -226,7 +228,9 @@ function projectEvent(item: TimelineItem, event: TimelineEvent) {
 
   const nativeMessage = message(event)
   if ((type === 'message' || type === 'message_end') && nativeMessage?.role === 'assistant') {
-    if (projectAssistantContent(item, event, nativeMessage.content)) return
+    const error = modelCallError(nativeMessage)
+    if (error && !item.modelErrors?.some((saved) => saved.message === error.message && saved.model === error.model && saved.provider === error.provider)) (item.modelErrors ??= []).push(error)
+    if (projectAssistantContent(item, event, nativeMessage.content) || error) return
     return diagnostic(item, event, 'unrenderable_message')
   }
   if ((type === 'message' || type === 'message_start' || type === 'message_end') && nativeMessage?.role === 'user') return
@@ -308,8 +312,9 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
     for (const event of turn.events) projectEvent(item, runtimeEvent(event))
     if (persisted) {
       matchedHistory.add(persisted.id)
+      item.modelErrors ??= persisted.modelErrors
       let savedIndex = 0
-      const covered = item.parts.every((part) => {
+      const covered = (item.modelErrors ?? []).every((error) => persisted.modelErrors?.some((saved) => saved.message === error.message && saved.model === error.model && saved.provider === error.provider)) && item.parts.every((part) => {
         const index = persisted.parts.findIndex((saved, index) => {
           if (index < savedIndex) return false
           if (part.kind !== saved.kind) return false
@@ -322,7 +327,7 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
         return true
       })
       // A user entry or an intermediate message_end is not a completed response.
-      if (turn.completedAt && covered && (persisted.parts.length > 0 || persisted.events.some((event) => eventType(event) === 'agent_settled'))) {
+      if (turn.completedAt && covered && (persisted.parts.length > 0 || (persisted.modelErrors?.length ?? 0) > 0 || persisted.events.some((event) => eventType(event) === 'agent_settled'))) {
         items[items.indexOf(persisted)] = { ...persisted, displayId: item.displayId }
       } else {
         if (item.parts.length === 0) item.parts = persisted.parts

@@ -387,3 +387,21 @@ describe('session run controller', () => {
   })
 
 })
+
+
+it('ends a rejected model call as an error and allows the next prompt to succeed', async () => {
+  useWorkspaceStore.setState({ runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {} })
+  const runtime = runtimeMock()
+  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  expect(controller.start({ prompt: 'first', sessionId: 'session-a' })).toBe(true)
+  await tick()
+  runtime.emit({ event: { type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: '403: denied' } }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
+  runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a' })
+  expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'error', stopReason: 'error' })
+  expect(useWorkspaceStore.getState().runs['session-b']).toBeUndefined()
+  expect(controller.start({ prompt: 'next', sessionId: 'session-a' })).toBe(true)
+  await tick()
+  runtime.emit({ event: { type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } }, observedAt: 'now', runId: 'run-1', sequence: 3, sessionId: 'session-a', turnId: 'turn-2' })
+  runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 4, sessionId: 'session-a' })
+  expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'complete', stopReason: 'stop' })
+})

@@ -37,6 +37,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
+  const [modelSelector, setModelSelector] = useState<{ sessionId?: string; open: boolean }>({ open: false })
+  const modelSelectorOpen = modelSelector.sessionId === selectedSessionId && modelSelector.open
+  const setModelSelectorOpen = (open: boolean) => setModelSelector({ sessionId: selectedSessionId, open })
   const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
   const [desktopInspectorSheetOpen, setDesktopInspectorSheetOpen] = useState(false)
   const {
@@ -167,6 +170,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                     </section>
                   </div>
                 ) : selectedSession ? <SessionTimeline
+                  onSelectModel={() => { setModelSelectorOpen(true); void openModels() }}
                   error={historyQuery.isError && !history}
                   hasEarlier={historyQuery.hasPreviousPage}
                   history={history}
@@ -245,7 +249,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
                 {isActive && <div className="flex gap-1 text-xs"><Button onClick={() => setQueueMode('steer')} size="sm" type="button" variant={queueMode === 'steer' ? 'secondary' : 'ghost'}>Steer</Button><Button onClick={() => setQueueMode('follow_up')} size="sm" type="button" variant={queueMode === 'follow_up' ? 'secondary' : 'ghost'}>Follow-up</Button></div>}
                 <div className="ml-auto flex items-center gap-2">
-                  <ModelSelector key={selectedSessionId} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={!selectedSession} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />
+                  <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen} key={selectedSessionId} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={!selectedSession} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />
                   <ThinkingSelector key={`thinking:${selectedSessionId}`} open={thinkingOpen} onOpenChange={setThinkingOpen} current={currentThinkingLevel} levels={thinkingLevels} status={thinkingStatus} error={thinkingError} failure={thinkingFailure} disabled={!selectedSession || modelStatus === 'loading' || modelStatus === 'switching'} isActive={isActive} onLoad={() => void openThinking()} onRetry={() => void openThinking(true)} onSelect={changeThinkingLevel} />
                   {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}

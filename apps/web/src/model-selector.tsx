@@ -6,6 +6,8 @@ import { filterModels } from './model-search.js'
 import { Button } from '@/components/ui/button'
 
 type ModelSelectorProps = {
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
   label: string
   title: string
   disabled: boolean
@@ -19,8 +21,10 @@ type ModelSelectorProps = {
   onSelect: (provider: string, modelId: string) => Promise<boolean>
 }
 
-export function ModelSelector({ label, title, disabled, models, currentModel, status, error, isActive, onLoad, onRetry, onSelect }: ModelSelectorProps) {
-  const [open, setOpen] = useState(false)
+export function ModelSelector({ label, title, disabled, models, currentModel, status, error, isActive, onLoad, onRetry, onSelect, open: controlledOpen, onOpenChange }: ModelSelectorProps) {
+  const [localOpen, setLocalOpen] = useState(false)
+  const open = controlledOpen ?? localOpen
+  function setOpen(next: boolean) { setLocalOpen(next); onOpenChange?.(next) }
   const [mobile, setMobile] = useState(false)
   const [search, setSearch] = useState('')
   const [highlight, setHighlight] = useState(0)

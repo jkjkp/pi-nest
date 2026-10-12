@@ -129,7 +129,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     const userInput = nativeUserMessage(event)
     if (userInput) useWorkspaceStore.getState().consumePendingInput(event.sessionId, userInput)
     useWorkspaceStore.getState().appendRunEvent(event.sessionId, event)
-    activeRun.stopReason ??= assistantStopReason(event)
+    activeRun.stopReason = assistantStopReason(event) ?? activeRun.stopReason
     if (event.event.type !== 'agent_settled') return
 
     clearAwaitingAgentCheck(event.sessionId)
@@ -139,7 +139,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     useWorkspaceStore.getState().completeLatestRunTurn(event.sessionId, new Date().toISOString())
     useWorkspaceStore.getState().clearPendingInputs(event.sessionId)
     useWorkspaceStore.getState().updateRun(event.sessionId, {
-      status: activeRun.stopReason === 'aborted' ? 'aborted' : 'complete',
+      status: activeRun.stopReason === 'error' ? 'error' : activeRun.stopReason === 'aborted' ? 'aborted' : 'complete',
       stopReason: activeRun.stopReason ?? 'stop',
     })
     void invalidateHistory(event.sessionId)
