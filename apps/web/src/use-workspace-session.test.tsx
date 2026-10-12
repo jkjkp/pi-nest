@@ -135,7 +135,7 @@ it('shares history page reads between full previews and unloaded jumps without t
   expect(previews).toEqual([text, text])
   await workspace.jumpToUnloadedTurn('user-1', 'user-2')
   expect(fetchSessionHistory).toHaveBeenCalledTimes(1)
-  expect(queryClient.getQueryData(['session-history', 'session-1'])).toHaveProperty('pages')
+  expect(queryClient.getQueryData(['session-history', 'session-1', 'branch-v2'])).toHaveProperty('pages')
   await expect(workspace.readTurnPrompt('missing', 'user-2')).rejects.toThrow('未找到用户消息')
   queryClient.clear()
 })
@@ -149,7 +149,7 @@ it('ignores an older unloaded jump after a newer node was selected', async () =>
   await workspace.jumpToUnloadedTurn('user-2', 'cursor-2')
   release(page('user-1'))
   await older
-  const cached = queryClient.getQueryData<{ pages: Awaited<ReturnType<typeof fetchSessionHistory>>[] }>(['session-history', 'session-1'])!
+  const cached = queryClient.getQueryData<{ pages: Awaited<ReturnType<typeof fetchSessionHistory>>[] }>(['session-history', 'session-1', 'branch-v2'])!
   expect(cached.pages.flatMap((item) => item.entries.map((entry) => entry.id))).toEqual(['user-2'])
   queryClient.clear()
 })

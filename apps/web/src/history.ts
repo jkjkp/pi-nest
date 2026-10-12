@@ -2,13 +2,14 @@ import type { PiSessionHistoryEntry, PiSessionHistoryResponse, PiSessionTurnInde
 export type { PiSessionHistoryEntry, PiSessionHistoryResponse, PiSessionTurnIndex, PiSessionTurnIndexEntry as TurnIndexEntry } from '@pi-nest/contracts'
 
 export const historyPageSize = 40
+export const historyCacheVersion = 'branch-v2'
 
 export function sessionHistoryQueryKey(sessionId: string) {
-  return ['session-history', sessionId] as const
+  return ['session-history', sessionId, historyCacheVersion] as const
 }
 
 export function sessionTurnIndexQueryKey(sessionId: string, revision?: string) {
-  return revision === undefined ? ['session-turn-index', sessionId] as const : ['session-turn-index', sessionId, revision] as const
+  return revision === undefined ? ['session-turn-index', sessionId, historyCacheVersion] as const : ['session-turn-index', sessionId, historyCacheVersion, revision] as const
 }
 
 /** The next Turn-start cursor makes the selected Turn the last item in its page. */

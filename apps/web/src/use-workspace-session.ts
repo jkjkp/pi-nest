@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type InfiniteData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
-import { historyUserTurnCount, mergeSessionHistoryPage, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
+import { historyCacheVersion, historyUserTurnCount, mergeSessionHistoryPage, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
 import { timelineItems } from './timeline-model.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import type { PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
@@ -241,7 +241,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   const readHistoryPage = useCallback((cursor: string | undefined) => queryClient.fetchQuery({
-    queryKey: ['session-history-page', selectedSessionId, history?.revision, cursor],
+    queryKey: ['session-history-page', selectedSessionId, historyCacheVersion, history?.revision, cursor],
     queryFn: () => fetchSessionHistory(selectedSessionId, cursor, history?.revision),
     staleTime: Infinity,
   }), [history?.revision, queryClient, selectedSessionId])

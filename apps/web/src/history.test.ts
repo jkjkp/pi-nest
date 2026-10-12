@@ -4,9 +4,9 @@ import { historyPageCursorForTurn, historyUserTurnCount, mergeSessionHistoryPage
 
 describe('session history presentation contract', () => {
   it('keeps history cache isolated by session ID', () => {
-    expect(sessionHistoryQueryKey('first')).toEqual(['session-history', 'first'])
+    expect(sessionHistoryQueryKey('first')).toEqual(['session-history', 'first', 'branch-v2'])
     expect(sessionHistoryQueryKey('second')).not.toEqual(sessionHistoryQueryKey('first'))
-    expect(sessionTurnIndexQueryKey('first')).toEqual(['session-turn-index', 'first'])
+    expect(sessionTurnIndexQueryKey('first')).toEqual(['session-turn-index', 'first', 'branch-v2'])
   })
 
   it('uses the following stable Turn ID to load a page containing an unloaded Turn', () => {
