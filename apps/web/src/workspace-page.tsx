@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useState } from 'react'
-import { CircleX, Menu, PanelRight, Send, Settings, SlidersHorizontal, Square } from 'lucide-react'
+import { ArrowDown, CircleX, Menu, PanelRight, Send, Settings, SlidersHorizontal, Square } from 'lucide-react'
 import { Link } from 'react-router'
 
 import { Button } from '@/components/ui/button'
@@ -41,7 +41,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
   const [desktopInspectorSheetOpen, setDesktopInspectorSheetOpen] = useState(false)
   const {
-    setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
+    showScrollToBottom, scrollToBottom, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
     scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector,
   } = useTimelineViewport({ selectedSessionId, history, activeTurn, isActive, inspectorOpen, setInspectorOpen })
   const promptTextareaRef = useComposerTextarea(prompt)
@@ -216,6 +216,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </ScrollArea>
             <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden px-4 sm:px-6">
               <div className="conversation-stage relative h-full" ref={setRailOverlayRoot} />
+              {selectedSession && !isDraft && showScrollToBottom && <div className="conversation-stage absolute inset-x-0 bottom-3 px-4 sm:px-6"><div className="conversation-stage-content flex justify-center"><Button aria-label="滚动到对话底部" className="pointer-events-auto size-11 rounded-full border bg-background/95 shadow-md sm:size-9" onClick={scrollToBottom} onPointerDown={(event) => event.preventDefault()} size="icon" variant="outline"><ArrowDown aria-hidden="true" className="size-5" /></Button></div></div>}
             </div>
           </div>
           <div className="shrink-0 px-4 sm:px-6">

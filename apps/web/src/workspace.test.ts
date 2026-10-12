@@ -32,6 +32,13 @@ describe('workspace presentation helpers', () => {
     expect(shouldFollowLatest(1_000, 700, 15, false)).toBe(false)
   })
 
+  it('detects the bottom across short content, fractional offsets, and viewport resizing', () => {
+    expect(shouldFollowLatest(300, 0, 500, false)).toBe(true)
+    expect(shouldFollowLatest(1000, 419.5, 500, false)).toBe(false)
+    expect(shouldFollowLatest(1000, 420, 500, false)).toBe(true)
+    expect(shouldFollowLatest(1000, 420, 400, false)).toBe(false)
+  })
+
   it('renders extension projection deterministically and strips terminal control sequences', () => {
     expect(extensionStatusLine({ zebra: '\u001B[31mZ\u001B[0m', alpha: ' A ' })).toBe('A Z')
     expect(extensionWidgetText({ zebra: ['Z'], alpha: ['\u001B[32mA\u001B[0m', 'B'] })).toBe('A\nB\n\nZ')
