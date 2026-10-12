@@ -3,8 +3,14 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { expect, it, vi } from 'vitest'
 import type { SessionRunController } from './session-run-controller.js'
+import { fetchSessionHistory } from './workspace-api.js'
 import { useWorkspaceSession } from './use-workspace-session.js'
 import { useWorkspaceStore } from './workspace-store.js'
+
+vi.mock('./workspace-api.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./workspace-api.js')>()
+  return { ...original, fetchSessionHistory: vi.fn() }
+})
 
 vi.mock('./workspace-store.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('./workspace-store.js')>()
@@ -115,5 +121,35 @@ it('blocks thinking commands during generation without queuing or clearing input
   expect(controller.steer).not.toHaveBeenCalled()
   expect(controller.followUp).not.toHaveBeenCalled()
   expect(useWorkspaceStore.getState().drafts['session-1']).toBe('/thinking high')
+  queryClient.clear()
+})
+
+it('shares history page reads between full previews and unloaded jumps without truncating text', async () => {
+  const { workspace, queryClient } = thinkingProbe()
+  const text = '用户原始消息'.repeat(40) + '\n完整末行'
+  vi.mocked(fetchSessionHistory).mockReset().mockResolvedValue({
+    entries: [{ id: 'user-1', parentId: null, type: 'message', timestamp: '2026-10-12T00:00:00Z', raw: { message: { role: 'user', content: text } } }],
+    hasEarlier: false, revision: 'fixture', session: { id: 'session-1', cwd: '/fixture' },
+  })
+  const previews = await Promise.all([workspace.readTurnPrompt('user-1', 'user-2'), workspace.readTurnPrompt('user-1', 'user-2')])
+  expect(previews).toEqual([text, text])
+  await workspace.jumpToUnloadedTurn('user-1', 'user-2')
+  expect(fetchSessionHistory).toHaveBeenCalledTimes(1)
+  expect(queryClient.getQueryData(['session-history', 'session-1'])).toHaveProperty('pages')
+  await expect(workspace.readTurnPrompt('missing', 'user-2')).rejects.toThrow('未找到用户消息')
+  queryClient.clear()
+})
+
+it('ignores an older unloaded jump after a newer node was selected', async () => {
+  const { workspace, queryClient } = thinkingProbe()
+  let release!: (page: Awaited<ReturnType<typeof fetchSessionHistory>>) => void
+  const page = (id: string) => ({ entries: [{ id, parentId: null, type: 'message', timestamp: '2026-10-12T00:00:00Z', raw: { message: { role: 'user', content: id } } }], hasEarlier: false, revision: 'fixture', session: { id: 'session-1', cwd: '/fixture' } })
+  vi.mocked(fetchSessionHistory).mockReset().mockImplementationOnce(() => new Promise((resolve) => { release = resolve })).mockResolvedValueOnce(page('user-2'))
+  const older = workspace.jumpToUnloadedTurn('user-1', 'cursor-1')
+  await workspace.jumpToUnloadedTurn('user-2', 'cursor-2')
+  release(page('user-1'))
+  await older
+  const cached = queryClient.getQueryData<{ pages: Awaited<ReturnType<typeof fetchSessionHistory>>[] }>(['session-history', 'session-1'])!
+  expect(cached.pages.flatMap((item) => item.entries.map((entry) => entry.id))).toEqual(['user-2'])
   queryClient.clear()
 })

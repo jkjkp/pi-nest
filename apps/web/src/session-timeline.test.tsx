@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { SessionTimeline } from './session-timeline.js'
-import { prependedScrollTop, turnJumpAlignment } from './timeline-pagination.js'
+import { prependedScrollTop } from './timeline-pagination.js'
 import { promptOverflows } from './user-prompt-state.js'
 
 const history = {
@@ -85,10 +85,10 @@ describe('SessionTimeline', () => {
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
 
     expect(markup).toContain('aria-label="对话轮次导航"')
-    expect(markup).toContain('对话轮次导航，共 1 轮')
+    expect(markup).toContain('第 1 轮：question')
     expect(markup).toContain('class="conversation-stage pb-6"')
     expect(markup).toContain('conversation-stage-content space-y-5')
-    expect(markup).toContain('md:absolute md:left-0 md:block')
+    expect(markup).toContain('absolute right-0')
     expect(markup).not.toContain('md:sticky')
     expect(markup).not.toContain('选择一轮并定位到对应的用户请求。')
   })
@@ -126,8 +126,7 @@ describe('SessionTimeline', () => {
     const turnIndex = { entries: Array.from({ length: 3_000 }, (_, index) => ({ id: `user-${index + 1}`, index: index + 1, promptPreview: `prompt ${index + 1}`, startedAt: '2026-09-22T00:00:00.000Z' })), revision: 'fixture' }
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} turnIndex={turnIndex} />)
 
-    expect(markup).toContain('data-rail-mode="density"')
-    expect((markup.match(/data-rail-density-bin=""/g) ?? [])).toHaveLength(64)
+    expect((markup.match(/data-rail-marker=""/g) ?? [])).toHaveLength(10)
     expect((markup.match(/data-turn-id=/g) ?? []).length).toBeLessThan(40)
   })
 
@@ -140,10 +139,7 @@ describe('SessionTimeline', () => {
     expect(prependedScrollTop(1_200, 320, 2_050)).toBe(1_170)
   })
 
-  it('aligns the first user Turn at the top and the final user Turn at the bottom', () => {
-    expect(turnJumpAlignment('user-1', 'user-2')).toBe('start')
-    expect(turnJumpAlignment('user-2', 'user-2')).toBe('end')
-  })
+
 })
 
 function render(node: React.ReactNode) { return renderToStaticMarkup(node) }

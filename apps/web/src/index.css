@@ -96,7 +96,7 @@ body {
 
 .conversation-stage {
   width: 100%;
-  max-width: 56rem;
+  max-width: 60rem;
   margin-inline: auto;
 }
 
@@ -111,13 +111,7 @@ body {
   }
 
   .conversation-stage {
-    display: grid;
-    grid-template-columns: 2rem minmax(0, 1fr);
-    column-gap: 1.5rem;
-  }
-
-  .conversation-stage-content {
-    grid-column: 2;
+    width: min(82%, calc(100% - 72px));
   }
 }
 

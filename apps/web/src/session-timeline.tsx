@@ -6,7 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 
 import { AssistantMarkdown } from './assistant-markdown.js'
 import { historyPageCursorForTurn, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
-import { prependedScrollTop, turnJumpAlignment, type TurnJumpAlignment } from './timeline-pagination.js'
+import { prependedScrollTop, type TurnJumpAlignment } from './timeline-pagination.js'
 import { timelineNavigationTurns } from './timeline-navigation.js'
 import { timelineItems, type RuntimeTurn, type TimelineItem } from './timeline-model.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
@@ -17,7 +17,7 @@ import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 import type { PendingInput, PromptStatus } from './session-run-model.js'
 
-export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onJumpToTurn, onJumpToUnloadedTurn, onLoadEarlier, onPendingJumpHandled, onRetry, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, scrollViewport, systemEvents = [], turnIndex, turns = [] }: {
+export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onJumpToTurn, onJumpToUnloadedTurn, onReadTurnPrompt, onLoadEarlier, onPendingJumpHandled, onRetry, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, scrollViewport, systemEvents = [], turnIndex, turns = [] }: {
   error: boolean
   hasEarlier?: boolean
   history: PiSessionHistoryResponse | undefined
@@ -27,7 +27,8 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   onFinalAnswerStart?: (turnId: string) => void
   onFinalAnswerStream?: () => void
   onJumpToTurn?: (turnId: string, scrollTo: (behavior: ScrollBehavior) => void, alignment: TurnJumpAlignment) => void
-  onJumpToUnloadedTurn?: (turnId: string, cursor: string | undefined) => void
+  onJumpToUnloadedTurn?: (turnId: string, cursor: string | undefined) => void | Promise<void>
+  onReadTurnPrompt?: (turnId: string, cursor: string | undefined) => Promise<string>
   onLoadEarlier?: () => void
   onPendingJumpHandled?: () => void
   onRetry: () => void
@@ -87,12 +88,19 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     if (!pendingJumpTurnId) return
     const index = items.findIndex((item) => item.id === pendingJumpTurnId)
     if (index < 0) return
-    const alignment = turnJumpAlignment(pendingJumpTurnId, railEntries.at(-1)?.id)
+    const alignment = 'start' as const
     const scrollTo = (behavior: ScrollBehavior) => virtualizer.scrollToIndex(index + 1, { align: alignment, behavior })
     if (onJumpToTurn) onJumpToTurn(pendingJumpTurnId, scrollTo, alignment)
     else scrollTo('auto')
     onPendingJumpHandled?.()
   }, [items, onJumpToTurn, onPendingJumpHandled, pendingJumpTurnId, railEntries, virtualizer])
+
+  const readPrompt = useCallback(async (entry: import('./history.js').TurnIndexEntry) => {
+    const loaded = items.find((item) => item.id === entry.id)?.prompt
+    if (loaded !== undefined) return loaded
+    if (!onReadTurnPrompt) throw new Error('无法读取完整消息。')
+    return onReadTurnPrompt(entry.id, historyPageCursorForTurn(railEntries, entry.id))
+  }, [items, onReadTurnPrompt, railEntries])
 
   if (isLoading && items.length === 0) return <LoadingTimeline />
   if (error && items.length === 0) return <HistoryError onRetry={onRetry} />
@@ -101,15 +109,16 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     return <section className="py-8 text-center"><p className="text-sm text-muted-foreground">{isRunning ? '正在等待 Pi 原生事件…' : '当前活动分支尚无可展示的原生条目。'}</p></section>
   }
 
+
   const jump = (turnId: string) => {
     const index = items.findIndex((item) => item.id === turnId)
-    if (index < 0) return void onJumpToUnloadedTurn?.(turnId, historyPageCursorForTurn(railEntries, turnId))
-    const alignment = turnJumpAlignment(turnId, railEntries.at(-1)?.id)
+    if (index < 0) return onJumpToUnloadedTurn?.(turnId, historyPageCursorForTurn(railEntries, turnId))
+    const alignment = 'start' as const
     const scrollTo = (behavior: ScrollBehavior) => virtualizer.scrollToIndex(index + 1, { align: alignment, behavior })
     if (onJumpToTurn) onJumpToTurn(turnId, scrollTo, alignment)
     else scrollTo('auto')
   }
-  return <section className="conversation-stage pb-6">{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} scrollViewport={scrollViewport} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>{virtualItems.map((virtualItem) => {
+  return <section className="conversation-stage pb-6">{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail key={history?.session.id} onReadPrompt={readPrompt} activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>{virtualItems.map((virtualItem) => {
     if (virtualItem.index === 0) return <div className="absolute left-0 top-0 w-full" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>
     const item = items[virtualItem.index - 1]!
     return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><TurnItem isRunning={isRunning && virtualItem.index === items.length} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} runMessage={virtualItem.index === items.length ? runMessage : undefined} runStatus={virtualItem.index === items.length ? runStatus : undefined} /></div>

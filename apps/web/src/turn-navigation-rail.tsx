@@ -1,193 +1,98 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
-
 import type { TurnIndexEntry } from './history.js'
-import { computeIdleRailViewportLayout, computeOutlineViewportLayout, computeRailViewportLayout, densityBins, focusWindow, jumpFromMarker, jumpFromOutline, nextOutlineAutoFollow, nextRailIndex, openOutlineFromContextMenu, railIdleHeight, railIndexFromPointer, railMode, turnRatio, type RailViewportLayout } from './turn-navigation-rail-state.js'
-import { formatUpdatedAt } from './workspace.js'
+import { railRowHeight, railWindowSize, railWindowStart } from './turn-navigation-rail-state.js'
 
-function markerY(index: number, count: number) {
-  return turnRatio(index, count) * 1_000
-}
-
-function markerLabel(entry: TurnIndexEntry) {
-  return `第 ${entry.index} 轮：${entry.promptPreview}`
-}
-
-type RailLayouts = { expanded: RailViewportLayout; idle: RailViewportLayout; outline: RailViewportLayout }
-const railLayoutKeys = ['expanded', 'idle', 'outline'] as const
-
-export function TurnNavigationRail({ activeTurnId, entries, onJump, overlayRoot, scrollViewport }: {
+export function TurnNavigationRail({ activeTurnId, entries, onJump, onReadPrompt, overlayRoot }: {
   activeTurnId?: string
   entries: TurnIndexEntry[]
-  onJump: (turnId: string) => void
+  onJump: (turnId: string) => void | Promise<void>
+  onReadPrompt?: (entry: TurnIndexEntry) => Promise<string>
   overlayRoot?: HTMLElement | null
-  scrollViewport?: HTMLElement | null
 }) {
   const [open, setOpen] = useState(false)
-  const [hoveredIndex, setHoveredIndex] = useState<number | undefined>(undefined)
-  const [keyboardIndex, setKeyboardIndex] = useState<number | undefined>(undefined)
-  const [keyboardFocused, setKeyboardFocused] = useState(false)
-  const [layouts, setLayouts] = useState<RailLayouts | undefined>(undefined)
+  const [outlineStart, setOutlineStart] = useState(0)
+  const [hovered, setHovered] = useState<TurnIndexEntry>()
+  const [preview, setPreview] = useState<{ text?: string; error?: string }>()
+  const [jumpError, setJumpError] = useState(false)
+  const [retry, setRetry] = useState(0)
+  const [layout, setLayout] = useState({ height: Math.min(10, entries.length) * railRowHeight, previewWidth: 360, previewHeight: 240, above: false })
+  const root = useRef<HTMLElement>(null)
   const outline = useRef<HTMLDivElement>(null)
-  const pendingUserJumpTurnId = useRef<string | undefined>(undefined)
-  const pointerFocus = useRef(false)
-  const railRoot = useRef<HTMLDivElement>(null)
-  const currentTurnId = entries.some((entry) => entry.id === activeTurnId) ? activeTurnId : entries.at(-1)?.id
-  const currentIndex = Math.max(0, entries.findIndex((entry) => entry.id === currentTurnId))
-  const mode = railMode(entries.length)
-  const density = useMemo(() => mode === 'density' ? densityBins(entries.length) : [], [entries.length, mode])
-  const focused = useMemo(() => mode === 'density' ? focusWindow(currentIndex, entries.length) : [], [currentIndex, entries.length, mode])
+  const touch = useRef(false)
+  const wasOpen = useRef(false)
+  const jumpSequence = useRef(0)
+  const foundIndex = entries.findIndex((entry) => entry.id === activeTurnId)
+  const currentIndex = foundIndex < 0 ? Math.max(0, entries.length - 1) : foundIndex
+  const start = railWindowStart(entries.length, currentIndex)
+  const count = Math.min(railWindowSize, entries.length)
+  const rowHeight = layout.height / Math.max(1, count)
   // oxlint-disable-next-line react/incompatible-library -- The virtualizer owns DOM measurement state outside React.
-  const outlineVirtualizer = useVirtualizer({
-    count: entries.length,
-    estimateSize: () => 72,
-    getItemKey: (index) => entries[index]!.id,
-    getScrollElement: () => outline.current,
-    initialRect: { height: 400, width: 360 },
-    overscan: 5,
-  })
+  const virtualizer = useVirtualizer({ count: entries.length, estimateSize: () => rowHeight, getScrollElement: () => outline.current, getItemKey: (index) => entries[index]!.id, initialRect: { height: layout.height, width: 320 }, overscan: 2 })
 
   useLayoutEffect(() => {
-    if (!overlayRoot || !scrollViewport) {
-      setLayouts(undefined)
-      return
-    }
+    if (!root.current) return
     const measure = () => {
-      const overlay = overlayRoot.getBoundingClientRect()
-      const viewport = scrollViewport.getBoundingClientRect()
-      const viewportTop = Math.max(0, Math.min(overlay.height, viewport.top - overlay.top))
-      const viewportBottom = Math.max(viewportTop, Math.min(overlay.height, viewport.bottom - overlay.top))
-      const viewportHeight = Math.max(0, viewportBottom - viewportTop)
-      const idle = computeIdleRailViewportLayout({ viewportHeight })
-      const expanded = computeRailViewportLayout({ viewportHeight })
-      const outline = computeOutlineViewportLayout({ centerY: idle.top + idle.height / 2, viewportHeight })
-      const positioned: RailLayouts = {
-        expanded: { ...expanded, bottom: viewportTop + expanded.bottom, top: viewportTop + expanded.top },
-        idle: { ...idle, bottom: viewportTop + idle.bottom, top: viewportTop + idle.top },
-        outline: { ...outline, bottom: viewportTop + outline.bottom, top: viewportTop + outline.top },
-      }
-      setLayouts((current) => current && railLayoutKeys.every((key) => current[key].top === positioned[key].top && current[key].height === positioned[key].height) ? current : positioned)
+      const rect = root.current!.getBoundingClientRect()
+      const width = (overlayRoot?.getBoundingClientRect().width ?? window.innerWidth) - 332
+      const next = { height: rect.height, previewWidth: Math.min(380, Math.max(220, width)), previewHeight: Math.max(0, Math.min(240, rect.top - (overlayRoot?.getBoundingClientRect().top ?? 0) - 8)), above: width < 220 }
+      setLayout((old) => old.height === next.height && old.previewWidth === next.previewWidth && old.previewHeight === next.previewHeight && old.above === next.above ? old : next)
     }
     measure()
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', measure)
-      return () => window.removeEventListener('resize', measure)
-    }
     const observer = new ResizeObserver(measure)
-    observer.observe(overlayRoot)
-    if (scrollViewport !== overlayRoot) observer.observe(scrollViewport)
-    window.addEventListener('resize', measure)
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('resize', measure)
-    }
-  }, [overlayRoot, scrollViewport])
+    observer.observe(root.current)
+    if (overlayRoot) observer.observe(overlayRoot)
+    return () => observer.disconnect()
+  }, [overlayRoot, count])
 
-  useEffect(() => {
-    if (pendingUserJumpTurnId.current && !entries.some((entry) => entry.id === pendingUserJumpTurnId.current)) pendingUserJumpTurnId.current = undefined
-  }, [entries])
-
-  useEffect(() => {
-    if (!currentTurnId) return
-    const autoFollow = nextOutlineAutoFollow(pendingUserJumpTurnId.current, currentTurnId)
-    pendingUserJumpTurnId.current = autoFollow.pendingUserJumpTurnId
-    if (autoFollow.shouldFollow && open) outlineVirtualizer.scrollToIndex(currentIndex, { align: 'auto' })
-  }, [currentIndex, currentTurnId, open, outlineVirtualizer])
-
+  useLayoutEffect(() => { if (open && !wasOpen.current) virtualizer.scrollToIndex(start, { align: 'start' }); wasOpen.current = open }, [open, start, virtualizer])
+  useEffect(() => { virtualizer.measure() }, [rowHeight, virtualizer])
   useEffect(() => {
     if (!open) return
-    const closeOnOutsidePress = (event: PointerEvent) => {
-      if (event.target instanceof Node && !railRoot.current?.contains(event.target)) setOpen(false)
-    }
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('pointerdown', closeOnOutsidePress)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsidePress)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
+    const close = (event: PointerEvent) => { if (event.target instanceof Node && !root.current?.contains(event.target)) setOpen(false) }
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setOpen(false); setHovered(undefined) } }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', escape)
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', escape) }
   }, [open])
+  useEffect(() => {
+    setPreview(undefined)
+    if (!hovered || !open || !onReadPrompt) return
+    let cancelled = false
+    const timer = setTimeout(() => {
+      setPreview({})
+      void onReadPrompt(hovered).then((text) => { if (!cancelled) setPreview({ text }) }, () => { if (!cancelled) setPreview({ error: '读取失败，请重试' }) })
+    }, touch.current ? 0 : 3000)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [hovered, open, onReadPrompt, retry])
 
-  if (entries.length === 0) return null
-
-  function jump(turnId: string) {
-    if (turnId !== currentTurnId) pendingUserJumpTurnId.current = turnId
-    onJump(turnId)
+  if (!count) return null
+  async function jump(entry: TurnIndexEntry) {
+    const sequence = ++jumpSequence.current
+    setJumpError(false)
+    try { await onJump(entry.id); if (sequence === jumpSequence.current) { setOpen(false); setHovered(undefined) } }
+    catch { if (sequence === jumpSequence.current) setJumpError(true) }
   }
-
-  function indexAtPointer(clientY: number, target: SVGSVGElement) {
-    return railIndexFromPointer(clientY, target.getBoundingClientRect(), entries.length)
-  }
-
-  function jumpAt(index: number) {
-    setKeyboardIndex(index)
-    jumpFromMarker(jump, entries[index]!.id)
-  }
-
-  const hoverIndex = hoveredIndex === undefined ? undefined : Math.min(entries.length - 1, hoveredIndex)
-  const interactionIndex = keyboardIndex === undefined ? hoverIndex ?? currentIndex : Math.min(entries.length - 1, keyboardIndex)
-  const expanded = hoverIndex !== undefined || keyboardFocused
-  const railLayout = layouts?.[expanded ? 'expanded' : 'idle']
-  const railStyle = railLayout ? { height: `${railLayout.height}px`, maxHeight: 'calc(100% - 48px)', top: `${railLayout.top}px`, transform: 'none' } : { height: `${railIdleHeight}px`, maxHeight: 'calc(100% - 48px)', top: '50%', transform: 'translateY(-50%)' }
-  const outlineStyle = layouts && railLayout
-    ? { height: `${layouts.outline.height}px`, top: `${layouts.outline.top - railLayout.top}px`, transform: 'none' }
-    : { top: '50%', transform: 'translateY(-50%)' }
-  const rail = (
-    <aside aria-label="对话轮次导航" className="pointer-events-auto hidden shrink-0 overflow-visible transition-[height,top] duration-150 md:absolute md:left-0 md:block md:w-8" style={railStyle}>
-      <div className="relative grid h-full w-full place-items-center">
-        <div className="relative h-full w-7" ref={railRoot}>
-          <svg aria-controls="conversation-outline" aria-expanded={open} aria-label={`对话轮次导航，共 ${entries.length} 轮；右键打开历史输入`} aria-orientation="vertical" aria-valuemax={entries.length} aria-valuemin={1} aria-valuenow={interactionIndex + 1} aria-valuetext={`第 ${entries[interactionIndex]!.index} 轮`} className={`h-full w-7 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${hoverIndex === undefined && !keyboardFocused ? 'text-muted-foreground' : 'text-foreground'}`} data-rail-mode={mode} data-timeline-rail="" onBlur={() => setKeyboardFocused(false)} onClick={(event) => jumpAt(indexAtPointer(event.clientY, event.currentTarget))} onContextMenu={(event) => {
-            pointerFocus.current = false
-            setHoveredIndex(undefined)
-            setKeyboardFocused(false)
-            openOutlineFromContextMenu(event, () => setOpen(true))
-          }} onFocus={() => {
-            if (!pointerFocus.current) setKeyboardFocused(true)
-            pointerFocus.current = false
-          }} onKeyDown={(event) => {
-            setKeyboardFocused(true)
-            const next = nextRailIndex(event.key, interactionIndex, entries.length)
-            if (next !== undefined) {
-              event.preventDefault()
-              jumpAt(next)
-            } else if ((event.key === 'Enter' || event.key === ' ') && interactionIndex >= 0) {
-              event.preventDefault()
-              jumpAt(interactionIndex)
-            }
-          }} onPointerDown={() => { pointerFocus.current = true }} onPointerLeave={() => setHoveredIndex(undefined)} onPointerMove={(event) => {
-            const next = indexAtPointer(event.clientY, event.currentTarget)
-            setHoveredIndex((previous) => previous === next ? previous : next)
-          }} role="slider" tabIndex={0} viewBox="0 0 28 1000">
-            <path d="M 14 0 V 1000" stroke="currentColor" strokeOpacity="0.12" strokeWidth="1" />
-            {mode === 'detailed' && entries.map((entry, index) => <path d={`M 10 ${markerY(index, entries.length)} H 18`} data-rail-marker="" fill="none" key={entry.id} stroke="currentColor" strokeLinecap="round" strokeOpacity="0.32" strokeWidth="2" />)}
-            {mode === 'compact' && entries.map((entry, index) => <path d={`M 11 ${markerY(index, entries.length)} H 17`} data-rail-marker="" fill="none" key={entry.id} stroke="currentColor" strokeLinecap="round" strokeOpacity="0.25" strokeWidth="1" />)}
-            {mode === 'density' && density.map((bin, index) => <path d={`M 14 ${bin.startRatio * 1_000} V ${bin.endRatio * 1_000}`} data-rail-density-bin="" fill="none" key={index} stroke="currentColor" strokeLinecap="round" strokeOpacity={Math.min(0.35, 0.14 + bin.count / 100)} strokeWidth="2" />)}
-            {mode === 'density' && focused.filter((index) => index !== currentIndex).map((index) => <path d={`M 7 ${markerY(index, entries.length)} H 21`} data-rail-focus-marker="" fill="none" key={entries[index]!.id} stroke="currentColor" strokeLinecap="round" strokeOpacity="0.58" strokeWidth="2" />)}
-            <path d={`M 0 ${markerY(currentIndex, entries.length)} H 28`} className="text-primary" data-active-turn-marker={currentTurnId} fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="3" />
-            {hoverIndex !== undefined && hoverIndex !== currentIndex && <path d={`M 5 ${markerY(hoverIndex, entries.length)} H 23`} className="text-foreground" data-hovered-turn-marker="" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />}
-          </svg>
-          <div aria-hidden={!open} className={`absolute left-full z-20 flex w-[23rem] flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg transition-[height,opacity,top,transform] duration-150 ${open ? 'translate-x-0 opacity-100' : '-translate-x-2 pointer-events-none opacity-0'}`} id="conversation-outline" style={outlineStyle}>
-            <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">历史输入</div>
-            {open && <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1" ref={outline}>
-              <div className="relative w-full" style={{ height: `${outlineVirtualizer.getTotalSize()}px` }}>
-                {outlineVirtualizer.getVirtualItems().map((virtualItem) => {
-                  const entry = entries[virtualItem.index]!
-                  const active = entry.id === currentTurnId
-                  return <button aria-current={active ? 'location' : undefined} aria-label={markerLabel(entry)} className={`absolute left-0 flex w-full flex-col items-start gap-1 rounded-md px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'}`} data-turn-outline-id={entry.id} key={virtualItem.key} onClick={() => jumpFromOutline(jump, () => setOpen(false), entry.id)} ref={outlineVirtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }} type="button">
-                    <span className="text-xs font-medium text-muted-foreground">第 {entry.index} 轮 · <time dateTime={entry.startedAt}>{formatUpdatedAt(entry.startedAt)}</time></span>
-                    <span className="w-full whitespace-pre-wrap break-words text-sm leading-5 line-clamp-3">{entry.promptPreview}</span>
-                  </button>
-                })}
-              </div>
-            </div>}
-          </div>
-        </div>
+  const marker = (entry: TurnIndexEntry, older: boolean) => <span aria-hidden="true" data-active-turn-marker={entry.id === entries[currentIndex]?.id ? entry.id : undefined} className={`h-0.5 rounded-full ${entry.id === entries[currentIndex]?.id ? 'w-4 bg-primary' : 'w-2.5 bg-muted-foreground/50'}`} style={older ? { opacity: 0.25, filter: 'blur(0.5px)' } : undefined} />
+  const rail = <aside aria-label="对话轮次导航" className="pointer-events-auto absolute right-0 w-7" ref={root} style={{ height: `min(${count * railRowHeight}px, max(0px, calc(100% - var(--composer-height, 132px) - 48px)))`, top: 'calc((100% - var(--composer-height, 132px)) / 2)', transform: 'translateY(-50%)' }} onPointerEnter={(event) => { if (event.pointerType === 'mouse') setOpen(true) }} onPointerLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null) && !touch.current && !(document.activeElement instanceof HTMLElement && event.currentTarget.contains(document.activeElement) && document.activeElement.matches(':focus-visible'))) { setOpen(false); setHovered(undefined) } }} onFocusCapture={() => setOpen(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) { setOpen(false); setHovered(undefined) } }} onPointerDown={(event) => { touch.current = event.pointerType === 'touch' }}>
+    <div className="flex h-full flex-col" data-timeline-rail="" aria-expanded={open}>{entries.slice(start, start + count).map((entry, index) => <button aria-label={`第 ${entry.index} 轮：${entry.promptPreview}`} aria-current={entry.id === entries[currentIndex]?.id ? 'location' : undefined} className="flex min-h-0 flex-1 items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" data-rail-marker="" key={entry.id} onKeyDown={(event) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const index = entries.indexOf(entry); const next = Math.max(0, Math.min(entries.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))); virtualizer.scrollToIndex(next, { align: 'auto' }); requestAnimationFrame(() => outline.current?.querySelector<HTMLButtonElement>(`[data-turn-index="${next}"]`)?.focus()) } }} onClick={() => touch.current ? setOpen(true) : void jump(entry)} type="button">{marker(entry, start > 0 && index === 0)}</button>)}</div>
+    {open && <div className="absolute inset-y-0 right-0 z-20 w-[min(320px,calc(100vw-48px))] rounded-xl border bg-popover text-popover-foreground shadow-lg" role="region" aria-label="历史输入">
+      <div className="h-full overflow-y-auto overscroll-contain rounded-xl [scrollbar-width:thin]" ref={outline} onScroll={(event) => { setHovered(undefined); setOutlineStart(Math.floor(event.currentTarget.scrollTop / rowHeight)) }} onKeyDown={(event) => {
+        if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return
+        const id = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-turn-outline-id]')?.dataset.turnOutlineId
+        const index = entries.findIndex((entry) => entry.id === id)
+        if (index < 0) return
+        event.preventDefault()
+        const next = Math.max(0, Math.min(entries.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
+        virtualizer.scrollToIndex(next, { align: 'auto' })
+        requestAnimationFrame(() => { outline.current?.querySelector<HTMLButtonElement>(`[data-turn-index="${next}"]`)?.focus() })
+      }}>
+        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>{virtualizer.getVirtualItems().map((item) => { const entry = entries[item.index]!; return <div className="absolute left-0 flex w-full items-center" key={entry.id} style={{ top: item.start, height: rowHeight }}><button aria-label={`第 ${entry.index} 轮：${entry.promptPreview}`} aria-current={entry.id === entries[currentIndex]?.id ? 'location' : undefined} className={`flex h-full min-w-0 flex-1 items-center gap-3 px-3 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.id === entries[currentIndex]?.id ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`} data-turn-index={item.index} data-turn-outline-id={entry.id} onFocus={(event) => { if (!event.currentTarget.matches(':focus-visible')) return; const text = event.currentTarget.querySelector('span'); if (text && text.scrollWidth > text.clientWidth) setHovered(entry); else setHovered(undefined) }} onClick={() => void jump(entry)} onPointerEnter={(event) => { const text = event.currentTarget.querySelector('span'); if (!touch.current && text && text.scrollWidth > text.clientWidth) setHovered(entry); else setHovered(undefined) }} onPointerLeave={(event) => { if (!root.current?.contains(event.relatedTarget as Node | null)) setHovered(undefined) }} type="button"><span className="min-w-0 flex-1 truncate">{entry.promptPreview}</span>{marker(entry, item.index === outlineStart && outlineStart > 0)}</button>{touch.current && <button aria-label={`查看第 ${entry.index} 轮完整消息`} className="shrink-0 px-2 text-xs" onClick={() => setHovered(entry)} type="button">查看</button>}</div> })}</div>
       </div>
-    </aside>
-  )
-
+      {preview && hovered && <div role="region" aria-label="完整用户消息" className="absolute z-30 max-h-[min(360px,40vh)] overflow-auto rounded-xl border bg-popover p-3 text-sm text-popover-foreground shadow-lg" style={layout.above ? { ...(layout.previewHeight >= 80 ? { bottom: 'calc(100% + 8px)', maxHeight: layout.previewHeight } : { top: 0, maxHeight: layout.height }), right: 0, width: '100%' } : { right: '100%', top: 0, width: layout.previewWidth, maxHeight: layout.height }} onPointerDown={(event) => event.stopPropagation()}>{touch.current && <button aria-label="关闭完整消息" className="mb-2 text-xs underline" onClick={() => setHovered(undefined)} type="button">关闭</button>}{preview.text !== undefined ? <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{preview.text}</p> : preview.error ? <div role="alert">{preview.error}<button className="ml-2 underline" onClick={() => setRetry((value) => value + 1)} type="button">重试</button></div> : <p role="status">正在读取完整消息…</p>}</div>}
+    </div>}
+    {jumpError && <p role="alert" className="absolute top-full right-0 w-48 rounded border bg-popover p-2 text-xs text-destructive">跳转失败，请重试</p>}
+  </aside>
   return overlayRoot ? createPortal(rail, overlayRoot) : rail
 }

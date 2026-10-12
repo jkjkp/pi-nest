@@ -40,7 +40,7 @@ describe('WorkspacePage new conversation draft', () => {
     expect(markup).toContain('发送第一条消息后才会创建 Pi 会话。')
     expect(markup).not.toContain('未命名会话')
     expect(markup).toContain('pointer-events-none absolute inset-0 z-10 overflow-hidden')
-    expect(markup).toContain('conversation-stage relative h-full')
+    expect(markup).toContain('relative h-full w-full')
     expect(markup).toContain('data-slot="composer"')
     expect(markup).toContain('timeline-scroll h-full')
     expect(markup).toContain('pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-transparent')

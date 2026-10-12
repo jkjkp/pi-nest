@@ -29,7 +29,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel, queueMode, setQueueMode,
     sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
     startDraft, removeProject, abortPrompt, openModels, openThinking, handleRename, handleDelete,
-    jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, compact, loadEarlier, retryHistory,
+    readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, compact, loadEarlier, retryHistory,
   } = session
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
   const inspectorWidth = useWorkspaceStore((state) => state.inspectorWidth)
@@ -178,6 +178,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   onFinalAnswerStart={scrollToFinalAnswer}
                   onFinalAnswerStream={followFinalAnswer}
                   onJumpToTurn={jumpToTurn}
+                  onReadTurnPrompt={readTurnPrompt}
                   onJumpToUnloadedTurn={jumpToUnloadedTurn}
                   onRetry={retryHistory}
                   onPendingJumpHandled={() => setPendingJump(undefined)}
@@ -214,7 +215,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               </div>
             </ScrollArea>
             <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden px-4 sm:px-6">
-              <div className="conversation-stage relative h-full" ref={setRailOverlayRoot} />
+              <div className="relative h-full w-full" ref={setRailOverlayRoot} />
               {selectedSession && !isDraft && showScrollToBottom && <div className="conversation-stage absolute inset-x-0 bottom-[calc(var(--composer-height)+0.75rem)] px-4 sm:px-6"><div className="conversation-stage-content flex justify-center"><Button aria-label="滚动到对话底部" className="pointer-events-auto size-11 rounded-full border bg-background/95 shadow-md sm:size-9" onClick={scrollToBottom} onPointerDown={(event) => event.preventDefault()} size="icon" variant="outline"><ArrowDown aria-hidden="true" className="size-5" /></Button></div></div>}
             </div>
           </div>

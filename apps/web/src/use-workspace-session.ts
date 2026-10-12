@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type InfiniteData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
 import { historyUserTurnCount, mergeSessionHistoryPage, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
+import { timelineItems } from './timeline-model.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import type { PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
@@ -111,6 +112,9 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   })
   const history = useMemo(() => mergeSessionHistoryPages(historyQuery.data?.pages), [historyQuery.data?.pages])
   const turnIndexQuery = useQuery({ enabled: historyEnabled && Boolean(history?.revision), queryKey: sessionTurnIndexQueryKey(selectedSessionId, history?.revision), queryFn: () => fetchSessionTurnIndex(selectedSessionId, history!.revision), retry: false })
+  const historyJumpSequence = useRef(0)
+  const historyRevisionRef = useRef(history?.revision)
+  useEffect(() => { historyRevisionRef.current = history?.revision }, [history?.revision])
   const historyTurnCount = historyUserTurnCount(history?.entries)
 
   useEffect(() => {
@@ -236,18 +240,35 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     else if (status === 'running') void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败', selectedSessionId))
   }
 
-  const jumpToUnloadedTurn = useCallback((turnId: string, cursor: string | undefined) => {
+  const readHistoryPage = useCallback((cursor: string | undefined) => queryClient.fetchQuery({
+    queryKey: ['session-history-page', selectedSessionId, history?.revision, cursor],
+    queryFn: () => fetchSessionHistory(selectedSessionId, cursor, history?.revision),
+    staleTime: Infinity,
+  }), [history?.revision, queryClient, selectedSessionId])
+
+  const readTurnPrompt = useCallback(async (turnId: string, cursor: string | undefined) => {
+    const sessionId = selectedSessionId
+    const revision = history?.revision
+    const page = await readHistoryPage(cursor)
+    if (sessionId !== selectedSessionIdRef.current || revision !== historyRevisionRef.current || (revision && page.revision !== revision)) throw new Error('会话历史已变化，请重试。')
+    const prompt = timelineItems(page.entries, [], []).find((turn) => turn.id === turnId)?.prompt
+    if (prompt === undefined) throw new Error('未找到用户消息，请重试。')
+    return prompt
+  }, [history?.revision, readHistoryPage, selectedSessionId])
+
+  const jumpToUnloadedTurn = useCallback(async (turnId: string, cursor: string | undefined) => {
     if (!selectedSessionId) return
     const sessionId = selectedSessionId
-    void fetchSessionHistory(sessionId, cursor, history?.revision).then((page) => {
-      if (sessionId !== selectedSessionIdRef.current) return
-      queryClient.setQueryData<InfiniteData<PiSessionHistoryResponse, HistoryPageParam>>(sessionHistoryQueryKey(sessionId), (current) => ({
-        pageParams: [...(current?.pageParams ?? []), { before: cursor, revision: history?.revision }],
-        pages: mergeSessionHistoryPage(current?.pages, page),
-      }))
-      setPendingJump({ sessionId, turnId })
-    })
-  }, [history?.revision, queryClient, selectedSessionId])
+    const operation = ++historyJumpSequence.current
+    const page = await readHistoryPage(cursor)
+    if (operation !== historyJumpSequence.current) return
+    if (sessionId !== selectedSessionIdRef.current || history?.revision !== historyRevisionRef.current) throw new Error('会话历史已变化，请重试。')
+    queryClient.setQueryData<InfiniteData<PiSessionHistoryResponse, HistoryPageParam>>(sessionHistoryQueryKey(sessionId), (current) => ({
+      pageParams: [...(current?.pageParams ?? []), { before: cursor, revision: history?.revision }],
+      pages: mergeSessionHistoryPage(current?.pages, page),
+    }))
+    setPendingJump({ sessionId, turnId })
+  }, [history?.revision, queryClient, readHistoryPage, selectedSessionId])
 
   function abortPrompt() {
     if (!selectedSessionId || !isActive || status === 'aborting') return
@@ -327,6 +348,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     try {
       await deleteSession(sessionId)
       queryClient.removeQueries({ queryKey: sessionHistoryQueryKey(sessionId) })
+      queryClient.removeQueries({ queryKey: ['session-history-page', sessionId] })
       await sessionsQuery.refetch()
     } finally {
       setMutatingSessionId(undefined)
@@ -408,7 +430,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel, queueMode, setQueueMode,
     sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
     selectSession, startDraft, removeProject, submitPrompt, abortPrompt, openModels, openThinking, handleRename, handleDelete,
-    jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, compact,
+    readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, compact,
     loadEarlier: () => { void historyQuery.fetchPreviousPage() }, retryHistory: () => { void historyQuery.refetch() },
   }
 }
