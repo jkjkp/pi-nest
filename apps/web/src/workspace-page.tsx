@@ -41,7 +41,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
   const [desktopInspectorSheetOpen, setDesktopInspectorSheetOpen] = useState(false)
   const {
-    showScrollToBottom, scrollToBottom, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
+    setComposer, showScrollToBottom, scrollToBottom, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
     scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector,
   } = useTimelineViewport({ selectedSessionId, history, activeTurn, isActive, inspectorOpen, setInspectorOpen })
   const promptTextareaRef = useComposerTextarea(prompt)
@@ -150,7 +150,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
         style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': inspectorOpen ? `${inspectorWidth}px` : '0px' } as CSSProperties}
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
-        <section className="flex min-h-0 min-w-0 flex-col">
+        <section className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
           <header className="min-h-14 shrink-0 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-6">
             <div className="conversation-stage min-h-14">
               <div className="conversation-stage-content flex min-w-0 items-center py-2 pr-12">
@@ -161,7 +161,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           </header>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="h-full">
-              <div className="w-full space-y-4 px-4 py-6 sm:px-6">
+              <div className="w-full space-y-4 px-4 pt-6 pb-[calc(var(--composer-height)+1.5rem)] sm:px-6">
                 {isDraft ? (
                   <div className="conversation-stage py-16">
                     <section className="conversation-stage-content grid min-h-56 place-items-center rounded-2xl border border-dashed bg-muted/20 p-8 text-center">
@@ -216,14 +216,14 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </ScrollArea>
             <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden px-4 sm:px-6">
               <div className="conversation-stage relative h-full" ref={setRailOverlayRoot} />
-              {selectedSession && !isDraft && showScrollToBottom && <div className="conversation-stage absolute inset-x-0 bottom-3 px-4 sm:px-6"><div className="conversation-stage-content flex justify-center"><Button aria-label="滚动到对话底部" className="pointer-events-auto size-11 rounded-full border bg-background/95 shadow-md sm:size-9" onClick={scrollToBottom} onPointerDown={(event) => event.preventDefault()} size="icon" variant="outline"><ArrowDown aria-hidden="true" className="size-5" /></Button></div></div>}
+              {selectedSession && !isDraft && showScrollToBottom && <div className="conversation-stage absolute inset-x-0 bottom-[calc(var(--composer-height)+0.75rem)] px-4 sm:px-6"><div className="conversation-stage-content flex justify-center"><Button aria-label="滚动到对话底部" className="pointer-events-auto size-11 rounded-full border bg-background/95 shadow-md sm:size-9" onClick={scrollToBottom} onPointerDown={(event) => event.preventDefault()} size="icon" variant="outline"><ArrowDown aria-hidden="true" className="size-5" /></Button></div></div>}
             </div>
           </div>
-          <div className="shrink-0 px-4 sm:px-6">
-            <div className="conversation-stage mb-4">
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-transparent px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6" ref={setComposer} data-slot="composer">
+            <div className="conversation-stage">
               <div className="conversation-stage-content">
-                <ExtensionUiInline sessionId={selectedSessionId} />
-                <div className="flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted/80 px-5 py-3 shadow-[0_16px_32px_rgb(0_0_0_/_0.12)] dark:border-white/10 dark:bg-[#303030] sm:px-6">
+                <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} /></div>
+                <div className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-[#303030] sm:px-6">
               <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
               <Textarea
                 className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"

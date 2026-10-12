@@ -18,6 +18,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [railOverlay, setRailOverlay] = useState<HTMLElement | null>(null)
   const [scrollViewport, setScrollViewport] = useState<HTMLElement | null>(null)
+  const [composer, setComposer] = useState<HTMLDivElement | null>(null)
   const messageScrollAreaRef = useRef<HTMLDivElement>(null)
   const navigationInProgress = useRef(false)
   const returningToBottom = useRef(false)
@@ -34,6 +35,16 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
     messageScrollAreaRef.current = node
     setScrollViewport(node?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null)
   }, [setScrollViewport])
+
+  useLayoutEffect(() => {
+    const pane = composer?.parentElement
+    if (!composer || !pane) return
+    const measure = () => pane.style.setProperty('--composer-height', `${composer.getBoundingClientRect().height}px`)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(composer)
+    return () => { observer.disconnect(); pane.style.removeProperty('--composer-height') }
+  }, [composer])
 
   const setRailOverlayRoot = useCallback((node: HTMLDivElement | null) => setRailOverlay(node), [setRailOverlay])
 
@@ -57,7 +68,14 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
 
   useEffect(() => {
     if (!scrollViewport) return
+    let previousScrollHeight = scrollViewport.scrollHeight
+    let previousViewportHeight = scrollViewport.clientHeight
     const updateFollowLatest = () => {
+      const resized = previousScrollHeight !== scrollViewport.scrollHeight || previousViewportHeight !== scrollViewport.clientHeight
+      previousScrollHeight = scrollViewport.scrollHeight
+      previousViewportHeight = scrollViewport.clientHeight
+      // Resize can dispatch a scroll event before ResizeObserver; preserve bottom following in either order.
+      if (resized && followLatestRef.current && !navigationInProgress.current) scrollViewport.scrollTop = scrollViewport.scrollHeight
       const next = shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, navigationInProgress.current)
       setShowScrollToBottom(!shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, false))
       setFollowingLatest(next)
@@ -86,7 +104,6 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
     }
     const observer = new ResizeObserver(() => {
       if (returningToBottom.current) scrollViewport.scrollTo({ top: scrollViewport.scrollHeight, behavior: 'smooth' })
-      else if (followLatestRef.current && !navigationInProgress.current) scrollViewport.scrollTop = scrollViewport.scrollHeight
       updateFollowLatest()
     })
     observer.observe(scrollViewport)
@@ -168,5 +185,5 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
     if (alignment === 'end') requestAnimationFrame(() => scrollViewport.scrollTo({ behavior, top: scrollViewport.scrollHeight }))
   }, [scrollViewport, setFollowingLatest])
 
-  return { showScrollToBottom, scrollToBottom, followLatest, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot, scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector }
+  return { setComposer, showScrollToBottom, scrollToBottom, followLatest, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot, scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector }
 }
