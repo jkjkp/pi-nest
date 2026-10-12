@@ -23,7 +23,7 @@ describe('SessionTimeline', () => {
 
     expect(markup).toContain('用时 3秒')
     expect(markup).toContain('data-turn-execution=""')
-    expect((markup.match(/aria-expanded="false"/g) ?? [])).toHaveLength(2)
+    expect((markup.match(/aria-expanded="false"/g) ?? [])).toHaveLength(1)
     expect(markup).toContain('answer')
     expect(markup).not.toContain('技术详情')
     expect(markup).not.toContain('本轮原始事件')
@@ -82,7 +82,7 @@ describe('SessionTimeline', () => {
   })
 
   it('keeps timeline content centered while allowing the Rail to move to the message viewport overlay', () => {
-    const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
+    const markup = render(<SessionTimeline error={false} history={{ ...history, entries: [...history.entries, { ...history.entries[0]!, id: 'user-2', timestamp: '2026-09-22T00:01:00.000Z' }] }} isLoading={false} onRetry={() => undefined} />)
 
     expect(markup).toContain('aria-label="对话轮次导航"')
     expect(markup).toContain('第 1 轮：question')
