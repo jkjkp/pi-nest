@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useState } from 'react'
-import { ArrowDown, CircleX, Folder, Menu, PanelRight, Send, Settings, SlidersHorizontal, Square } from 'lucide-react'
+import { ArrowDown, CircleX, Folder, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
 import { Link } from 'react-router'
 
 import { Button } from '@/components/ui/button'
@@ -29,7 +29,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel, queueMode, setQueueMode,
     sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
     startDraft, removeProject, abortPrompt, openModels, openThinking, handleRename, handleDelete,
-    readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, compact, loadEarlier, retryHistory,
+    readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
   const inspectorWidth = useWorkspaceStore((state) => state.inspectorWidth)
@@ -37,7 +37,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
-  const [controlOpen, setControlOpen] = useState(false)
   const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
   const [desktopInspectorSheetOpen, setDesktopInspectorSheetOpen] = useState(false)
   const {
@@ -200,7 +199,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                         <p className="text-xs font-medium text-warning">{sessionStatusLabel(status)}</p>
                       </div>
                     )}
-                    {controlError && !controlOpen && <p className="text-sm text-destructive" role="alert">{controlError}</p>}
                     {currentRun?.error && (
                       <p className="flex items-center gap-2 rounded-lg border border-destructive/30 border-l-2 border-l-destructive bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">
                         <CircleX aria-hidden="true" className="size-4" />
@@ -249,7 +247,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 <div className="ml-auto flex items-center gap-2">
                   <ModelSelector key={selectedSessionId} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={!selectedSession} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />
                   <ThinkingSelector key={`thinking:${selectedSessionId}`} open={thinkingOpen} onOpenChange={setThinkingOpen} current={currentThinkingLevel} levels={thinkingLevels} status={thinkingStatus} error={thinkingError} failure={thinkingFailure} disabled={!selectedSession || modelStatus === 'loading' || modelStatus === 'switching'} isActive={isActive} onLoad={() => void openThinking()} onRetry={() => void openThinking(true)} onSelect={changeThinkingLevel} />
-                  <Button aria-label="Pi 运行控制" disabled={!selectedSession || isActive || modelStatus === 'loading' || modelStatus === 'switching'} onClick={() => setControlOpen(true)} size="icon-sm" type="button" variant="ghost"><SlidersHorizontal aria-hidden="true" /></Button>
                   {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
                   {status === 'running' && <Button aria-label={queueMode === 'steer' ? '发送 Steer' : '发送 Follow-up'} className="rounded-full" disabled={prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>}
@@ -262,15 +259,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               </div>
             </div>
           </div>
-          <Sheet open={controlOpen} onOpenChange={setControlOpen}>
-            <SheetContent className="space-y-5 overflow-y-auto" side="right">
-              <SheetTitle>Pi 运行控制</SheetTitle>
-              <SheetDescription>压缩当前会话的上下文。</SheetDescription>
-              {controlError && <p className="text-sm text-destructive">{controlError}</p>}
-
-              <Button disabled={isActive || thinkingStatus === 'loading' || thinkingStatus === 'switching'} onClick={() => void compact().then((changed) => { if (changed) setControlOpen(false) })} variant="secondary">压缩上下文</Button>
-            </SheetContent>
-          </Sheet>
         </section>
         <aside aria-hidden={!inspectorOpen} className={`hidden min-h-0 overflow-hidden bg-card/60 xl:block ${inspectorOpen ? 'border-l' : 'pointer-events-none'}`} inert={!inspectorOpen}>{inspector}</aside>
       </div>

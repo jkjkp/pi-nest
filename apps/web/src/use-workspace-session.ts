@@ -414,15 +414,6 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     } finally { if (modelOperation.current === operation) modelOperation.current = undefined }
   }
 
-  async function compact() {
-    if (!selectedSessionId || isActive || modelOperation.current?.sessionId === selectedSessionId) return false
-    const operation = { sessionId: selectedSessionId }
-    modelOperation.current = operation
-    try { await sessionRuns.compact(selectedSessionId); setControlError(undefined, selectedSessionId); return true }
-    catch (cause) { setControlError(cause instanceof Error ? cause.message : '压缩失败', selectedSessionId); return false }
-    finally { if (modelOperation.current === operation) modelOperation.current = undefined }
-  }
-
   return {
     selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
@@ -430,7 +421,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel, queueMode, setQueueMode,
     sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
     selectSession, startDraft, removeProject, submitPrompt, abortPrompt, openModels, openThinking, handleRename, handleDelete,
-    readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, compact,
+    readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel,
     loadEarlier: () => { void historyQuery.fetchPreviousPage() }, retryHistory: () => { void historyQuery.refetch() },
   }
 }
