@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useState } from 'react'
-import { ArrowDown, CircleX, Menu, PanelRight, Send, Settings, SlidersHorizontal, Square } from 'lucide-react'
+import { ArrowDown, CircleX, Folder, Menu, PanelRight, Send, Settings, SlidersHorizontal, Square } from 'lucide-react'
 import { Link } from 'react-router'
 
 import { Button } from '@/components/ui/button'
@@ -151,13 +151,12 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
         <section className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
-          <header className="min-h-14 shrink-0 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-6">
-            <div className="conversation-stage min-h-14">
-              <div className="conversation-stage-content flex min-w-0 items-center py-2 pr-12">
-                <h1 className="truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : draftProject ? `新对话 · ${draftProject.name}` : '选择一个会话'}</h1>
-                {selectedSession && <Button asChild className="ml-auto" size="sm" variant="ghost"><Link to={`/settings?session=${encodeURIComponent(selectedSession.id)}`}><Settings aria-hidden="true" />设置</Link></Button>}
-              </div>
+          <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-background/95 py-2 pr-16 pl-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              {(selectedSession || draftProject) && <Folder aria-hidden="true" className="size-[18px] shrink-0 text-muted-foreground" />}
+              <h1 className="min-w-0 truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : draftProject ? `新对话 · ${draftProject.name}` : '选择一个会话'}</h1>
             </div>
+            {selectedSession && <Button asChild className="shrink-0" size="sm" variant="ghost"><Link to={`/settings?session=${encodeURIComponent(selectedSession.id)}`}><Settings aria-hidden="true" />设置</Link></Button>}
           </header>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="timeline-scroll h-full">
