@@ -96,7 +96,7 @@ function promptPreview(entry: SessionEntry) {
   return text.replace(/\s+/g, ' ').trim().slice(0, 160) || '无用户正文'
 }
 
-function withContextEntries<T>({ expectedCwd, expectedSessionId, revision, sessionFile }: PiSessionTurnIndexOptions, read: (entries: SessionEntry[], revision: string) => T): T {
+function withBranchEntries<T>({ expectedCwd, expectedSessionId, revision, sessionFile }: PiSessionTurnIndexOptions, read: (entries: SessionEntry[], revision: string) => T): T {
   let temporaryDirectory: string | undefined
 
   try {
@@ -119,9 +119,9 @@ function withContextEntries<T>({ expectedCwd, expectedSessionId, revision, sessi
       throw new Error('Pi SDK did not open the requested native session copy')
     }
 
-    const contextEntries = session.buildContextEntries()
+    const branchEntries = session.getBranch()
     if (hashBefore !== fingerprint(sessionFile)) throw new PiSessionHistorySourceChangedError()
-    return read(contextEntries, hashBefore)
+    return read(branchEntries, hashBefore)
   } catch (cause) {
     if (cause instanceof PiSessionHistoryRevisionError || cause instanceof PiSessionHistorySourceChangedError || cause instanceof PiSessionHistoryCursorError) throw cause
     throw new Error('Failed to read Pi session history', { cause })
@@ -138,12 +138,12 @@ export function readPiSessionHistory({
   revision,
   sessionFile,
 }: PiSessionHistoryOptions): PiSessionHistory {
-  return withContextEntries({ expectedCwd, expectedSessionId, revision, sessionFile }, (contextEntries, snapshotRevision) => {
-    const contextTurns = turns(contextEntries)
-    const end = before === undefined ? contextTurns.length : contextTurns.findIndex((turn) => turnStartId(turn[0]!) === before)
+  return withBranchEntries({ expectedCwd, expectedSessionId, revision, sessionFile }, (branchEntries, snapshotRevision) => {
+    const branchTurns = turns(branchEntries)
+    const end = before === undefined ? branchTurns.length : branchTurns.findIndex((turn) => turnStartId(turn[0]!) === before)
     if (end < 0) throw new PiSessionHistoryCursorError()
     const start = Math.max(0, end - limit)
-    const page = contextTurns.slice(start, end)
+    const page = branchTurns.slice(start, end)
 
     return {
       ...(start > 0 ? { beforeCursor: turnStartId(page[0]![0]!) } : {}),
@@ -155,7 +155,7 @@ export function readPiSessionHistory({
 }
 
 export function readPiSessionTurnIndex(options: PiSessionTurnIndexOptions): PiSessionTurnIndex {
-  return withContextEntries(options, (entries, revision) => ({
+  return withBranchEntries(options, (entries, revision) => ({
     entries: turns(entries).map((turn, index) => {
       const entry = turn[0]!
       const startedAt = (entry as unknown as Record<string, unknown>).timestamp

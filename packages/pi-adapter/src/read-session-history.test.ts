@@ -14,7 +14,7 @@ let sourceSessionFile: string
 
 function session(entries: unknown[], overrides: Record<string, unknown> = {}) {
   return {
-    buildContextEntries: () => entries,
+    getBranch: () => entries,
     getHeader: () => ({ cwd: '/working' }),
     getSessionFile: () => open.mock.calls.at(-1)?.[0],
     getSessionId: () => 'session-1',
@@ -137,6 +137,37 @@ describe('readPiSessionHistory', () => {
     const copiedSessionFile = open.mock.calls[0][0] as string
     expect(copiedSessionFile).not.toBe(sourceSessionFile)
     expect(existsSync(dirname(copiedSessionFile))).toBe(false)
+  })
+
+  it('paginates the complete active branch across multiple compactions and excludes sibling branches', async () => {
+    const { SessionManager } = await vi.importActual<typeof import('@earendil-works/pi-coding-agent')>('@earendil-works/pi-coding-agent')
+    const timestamp = '2026-10-12T00:00:00.000Z'
+    const records = [
+      { type: 'session', version: 3, id: 'session-1', timestamp, cwd: '/working' },
+      user('user-1', timestamp, 'Before compaction'),
+      { ...user('user-2', timestamp, 'Second turn'), parentId: 'user-1' },
+      { type: 'compaction', id: 'compact-1', parentId: 'user-2', timestamp, firstKeptEntryId: 'user-2', summary: 'First summary', tokensBefore: 100 },
+      { ...user('sibling', timestamp, 'Other branch'), parentId: 'user-1' },
+      { ...user('user-3', timestamp, 'Third turn'), parentId: 'compact-1' },
+      { type: 'compaction', id: 'compact-2', parentId: 'user-3', timestamp, firstKeptEntryId: 'user-3', summary: 'Second summary', tokensBefore: 100 },
+      { ...user('user-4', timestamp, 'After compaction'), parentId: 'compact-2' },
+    ]
+    writeFileSync(sourceSessionFile, records.map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+    open.mockImplementation((path: string) => SessionManager.open(path, dirname(path)))
+    const before = readFileSync(sourceSessionFile)
+    const { readPiSessionHistory, readPiSessionTurnIndex } = await import('./read-session-history.js')
+    const options = { expectedCwd: '/working', expectedSessionId: 'session-1', sessionFile: sourceSessionFile }
+    const index = readPiSessionTurnIndex(options)
+    expect(index.entries.map((entry) => entry.id)).toEqual(['user-1', 'user-2', 'user-3', 'user-4'])
+    const latest = readPiSessionHistory({ ...options, limit: 2, revision: index.revision })
+    expect(latest.beforeCursor).toBe('user-3')
+    const earlier = readPiSessionHistory({ ...options, before: latest.beforeCursor, limit: 2, revision: index.revision })
+    expect(earlier.hasEarlier).toBe(false)
+    expect([...earlier.entries, ...latest.entries].map((entry) => entry.id)).toEqual(['user-1', 'user-2', 'compact-1', 'user-3', 'compact-2', 'user-4'])
+    expect(readFileSync(sourceSessionFile)).toEqual(before)
+    records.push({ ...user('sibling-2', timestamp, 'Switched branch'), parentId: 'sibling' })
+    writeFileSync(sourceSessionFile, records.map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+    expect(readPiSessionTurnIndex(options).entries.map((entry) => entry.id)).toEqual(['user-1', 'sibling', 'sibling-2'])
   })
 
   it('keeps more than 200 Turns fully accessible through stable Turn-start cursors', async () => {
