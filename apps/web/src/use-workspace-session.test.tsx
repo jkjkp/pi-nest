@@ -153,3 +153,13 @@ it('ignores an older unloaded jump after a newer node was selected', async () =>
   expect(cached.pages.flatMap((item) => item.entries.map((entry) => entry.id))).toEqual(['user-2'])
   queryClient.clear()
 })
+
+it('sends supplemental instructions as Steer without a hidden queue mode', async () => {
+  const { workspace, controller, queryClient } = thinkingProbe('补充说明', true)
+  vi.mocked(controller.steer).mockResolvedValue(undefined)
+  workspace.submitPrompt()
+  await vi.waitFor(() => expect(controller.steer).toHaveBeenCalledWith('session-1', '补充说明'))
+  expect(controller.followUp).not.toHaveBeenCalled()
+  expect(workspace).not.toHaveProperty('queueMode')
+  queryClient.clear()
+})

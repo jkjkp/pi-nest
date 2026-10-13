@@ -70,7 +70,6 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     setThinkingFailure(0)
     setThinkingOpen(false)
   }
-  const [queueMode, setQueueMode] = useState<'follow_up' | 'steer'>('steer')
   const [pendingJump, setPendingJump] = useState<{ sessionId: string; turnId: string }>()
   const selectedSessionIdRef = useRef(selectedSessionId)
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
@@ -237,7 +236,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     if (!isActive) {
       if (sessionRuns.start({ historyAnchorId: history?.entries.filter((entry) => (entry.raw.message as { role?: string } | undefined)?.role === 'user').at(-1)?.id, historyTurnCount, prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
     }
-    else if (status === 'running') void (queueMode === 'steer' ? sessionRuns.steer(selectedSessionId, prompt) : sessionRuns.followUp(selectedSessionId, prompt)).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败', selectedSessionId))
+    else if (status === 'running') void sessionRuns.steer(selectedSessionId, prompt).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败', selectedSessionId))
   }
 
   const readHistoryPage = useCallback((cursor: string | undefined) => queryClient.fetchQuery({
@@ -418,7 +417,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
-    mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel, queueMode, setQueueMode,
+    mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,
     sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
     selectSession, startDraft, removeProject, submitPrompt, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel,
