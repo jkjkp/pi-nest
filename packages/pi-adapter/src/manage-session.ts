@@ -87,7 +87,7 @@ export function createPiSession(cwd: string): PiCreatedSession {
     const sessionFile = session.getSessionFile()
     if (!id || !sessionFile || header?.cwd !== expectedCwd) throw new Error('Pi session creation binding did not match the requested workspace')
 
-    // The Pi SDK defers its first write until an assistant response. Seed its own
+    // The Pi SDK defers its first write until a user or assistant message. Seed its own
     // header so the RPC process opens this exact native session instead of creating another ID.
     writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, { flag: 'wx', mode: 0o600 })
     return { cwd: expectedCwd, id, sessionFile }

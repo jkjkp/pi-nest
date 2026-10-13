@@ -18,7 +18,7 @@
     "spike:rpc-compat": "pnpm run build && node dist/scripts/rpc-compat.js"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.86.0",
+    "@earendil-works/pi-coding-agent": "1.2.0",
     "@pi-nest/contracts": "workspace:*"
   },
   "devDependencies": {

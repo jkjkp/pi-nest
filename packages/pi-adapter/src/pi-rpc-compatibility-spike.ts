@@ -11,7 +11,6 @@ import { PiRpcConnection, type PiRpcRecord } from './pi-rpc-connection.js'
 
 const executeFile = promisify(execFile)
 const timeoutMs = 120_000
-const piCliVersion = '0.86.0'
 
 export type PiRpcCapabilityStatus = 'passed' | 'blocked' | 'not_applicable'
 export type PiRpcCompatibilityReport = {
@@ -74,6 +73,8 @@ async function runNormalCli(piExecutable: string, cwd: string, sessionFile: stri
  * is intentionally outside Pi Nest's supported RPC interaction scope.
  */
 export async function runPiRpcCompatibilitySpike(options: SpikeOptions): Promise<PiRpcCompatibilityReport> {
+  const { stdout } = await executeFile(options.piExecutable, ['--version'])
+  const piCliVersion = stdout.trim()
   const manager = options.sessionFile ? undefined : SessionManager.create(options.cwd)
   const sessionFile = options.sessionFile ?? manager?.getSessionFile()
   if (!sessionFile) throw new Error('Pi SDK did not create a dedicated test session')
@@ -155,19 +156,19 @@ export async function runPiRpcCompatibilitySpike(options: SpikeOptions): Promise
     const models = object((await connection.send({ type: 'get_available_models' })).data, 'models data').models
     if (!Array.isArray(models) || models.length < 2) {
       mark('model_and_thinking', 'blocked', 'At least two distinct Pi models are required; no same-model downgrade is allowed.')
-      return report(blocked, capabilities, records, options.piExecutable, sessionEvidence(sessionFile, sessionId))
+      return report(blocked, capabilities, records, piCliVersion, sessionEvidence(sessionFile, sessionId))
     }
     const currentKey = `${state.model?.provider}/${state.model?.id}`
     const alternate = models.find((model) => `${model.provider}/${model.id}` !== currentKey)
     if (!alternate) {
       mark('model_and_thinking', 'blocked', 'Pi reported fewer than two distinct usable models.')
-      return report(blocked, capabilities, records, options.piExecutable, sessionEvidence(sessionFile, sessionId))
+      return report(blocked, capabilities, records, piCliVersion, sessionEvidence(sessionFile, sessionId))
     }
     await connection.send({ type: 'set_model', provider: alternate.provider, modelId: alternate.id })
     const levels = object((await connection.send({ type: 'get_available_thinking_levels' })).data, 'thinking levels data').levels
     if (!Array.isArray(levels) || levels.length < 2) {
       mark('model_and_thinking', 'blocked', 'The selected alternate model has fewer than two thinking levels.')
-      return report(blocked, capabilities, records, options.piExecutable, snapshot(sessionFile))
+      return report(blocked, capabilities, records, piCliVersion, snapshot(sessionFile))
     }
     const level = levels.find((item) => item !== state.thinkingLevel) ?? levels[1]
     await connection.send({ type: 'set_thinking_level', level })
@@ -262,7 +263,7 @@ export async function runPiRpcCompatibilitySpike(options: SpikeOptions): Promise
     if (resumedState.sessionId !== sessionId) throw new Error('RPC did not resume the CLI-continuous native session')
     mark('cli_rpc_cli', 'passed', 'Normal CLI and a fresh RPC process continued the same dedicated session.')
 
-    return report(blocked, capabilities, records, options.piExecutable, snapshot(sessionFile))
+    return report(blocked, capabilities, records, piCliVersion, snapshot(sessionFile))
   } finally {
     await connection.close()
     rmSync(tempDir, { force: true, recursive: true })
@@ -273,7 +274,7 @@ function report(
   blocked: boolean,
   capabilities: PiRpcCompatibilityReport['capabilities'],
   records: PiRpcRecord[],
-  piExecutable: string,
+  piCliVersion: string,
   session: PiRpcCompatibilityReport['session'],
 ): PiRpcCompatibilityReport {
   return {
