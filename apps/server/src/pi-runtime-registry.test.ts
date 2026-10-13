@@ -612,3 +612,44 @@ describe('PiRuntimeRegistry', () => {
     await registry.close()
   })
 })
+
+it('keeps warm resume and control reads silent while preserving admission locks', async () => {
+  const read = deferred<Record<string, unknown>>()
+  const host = { ...hostMock(), command: vi.fn().mockResolvedValue({ data: {} }) }
+  const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+  const statuses: any[] = []
+  try {
+    await registry.watch(session.id, 'quiet-reader', 0, () => undefined, () => undefined, () => undefined, (status) => statuses.push(status))
+    await registry.resume(session)
+    expect(statuses.map((status) => status.lifecycle)).toEqual(['loading', 'idle'])
+    const count = statuses.length
+    await registry.resume(session)
+    host.command.mockReturnValueOnce(read.promise)
+    const state = registry.commandWhenIdle(session, { type: 'get_state' })!
+    expect(() => registry.commandWhenIdle(session, { type: 'get_available_models' })).toThrow(PiRuntimeBusyError)
+    expect(statuses).toHaveLength(count)
+    read.resolve({ data: {} })
+    await state
+    await registry.commandWhenIdle(session, { type: 'get_available_models' })
+    await registry.commandWhenIdle(session, { type: 'get_available_thinking_levels' })
+    host.command.mockRejectedValueOnce(new PiRpcCommandError('read denied'))
+    await expect(registry.commandWhenIdle(session, { type: 'get_state' })).rejects.toThrow('read denied')
+    expect(statuses).toHaveLength(count)
+    expect(host.close).not.toHaveBeenCalled()
+  } finally { read.resolve({ data: {} }); await registry.close() }
+})
+
+it('still publishes model and thinking changes observed during an idle state read', async () => {
+  const host = { ...hostMock(), currentModel: { provider: 'test', id: 'old' }, currentThinkingLevel: 'low', command: vi.fn() }
+  const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+  const statuses: any[] = []
+  try {
+    await registry.watch(session.id, 'metadata-reader', 0, () => undefined, () => undefined, () => undefined, (status) => statuses.push(status))
+    await registry.resume(session)
+    const revision = statuses.at(-1).revision
+    host.command.mockImplementationOnce(async () => { host.currentModel = { provider: 'test', id: 'new' }; host.currentThinkingLevel = 'high'; return { data: {} } })
+    await registry.commandWhenIdle(session, { type: 'get_state' })
+    expect(statuses.at(-1)).toMatchObject({ lifecycle: 'idle', model: { id: 'new' }, thinkingLevel: 'high', revision: revision + 1 })
+    expect(statuses.filter((status) => status.lifecycle === 'loading')).toHaveLength(1)
+  } finally { await registry.close() }
+})

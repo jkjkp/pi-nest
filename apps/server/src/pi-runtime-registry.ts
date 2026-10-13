@@ -122,13 +122,18 @@ export class PiRuntimeRegistry {
   commandWhenIdle(session: PiRuntimeSession, command: Record<string, unknown>): Promise<Record<string, unknown> | undefined> | undefined {
     if (this.settingsUpdating || this.locks.has(session.id)) throw new PiRuntimeBusyError()
     if (!this.entries.has(session.id)) return undefined
+    const readOnly = typeof command.type === 'string' && ['get_state', 'get_runtime_state', 'get_available_models', 'get_available_thinking_levels'].includes(command.type)
+    const previousModel = this.entries.get(session.id)?.host.currentModel
+    const previousThinking = this.entries.get(session.id)?.host.currentThinkingLevel
     this.cancelUnload(session.id)
     this.locks.set(session.id, 'mutation')
-    this.transition(session.id, 'loading')
+    if (!readOnly) this.transition(session.id, 'loading')
     return this.projectionsReady.then(() => this.getOrCreate(session))
       .then((entry) => entry.host.command(command))
       .then((result) => {
-        this.transition(session.id, 'idle')
+        const host = this.entries.get(session.id)?.host
+        const metadataChanged = host?.currentModel?.id !== previousModel?.id || host?.currentModel?.provider !== previousModel?.provider || host?.currentThinkingLevel !== previousThinking
+        this.transition(session.id, 'idle', undefined, undefined, readOnly && metadataChanged)
         this.touch(session.id)
         return result
       })
@@ -239,13 +244,14 @@ export class PiRuntimeRegistry {
 
   resume(session: PiRuntimeSession): Promise<void> | undefined {
     if (this.settingsUpdating || this.locks.has(session.id)) return undefined
+    const alreadyIdle = this.entries.has(session.id) && this.stateFor(session.id).lifecycle === 'idle'
     this.cancelUnload(session.id)
     this.locks.set(session.id, 'mutation')
     return this.projectionsReady.then(() => this.getOrCreate(session))
       .then((entry) => {
         this.expiredStreams.delete(session.id)
         this.streamFor(session.id)
-        this.transition(session.id, 'loading')
+        if (!alreadyIdle) this.transition(session.id, 'loading')
         return entry.host.start()
       })
       .then(() => { this.transition(session.id, 'idle'); this.touch(session.id) })
@@ -584,9 +590,9 @@ export class PiRuntimeRegistry {
     return Boolean(message && typeof message === 'object' && !Array.isArray(message) && (message as Record<string, unknown>).role === 'assistant')
   }
 
-  private transition(sessionId: string, lifecycle: PiRuntimeLifecycle, error?: string, failureKind?: PiRuntimeFailureKind) {
+  private transition(sessionId: string, lifecycle: PiRuntimeLifecycle, error?: string, failureKind?: PiRuntimeFailureKind, force = false) {
     const state = this.stateFor(sessionId)
-    if (state.lifecycle === lifecycle && state.error === error && state.failureKind === failureKind) return
+    if (!force && state.lifecycle === lifecycle && state.error === error && state.failureKind === failureKind) return
     state.lifecycle = lifecycle
     state.error = error
     state.failureKind = failureKind
