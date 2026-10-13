@@ -117,6 +117,24 @@ describe('Pi Nest API', () => {
     expect(readPiSessionTurnIndex).toHaveBeenLastCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', revision, sessionFile: '/pi/session.jsonl' })
   })
 
+  it('distinguishes a running session from a history revision conflict', async () => {
+    runtime.isPromptStreaming.mockReturnValue(true)
+    for (const route of ['history', 'turn-index']) {
+      const response = await app().request(`/api/sessions/session-1/${route}`)
+      expect(response.status).toBe(409)
+      await expect(response.json()).resolves.toMatchObject({ code: 'SESSION_RUNNING' })
+    }
+    expect(readPiSessionTurnIndex).not.toHaveBeenCalled()
+    runtime.isPromptStreaming.mockReturnValue(false)
+    readPiSessionTurnIndex.mockImplementation(() => { throw Object.assign(new adapter.PiSessionHistoryRevisionError(), { name: 'PiSessionHistoryRevisionError' }) })
+    readPiSessionHistory.mockImplementation(() => { throw Object.assign(new adapter.PiSessionHistoryRevisionError(), { name: 'PiSessionHistoryRevisionError' }) })
+    for (const route of ['history', 'turn-index']) {
+      const response = await app().request(`/api/sessions/session-1/${route}?revision=${'a'.repeat(64)}`)
+      expect(response.status).toBe(409)
+      await expect(response.json()).resolves.toMatchObject({ code: 'REVISION_CHANGED' })
+    }
+  })
+
   it('keeps native session mutations mutually exclusive through the runtime registry', async () => {
     const finish = vi.fn()
     runtime.beginMutation.mockReturnValueOnce(Promise.resolve(finish))

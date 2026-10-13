@@ -144,12 +144,12 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
       const sessionId = context.req.param('sessionId')
       const query = historyQuerySchema.safeParse(context.req.query())
       if (!query.success) return context.json({ error: 'Invalid history page request' }, 400)
-      if (runtime.isPromptStreaming(sessionId)) return context.json({ error: 'Pi session is running' }, 409)
+      if (runtime.isPromptStreaming(sessionId)) return context.json({ error: 'Pi session is running', code: 'SESSION_RUNNING' }, 409)
 
       const resolved = await resolveSession(sessionId)
       if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
       if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
-      if (!resolved.session.cwd) return context.json({ error: 'Pi session cwd is unavailable' }, 409)
+      if (!resolved.session.cwd) return context.json({ error: 'Pi session cwd is unavailable', code: 'CWD_UNAVAILABLE' }, 409)
 
       try {
         const history = readPiSessionHistory({
@@ -168,7 +168,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
       } catch (cause) {
         if (cause instanceof PiSessionHistoryCursorError) return context.json({ error: 'Invalid history page request' }, 400)
         if (historyRevisionChanged(cause)) {
-          return context.json({ error: 'Pi session changed while reading history' }, 409)
+          return context.json({ error: 'Pi session changed while reading history', code: 'REVISION_CHANGED' }, 409)
         }
         return context.json({ error: 'Failed to read Pi session history' }, 500)
       }
@@ -177,12 +177,12 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
       const sessionId = context.req.param('sessionId')
       const query = turnIndexQuerySchema.safeParse(context.req.query())
       if (!query.success) return context.json({ error: 'Invalid Turn index request' }, 400)
-      if (runtime.isPromptStreaming(sessionId)) return context.json({ error: 'Pi session is running' }, 409)
+      if (runtime.isPromptStreaming(sessionId)) return context.json({ error: 'Pi session is running', code: 'SESSION_RUNNING' }, 409)
 
       const resolved = await resolveSession(sessionId)
       if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
       if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
-      if (!resolved.session.cwd) return context.json({ error: 'Pi session cwd is unavailable' }, 409)
+      if (!resolved.session.cwd) return context.json({ error: 'Pi session cwd is unavailable', code: 'CWD_UNAVAILABLE' }, 409)
 
       try {
         const turnIndex = readPiSessionTurnIndex({
@@ -194,7 +194,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
         context.header('Cache-Control', 'no-store')
         return context.json(turnIndex)
       } catch (cause) {
-        if (historyRevisionChanged(cause)) return context.json({ error: 'Pi session changed while reading history' }, 409)
+        if (historyRevisionChanged(cause)) return context.json({ error: 'Pi session changed while reading history', code: 'REVISION_CHANGED' }, 409)
         return context.json({ error: 'Failed to read Pi session history' }, 500)
       }
     })
