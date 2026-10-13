@@ -49,6 +49,7 @@ export type PiRuntimeState = {
 export type PiRuntimeModel = { id: string; name?: string; provider: string }
 
 export type PiSessionSummary = {
+  createdAt?: string
   cwd?: string
   firstMessage?: string
   id: string
