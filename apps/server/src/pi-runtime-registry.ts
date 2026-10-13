@@ -20,9 +20,10 @@ type StreamEntry = { stream: SessionEventStream }
 type StreamListener = (event: PiRuntimeEvent) => void
 type StreamErrorListener = (error: PiRuntimeStreamError) => void
 type UnloadReason = 'capacityEvicted' | 'deleted' | 'failed' | 'idleExpired' | 'mutation' | 'settingsReload' | 'shutdown'
-type ActiveTurn = { firstSequence?: number; native?: true; prompt?: string; runId: string; startedAt: string; waitingForExtension?: true }
+type ActiveTurn = { firstSequence?: number; native?: true; prompt?: string; runId: string; startedAt: string; stopReason?: string; waitingForExtension?: true }
 type RuntimeState = {
   activeTurn?: ActiveTurn
+  completedRun?: { runId: string; stopReason: string }
   error?: string
   failureKind?: PiRuntimeFailureKind
   lifecycle: PiRuntimeLifecycle
@@ -302,7 +303,7 @@ export class PiRuntimeRegistry {
         return prompt.settled
       })
       .then((result) => {
-        if (state.activeTurn === activeTurn) this.transition(session.id, 'idle')
+        if (state.activeTurn === activeTurn) this.settleActiveTurn(session.id, activeTurn, result.stopReason)
         return result
       })
       .catch(async (cause) => {
@@ -328,7 +329,17 @@ export class PiRuntimeRegistry {
 
   async abort(sessionId: string) {
     if (!this.isPromptActive(sessionId)) return false
-    return (await this.entries.get(sessionId)?.host.abort()) ?? false
+    const activeTurn = this.stateFor(sessionId).activeTurn
+    const previous = activeTurn?.stopReason
+    if (activeTurn) activeTurn.stopReason = 'aborted'
+    try {
+      const aborted = (await this.entries.get(sessionId)?.host.abort()) ?? false
+      if (!aborted && activeTurn) activeTurn.stopReason = previous
+      return aborted
+    } catch (cause) {
+      if (activeTurn) activeTurn.stopReason = previous
+      throw cause
+    }
   }
 
   beginMutation(sessionId: string): Promise<(() => void) | undefined> | undefined {
@@ -525,6 +536,7 @@ export class PiRuntimeRegistry {
     const state = this.stateFor(sessionId)
     return {
       ...(state.activeTurn ? { activeTurn: { prompt: state.activeTurn.prompt, runId: state.activeTurn.runId, startedAt: state.activeTurn.startedAt, ...(state.activeTurn.waitingForExtension ? { waitingForExtension: true } : {}) } } : {}),
+      ...(state.completedRun ? { completedRun: { ...state.completedRun } } : {}),
       atSequence,
       extensionUi: this.getExtensionUiSnapshot(sessionId),
       pendingExtensionDialogs: this.extensionState.pendingDialogs(sessionId),
@@ -552,6 +564,11 @@ export class PiRuntimeRegistry {
     const state = this.stateFor(sessionId)
     const activeTurn = state.activeTurn
     if (activeTurn) {
+      const message = event.event.message
+      if (event.event.type === 'message_end' && message && typeof message === 'object' && !Array.isArray(message)) {
+        const assistant = message as Record<string, unknown>
+        if (assistant.role === 'assistant' && typeof assistant.stopReason === 'string') activeTurn.stopReason = assistant.stopReason
+      }
       if (event.event.type === 'agent_settled') this.settleActiveTurn(sessionId, activeTurn)
       else if (activeTurn.waitingForExtension && this.resumesStreaming(event.event)) {
         activeTurn.firstSequence = undefined
@@ -569,9 +586,10 @@ export class PiRuntimeRegistry {
     return state.activeTurn.runId
   }
 
-  private settleActiveTurn(sessionId: string, activeTurn: ActiveTurn) {
+  private settleActiveTurn(sessionId: string, activeTurn: ActiveTurn, stopReason = activeTurn.stopReason ?? 'stop') {
     const state = this.stateFor(sessionId)
     if (state.activeTurn !== activeTurn) return
+    state.completedRun = { runId: activeTurn.runId, stopReason }
     state.activeTurn = undefined
     this.locks.delete(sessionId)
     this.transition(sessionId, 'idle')

@@ -38,6 +38,31 @@ function hostMock() {
 }
 
 describe('PiRuntimeRegistry', () => {
+  it.each(['stop', 'error', 'aborted'])('exposes the last completion in an idle snapshot without replaying old events: %s', async (stopReason) => {
+    const running = deferred<{ model: undefined; stopReason: string }>()
+    const host = hostMock()
+    host.prompt.mockReturnValueOnce(running.promise)
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      const delivered: PiRuntimeEvent[] = []
+      const initialWatch = await registry.subscribe(session.id, 0, (event) => delivered.push(event), () => undefined)
+      const prompt = registry.beginPrompt(session, 'hello')!
+      await prompt.accepted
+      if (stopReason === 'aborted') await registry.abort(session.id)
+      else host.emit({ type: 'message_end', message: { role: 'assistant', stopReason } })
+      host.emit({ type: 'agent_settled' })
+      running.resolve({ model: undefined, stopReason })
+      await prompt.settled
+      await vi.waitFor(() => expect(delivered.at(-1)?.event.type).toBe('agent_settled'))
+      initialWatch()
+      const snapshots: any[] = [], events: PiRuntimeEvent[] = []
+      const unwatch = await registry.watch(session.id, 'reconnected', 0, (event) => events.push(event), () => undefined, (snapshot) => snapshots.push(snapshot))
+      expect(snapshots.at(-1)).toMatchObject({ runtime: { lifecycle: 'idle' }, completedRun: { runId: prompt.runId, stopReason } })
+      expect(events).toHaveLength(0)
+      unwatch()
+    } finally { running.resolve({ model: undefined, stopReason }); await registry.close() }
+  })
+
   it('includes the cached model in status and snapshots while a prompt is active', async () => {
     const running = deferred<{ model: undefined; stopReason: string }>()
     const host = { ...hostMock(), currentModel: { provider: 'test', id: 'chosen' }, currentThinkingLevel: 'high', prompt: vi.fn(() => running.promise) }
