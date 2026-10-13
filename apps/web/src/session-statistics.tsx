@@ -20,7 +20,6 @@ export function SessionStatistics({ details, onRetry }: { details?: RuntimeStati
   const context = stats?.contextUsage
   const percent = context?.percent
   const known = percent !== undefined && percent !== null
-  const color = known && percent > 90 ? 'text-destructive' : known && percent > 70 ? 'text-warning' : 'text-muted-foreground'
   function changeOpen(next: boolean) {
     clearTimeout(timer.current)
     setOpen(next)
@@ -39,7 +38,7 @@ export function SessionStatistics({ details, onRetry }: { details?: RuntimeStati
   }
   const progress = known ? Math.max(0, Math.min(100, percent)) : 0
   return <Popover.Root open={open} onOpenChange={changeOpen}>
-    <Popover.Trigger asChild><Button ref={trigger} aria-label={`会话用量与上下文：${known ? `${percent.toFixed(1)}%` : '占用未知'}`} className={`relative size-8 shrink-0 rounded-full p-0 ${color}`} size="icon-sm" type="button" variant="ghost" onPointerEnter={enter} onPointerLeave={leave} onPointerDown={(event) => { pointerType.current = event.pointerType }} onClick={(event) => { if (pointerType.current === 'mouse' && event.detail > 0) event.preventDefault() }} onFocus={(event) => { if (event.currentTarget.matches(':focus-visible')) changeOpen(true) }} onBlur={leave}>
+    <Popover.Trigger asChild><Button ref={trigger} aria-label={`会话用量与上下文：${known ? `${percent.toFixed(1)}%` : '占用未知'}`} className="relative size-8 shrink-0 rounded-full p-0 text-muted-foreground" size="icon-sm" type="button" variant="ghost" onPointerEnter={enter} onPointerLeave={leave} onPointerDown={(event) => { pointerType.current = event.pointerType }} onClick={(event) => { if (pointerType.current === 'mouse' && event.detail > 0) event.preventDefault() }} onFocus={(event) => { if (event.currentTarget.matches(':focus-visible')) changeOpen(true) }} onBlur={leave}>
       <svg className="size-7" viewBox="0 0 32 32" aria-hidden="true">
         <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" strokeWidth="2" className="opacity-20" />
         {known && <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" strokeWidth="2" pathLength="100" strokeDasharray={`${progress} 100`} transform="rotate(-90 16 16)" />}
