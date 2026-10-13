@@ -14,6 +14,7 @@ export type RuntimeStatus = { thinkingLevel?: string; model?: { id: string; prov
 export type PiRuntimeExtensionUi = { freshness: 'known' | 'restored' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
 export type PiRuntimeSessionSnapshot = {
   activeTurn?: { prompt?: string; runId: string; startedAt: string; waitingForExtension?: true }
+  completedRun?: { runId: string; stopReason: string }
   atSequence: number
   extensionUi: PiRuntimeExtensionUi
   pendingExtensionDialogs: PiRuntimeEvent[]
