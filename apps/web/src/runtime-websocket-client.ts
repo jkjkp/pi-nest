@@ -297,7 +297,9 @@ export class RuntimeWebSocketClient {
   }
 
   private handleRuntimeStatus(message: { type: 'runtime_status' } & RuntimeStatus) {
-    this.applyRuntimeStatus({ ...(typeof message.thinkingLevel === 'string' ? { thinkingLevel: message.thinkingLevel } : {}), ...(typeof message.model?.id === 'string' && typeof message.model.provider === 'string' ? { model: { ...message.model } } : {}), ...(message.error ? { error: message.error } : {}), ...(message.failureKind ? { failureKind: message.failureKind } : {}), lifecycle: message.lifecycle, revision: message.revision, sessionId: message.sessionId })
+    const completedRun = message.completedRun && typeof message.completedRun.runId === 'string' && message.completedRun.runId && typeof message.completedRun.stopReason === 'string'
+      ? { runId: message.completedRun.runId, stopReason: message.completedRun.stopReason } : undefined
+    this.applyRuntimeStatus({ ...(completedRun ? { completedRun } : {}), ...(typeof message.thinkingLevel === 'string' ? { thinkingLevel: message.thinkingLevel } : {}), ...(typeof message.model?.id === 'string' && typeof message.model.provider === 'string' ? { model: { ...message.model } } : {}), ...(message.error ? { error: message.error } : {}), ...(message.failureKind ? { failureKind: message.failureKind } : {}), lifecycle: message.lifecycle, revision: message.revision, sessionId: message.sessionId })
   }
 
   private handleResyncRequired(message: ResyncRequired) {

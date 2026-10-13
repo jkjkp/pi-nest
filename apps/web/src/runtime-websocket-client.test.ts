@@ -28,6 +28,8 @@ describe('RuntimeWebSocketClient', () => {
       socketFactory,
     })
     const events: unknown[] = []
+    const statuses: unknown[] = []
+    client.onRuntimeStatus((status) => statuses.push(status))
     client.onPiEvent((event) => events.push(event))
 
     const watch = client.watch('session-a')
@@ -36,6 +38,8 @@ describe('RuntimeWebSocketClient', () => {
     await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
     socket.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
     await watch
+    socket.receive({ type: 'runtime_status', sessionId: 'session-a', lifecycle: 'idle', revision: 1, completedRun: { runId: 'run-1', stopReason: 'stop' } })
+    expect(statuses.at(-1)).toMatchObject({ completedRun: { runId: 'run-1', stopReason: 'stop' } })
 
     const watchSecond = client.watch('session-b')
     await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-2', resume: { after: 0 }, sessionId: 'session-b', type: 'watch' }))

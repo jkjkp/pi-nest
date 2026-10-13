@@ -89,6 +89,31 @@ describe('session run controller', () => {
     expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.pendingRunId).toBeUndefined()
   })
 
+  it('marks an upstream abort without an assistant message and suppresses completion notification', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ sessionId: 'session-a', prompt: 'hello' })
+    await tick()
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'agent_settled', aborted: true } })
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('aborted')
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.completedRunId).toBeUndefined()
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.pendingRunId).toBeUndefined()
+  })
+
+  it('finishes a handled extension command from idle status without an agent_settled event', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ sessionId: 'session-a', prompt: '/extension-command' })
+    await tick()
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'extension_ui_request', id: 'dialog-1', method: 'confirm' } })
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('awaiting_input')
+    runtime.status({ sessionId: 'session-a', lifecycle: 'idle', revision: 2, completedRun: { runId: 'old-run', stopReason: 'stop' } } as never)
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('awaiting_input')
+    runtime.status({ sessionId: 'session-a', lifecycle: 'idle', revision: 3, completedRun: { runId: 'run-1', stopReason: 'stop' } } as never)
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+    expect(controller.start({ sessionId: 'session-a', prompt: 'next' })).toBe(true)
+  })
+
   it.each(['visible', 'hidden'])('marks foreground completion according to document visibility: %s', async (visibilityState) => {
     vi.stubGlobal('document', { visibilityState })
     const runtime = runtimeMock()

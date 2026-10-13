@@ -172,6 +172,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     useWorkspaceStore.getState().appendRunEvent(event.sessionId, event)
     activeRun.stopReason = assistantStopReason(event) ?? activeRun.stopReason
     if (event.event.type !== 'agent_settled') return
+    if (event.event.aborted === true) activeRun.stopReason = 'aborted'
 
     finishRun(event.sessionId, activeRun.runId, activeRun.stopReason ?? (store.runs[event.sessionId]?.status === 'aborting' ? 'aborted' : 'stop'))
   })
@@ -236,6 +237,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     if ((store.runtimeStates[status.sessionId]?.revision ?? -1) > status.revision) return
     store.setRuntimeState(status.sessionId, status)
     applyModelStatus(status)
+    if (status.lifecycle === 'idle' && status.completedRun) finishRun(status.sessionId, status.completedRun.runId, status.completedRun.stopReason)
     if (status.lifecycle === 'notLoaded' || status.lifecycle === 'failed') {
       statisticsRequests.set(status.sessionId, (statisticsRequests.get(status.sessionId) ?? 0) + 1)
       store.setRuntimeStatistics(status.sessionId, { ...store.runtimeStatistics[status.sessionId], loading: false, error: '等待 Pi 运行恢复后更新统计。' })
