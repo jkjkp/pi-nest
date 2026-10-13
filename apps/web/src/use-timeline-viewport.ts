@@ -24,10 +24,24 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
   const returningToBottom = useRef(false)
   const navigationFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const followLatestRef = useRef(followLatest)
+  const showScrollToBottomRef = useRef(showScrollToBottom)
   const inspectorToggleScrollTop = useRef<number | undefined>(undefined)
   const positionedTurn = useRef<string | undefined>(undefined)
   const previouslyScrolledSessionId = useRef(selectedSessionId)
+  const scrollFrame = useRef<number | undefined>(undefined)
+  const scheduleScroll = useCallback((scroll: () => void) => {
+    if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current)
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = undefined
+      scroll()
+    })
+  }, [])
+  useLayoutEffect(() => () => {
+    if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current)
+    scrollFrame.current = undefined
+  }, [selectedSessionId, scrollViewport])
   const setFollowingLatest = useCallback((value: boolean) => {
+    if (followLatestRef.current === value) return
     followLatestRef.current = value
     setFollowLatest(value)
   }, [])
@@ -64,21 +78,23 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
 
   const scrollToFinalAnswer = useCallback((turnId: string) => {
     if (!followLatestRef.current || !scrollViewport) return
-    requestAnimationFrame(() => {
+    scheduleScroll(() => {
       if (!followLatestRef.current) return
       const answer = [...(messageScrollAreaRef.current?.querySelectorAll<HTMLElement>('[data-final-answer-turn-id]') ?? [])].find((element) => element.dataset.finalAnswerTurnId === turnId)
       if (!answer) return
       const offset = answer.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top
       scrollViewport.scrollTo({ top: Math.max(0, scrollViewport.scrollTop + offset - 48) })
     })
-  }, [scrollViewport])
+  }, [scrollViewport, scheduleScroll])
 
   const followFinalAnswer = useCallback(() => {
     if (!followLatestRef.current || !scrollViewport) return
-    requestAnimationFrame(() => {
-      if (followLatestRef.current) scrollViewport.scrollTop = scrollViewport.scrollHeight
+    scheduleScroll(() => {
+      if (!followLatestRef.current || navigationInProgress.current) return
+      const bottom = Math.max(0, scrollViewport.scrollHeight - scrollViewport.clientHeight)
+      if (Math.abs(scrollViewport.scrollTop - bottom) > 1) scrollViewport.scrollTop = bottom
     })
-  }, [scrollViewport])
+  }, [scrollViewport, scheduleScroll])
 
   useEffect(() => {
     if (!scrollViewport) return
@@ -88,10 +104,17 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
       const resized = previousScrollHeight !== scrollViewport.scrollHeight || previousViewportHeight !== scrollViewport.clientHeight
       previousScrollHeight = scrollViewport.scrollHeight
       previousViewportHeight = scrollViewport.clientHeight
-      // Resize can dispatch a scroll event before ResizeObserver; preserve bottom following in either order.
-      if (resized && followLatestRef.current && !navigationInProgress.current) scrollViewport.scrollTop = scrollViewport.scrollHeight
+      // Measure here; defer writes so scroll and resize callbacks cannot feed each other.
+      if (resized && followLatestRef.current && !navigationInProgress.current) {
+        followFinalAnswer()
+        return
+      }
       const next = shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, navigationInProgress.current)
-      setShowScrollToBottom(!shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, false))
+      const show = !shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, false)
+      if (showScrollToBottomRef.current !== show) {
+        showScrollToBottomRef.current = show
+        setShowScrollToBottom(show)
+      }
       setFollowingLatest(next)
     }
     const completeNavigation = () => {
@@ -117,7 +140,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
       scrollViewport.scrollTo({ top: scrollViewport.scrollTop, behavior: 'instant' })
     }
     const observer = new ResizeObserver(() => {
-      if (returningToBottom.current) scrollViewport.scrollTo({ top: scrollViewport.scrollHeight, behavior: 'smooth' })
+      if (returningToBottom.current) scheduleScroll(() => scrollViewport.scrollTo({ top: scrollViewport.scrollHeight, behavior: 'smooth' }))
       updateFollowLatest()
     })
     observer.observe(scrollViewport)
@@ -138,7 +161,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
       scrollViewport.removeEventListener('scroll', handleScroll)
       scrollViewport.removeEventListener('scrollend', completeNavigation)
     }
-  }, [scrollViewport, setFollowingLatest])
+  }, [scrollViewport, setFollowingLatest, followFinalAnswer, scheduleScroll])
 
   useLayoutEffect(() => {
     const selectedSessionChanged = previouslyScrolledSessionId.current !== selectedSessionId
@@ -150,20 +173,18 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
       inspectorToggleScrollTop.current = undefined
     }
     if (navigationInProgress.current || (!followLatest && !selectedSessionChanged)) return
-    const frame = requestAnimationFrame(() => {
+    scheduleScroll(() => {
       if (!navigationInProgress.current && scrollViewport) scrollViewport.scrollTop = scrollViewport.scrollHeight
     })
 
-    return () => cancelAnimationFrame(frame)
-  }, [followLatest, history, scrollViewport, selectedSessionId])
+  }, [followLatest, history, scrollViewport, selectedSessionId, scheduleScroll])
 
   useLayoutEffect(() => {
     const key = activeTurn ? `${selectedSessionId}:${activeTurn.startedAt}` : undefined
     if (!isActive || !key || !scrollViewport || positionedTurn.current === key) return
     positionedTurn.current = key
-    const frame = requestAnimationFrame(() => { scrollViewport.scrollTop = scrollViewport.scrollHeight })
-    return () => cancelAnimationFrame(frame)
-  }, [activeTurn, isActive, scrollViewport, selectedSessionId])
+    scheduleScroll(() => { scrollViewport.scrollTop = scrollViewport.scrollHeight })
+  }, [activeTurn, isActive, scrollViewport, selectedSessionId, scheduleScroll])
 
   useLayoutEffect(() => {
     if (inspectorToggleScrollTop.current === undefined || !scrollViewport) return

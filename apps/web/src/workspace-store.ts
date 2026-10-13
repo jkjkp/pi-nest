@@ -288,14 +288,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   }),
   setWatchState: (sessionId, watchState) => set((state) => ({ watchStates: { ...state.watchStates, [sessionId]: watchState } })),
   updateRun: (sessionId, update) =>
-    set((state) => ({
-      runs: {
-        ...state.runs,
-        [sessionId]: state.runs[sessionId]
-          ? { ...state.runs[sessionId], ...update }
-          : { pendingInputs: [], status: 'idle', systemEvents: [], turns: [], ...update },
-      },
-    })),
+    set((state) => {
+      const current = state.runs[sessionId]
+      if (current && Object.entries(update).every(([key, value]) => Object.is(current[key as keyof typeof current], value))) return state
+      return {
+        runs: {
+          ...state.runs,
+          [sessionId]: current
+            ? { ...current, ...update }
+            : { pendingInputs: [], status: 'idle', systemEvents: [], turns: [], ...update },
+        },
+      }
+    }),
     }),
     {
       name: 'pi-nest-navigation-order',

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   groupSessionsByProject,
@@ -17,6 +17,21 @@ import { applyNavigationOrder, reconcileNavigationOrder } from './navigation-ord
 import { useWorkspaceStore } from './workspace-store.js'
 
 describe('workspace presentation helpers', () => {
+  it('does not notify subscribers for an unchanged run status, but preserves real changes', () => {
+    useWorkspaceStore.setState({ runs: {} })
+    useWorkspaceStore.getState().updateRun('streaming', { status: 'running' })
+    const before = useWorkspaceStore.getState()
+    const notified = vi.fn()
+    const unsubscribe = useWorkspaceStore.subscribe(notified)
+    try {
+      useWorkspaceStore.getState().updateRun('streaming', { status: 'running', waitingMessage: undefined })
+      expect(useWorkspaceStore.getState()).toBe(before)
+      expect(notified).not.toHaveBeenCalled()
+      useWorkspaceStore.getState().updateRun('streaming', { status: 'aborted' })
+      expect(notified).toHaveBeenCalledOnce()
+      expect(useWorkspaceStore.getState().runs.streaming?.status).toBe('aborted')
+    } finally { unsubscribe() }
+  })
   it('keeps every session state readable without relying on color', () => {
     expect(sessionStatusLabel('running')).toBe('● 推理中')
     expect(sessionStatusLabel('submitted')).toBe('◌ 已提交，正在连接 Pi')

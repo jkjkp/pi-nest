@@ -58,6 +58,8 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     getScrollElement: () => scrollViewport ?? null,
     initialRect: { height: 800, width: 0 },
     overscan: 8,
+    // Streaming auto-scroll must not synchronously re-enter React from a scroll event.
+    useFlushSync: false,
     useAnimationFrameWithResizeObserver: true,
   })
   const virtualItems = virtualizer.getVirtualItems()
