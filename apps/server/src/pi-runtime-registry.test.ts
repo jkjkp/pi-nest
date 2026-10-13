@@ -38,14 +38,41 @@ function hostMock() {
 }
 
 describe('PiRuntimeRegistry', () => {
+  it('publishes completion for a handled prompt without inventing a native settlement event', async () => {
+    const host = hostMock()
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      const statuses: any[] = [], events: PiRuntimeEvent[] = []
+      await registry.watch(session.id, 'tab', 0, (event) => events.push(event), () => undefined, undefined, (status) => statuses.push(status))
+      const prompt = registry.beginPrompt(session, '/extension-command')!
+      await prompt.settled
+      expect(statuses.at(-1)).toMatchObject({ lifecycle: 'idle', completedRun: { runId: prompt.runId, stopReason: 'stop' } })
+      expect(events).toHaveLength(0)
+    } finally { await registry.close() }
+  })
+
+  it('retains an upstream abort in a native-run completion snapshot without an assistant message', async () => {
+    const host = hostMock()
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      await registry.resume(session)
+      host.emit({ type: 'agent_start' })
+      host.emit({ type: 'agent_settled', aborted: true })
+      const snapshots: any[] = []
+      const unwatch = await registry.watch(session.id, 'reconnected', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
+      expect(snapshots.at(-1)).toMatchObject({ runtime: { lifecycle: 'idle' }, completedRun: { stopReason: 'aborted' } })
+      unwatch()
+    } finally { await registry.close() }
+  })
+
   it.each(['stop', 'error', 'aborted'])('exposes the last completion in an idle snapshot without replaying old events: %s', async (stopReason) => {
     const running = deferred<{ model: undefined; stopReason: string }>()
     const host = hostMock()
     host.prompt.mockReturnValueOnce(running.promise)
     const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
     try {
-      const delivered: PiRuntimeEvent[] = []
-      const initialWatch = await registry.subscribe(session.id, 0, (event) => delivered.push(event), () => undefined)
+      const delivered: PiRuntimeEvent[] = [], statuses: any[] = []
+      const initialWatch = await registry.watch(session.id, 'initial', 0, (event) => delivered.push(event), () => undefined, undefined, (status) => statuses.push(status))
       const prompt = registry.beginPrompt(session, 'hello')!
       await prompt.accepted
       if (stopReason === 'aborted') await registry.abort(session.id)
@@ -53,6 +80,7 @@ describe('PiRuntimeRegistry', () => {
       host.emit({ type: 'agent_settled' })
       running.resolve({ model: undefined, stopReason })
       await prompt.settled
+      expect(statuses.at(-1)).toMatchObject({ lifecycle: 'idle' })
       await vi.waitFor(() => expect(delivered.at(-1)?.event.type).toBe('agent_settled'))
       initialWatch()
       const snapshots: any[] = [], events: PiRuntimeEvent[] = []

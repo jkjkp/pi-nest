@@ -96,6 +96,58 @@ describe('PiRuntimeHost', () => {
     expect((events[1] as { event: unknown }).event).toBe(unknown)
   })
 
+  it('does not wait for settlement of an input handled by an extension', async () => {
+    const process = new FakeProcess()
+    const send = process.send.bind(process)
+    vi.spyOn(process, 'send').mockImplementation(async (command) => command.type === 'prompt'
+      ? { success: true, data: { disposition: 'handled' } } as never
+      : send(command))
+    const host = hostFor(process)
+    await expect(host.prompt('/extension-command')).resolves.toMatchObject({ stopReason: 'stop' })
+    expect(host.isRunning).toBe(false)
+    await host.close()
+  })
+
+  it.each(['started', 'queued'])('waits for settlement of a %s input', async (disposition) => {
+    const process = new FakeProcess()
+    const send = process.send.bind(process)
+    vi.spyOn(process, 'send').mockImplementation(async (command) => command.type === 'prompt'
+      ? { success: true, data: { disposition } } as never
+      : send(command))
+    const host = hostFor(process)
+    const prompt = host.beginPrompt('hello')
+    await prompt.accepted
+    await vi.waitFor(() => expect(process.commands).toContainEqual({ type: 'get_state' }))
+    expect(host.isRunning).toBe(true)
+    process.emit({ type: 'agent_settled', aborted: false })
+    await expect(prompt.settled).resolves.toMatchObject({ stopReason: 'stop' })
+    await host.close()
+  })
+
+  it('uses the settled abort flag without an assistant message or a local abort request', async () => {
+    const process = new FakeProcess()
+    const host = hostFor(process)
+    const prompt = host.beginPrompt('hello')
+    await prompt.accepted
+    process.emit({ type: 'agent_settled', aborted: true })
+    await expect(prompt.settled).resolves.toMatchObject({ stopReason: 'aborted' })
+    await host.close()
+  })
+
+  it('returns the final assistant stop reason instead of a streaming placeholder or an earlier tool turn', async () => {
+    const process = new FakeProcess()
+    const host = hostFor(process)
+    const prompt = host.beginPrompt('hello')
+    await prompt.accepted
+    process.emit({ type: 'message_start', message: { role: 'assistant', stopReason: 'pending' } })
+    process.emit({ type: 'message_end', message: { role: 'assistant', stopReason: 'toolUse' } })
+    process.emit({ type: 'message_start', message: { role: 'assistant', stopReason: 'pending' } })
+    process.emit({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } })
+    process.emit({ type: 'agent_settled', aborted: false })
+    await expect(prompt.settled).resolves.toMatchObject({ stopReason: 'stop' })
+    await host.close()
+  })
+
   it('uses Pi abort and retains the aborted terminal state', async () => {
     const process = new FakeProcess()
     const host = hostFor(process)

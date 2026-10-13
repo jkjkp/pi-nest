@@ -303,7 +303,7 @@ export class PiRuntimeRegistry {
         return prompt.settled
       })
       .then((result) => {
-        if (state.activeTurn === activeTurn) this.settleActiveTurn(session.id, activeTurn, result.stopReason)
+        if (state.activeTurn === activeTurn) this.settleActiveTurn(session.id, activeTurn, result.stopReason, true)
         return result
       })
       .catch(async (cause) => {
@@ -569,7 +569,10 @@ export class PiRuntimeRegistry {
         const assistant = message as Record<string, unknown>
         if (assistant.role === 'assistant' && typeof assistant.stopReason === 'string') activeTurn.stopReason = assistant.stopReason
       }
-      if (event.event.type === 'agent_settled') this.settleActiveTurn(sessionId, activeTurn)
+      if (event.event.type === 'agent_settled') {
+        if (event.event.aborted === true) activeTurn.stopReason = 'aborted'
+        this.settleActiveTurn(sessionId, activeTurn)
+      }
       else if (activeTurn.waitingForExtension && this.resumesStreaming(event.event)) {
         activeTurn.firstSequence = undefined
         activeTurn.waitingForExtension = undefined
@@ -586,13 +589,13 @@ export class PiRuntimeRegistry {
     return state.activeTurn.runId
   }
 
-  private settleActiveTurn(sessionId: string, activeTurn: ActiveTurn, stopReason = activeTurn.stopReason ?? 'stop') {
+  private settleActiveTurn(sessionId: string, activeTurn: ActiveTurn, stopReason = activeTurn.stopReason ?? 'stop', notifyCompletion = false) {
     const state = this.stateFor(sessionId)
     if (state.activeTurn !== activeTurn) return
     state.completedRun = { runId: activeTurn.runId, stopReason }
     state.activeTurn = undefined
     this.locks.delete(sessionId)
-    this.transition(sessionId, 'idle')
+    this.transition(sessionId, 'idle', undefined, undefined, false, notifyCompletion ? state.completedRun : undefined)
     this.scheduleUnload(sessionId)
   }
 
@@ -608,14 +611,14 @@ export class PiRuntimeRegistry {
     return Boolean(message && typeof message === 'object' && !Array.isArray(message) && (message as Record<string, unknown>).role === 'assistant')
   }
 
-  private transition(sessionId: string, lifecycle: PiRuntimeLifecycle, error?: string, failureKind?: PiRuntimeFailureKind, force = false) {
+  private transition(sessionId: string, lifecycle: PiRuntimeLifecycle, error?: string, failureKind?: PiRuntimeFailureKind, force = false, completedRun?: PiRuntimeStatus['completedRun']) {
     const state = this.stateFor(sessionId)
     if (!force && state.lifecycle === lifecycle && state.error === error && state.failureKind === failureKind) return
     state.lifecycle = lifecycle
     state.error = error
     state.failureKind = failureKind
     state.revision += 1
-    const status: PiRuntimeStatus = { thinkingLevel: this.entries.get(sessionId)?.host.currentThinkingLevel, ...(this.entries.get(sessionId)?.host.currentModel ? { model: this.entries.get(sessionId)!.host.currentModel } : {}), ...(error ? { error } : {}), ...(failureKind ? { failureKind } : {}), lifecycle, revision: state.revision, sessionId }
+    const status: PiRuntimeStatus = { ...(completedRun ? { completedRun: { ...completedRun } } : {}), thinkingLevel: this.entries.get(sessionId)?.host.currentThinkingLevel, ...(this.entries.get(sessionId)?.host.currentModel ? { model: this.entries.get(sessionId)!.host.currentModel } : {}), ...(error ? { error } : {}), ...(failureKind ? { failureKind } : {}), lifecycle, revision: state.revision, sessionId }
     for (const listener of state.listeners) listener(status)
   }
 

@@ -60,6 +60,7 @@ function modelFrom(state: Record<string, unknown>) {
 }
 
 function stopReasonFrom(event: Record<string, unknown>) {
+  if (event.type !== 'message_end') return undefined
   const message = event.message
   if (!message || typeof message !== 'object' || Array.isArray(message)) return undefined
   const candidate = message as Record<string, unknown>
@@ -180,17 +181,21 @@ export class PiRuntimeHost {
       settle = resolve
     })
     const unsubscribe = this.onEvent(({ event }) => {
-      stopReason ??= stopReasonFrom(event)
-      if (event.type === 'agent_settled') settle?.()
+      stopReason = stopReasonFrom(event) ?? stopReason
+      if (event.type === 'agent_settled') {
+        if (event.aborted === true) stopReason = 'aborted'
+        settle?.()
+      }
     })
 
     try {
-      await process.send({ type: 'prompt', message })
+      const response = await process.send({ type: 'prompt', message })
+      const data = response.data as Record<string, unknown> | undefined
       accept()
       const state = stateFrom(await process.send({ type: 'get_state' }))
       this.model = modelFrom(state)
       this.thinkingLevel = typeof state.thinkingLevel === 'string' ? state.thinkingLevel : undefined
-      if (state.isStreaming === true) await settled
+      if (state.isStreaming === true && data?.disposition !== 'handled') await settled
       const finalState = stateFrom(await process.send({ type: 'get_state' }))
       this.model = modelFrom(finalState)
       this.thinkingLevel = typeof finalState.thinkingLevel === 'string' ? finalState.thinkingLevel : undefined
