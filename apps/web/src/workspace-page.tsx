@@ -249,7 +249,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               />
               <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-2">
                 {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
-                <div className="ml-auto flex items-center gap-2">
+                <div className="ml-auto flex max-w-full items-center gap-2">
                   {selectedSession && <SessionStatistics key={selectedSessionId} details={runtimeStatistics} onRetry={() => void sessionRuns.getSessionStatistics(selectedSessionId)} />}
 
                   <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen} key={selectedSessionId} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={!selectedSession} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />

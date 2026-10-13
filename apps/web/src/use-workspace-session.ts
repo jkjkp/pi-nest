@@ -87,11 +87,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     setThinkingError(undefined)
   }
   const modelName = models.find((model) => model.id === currentModel?.id && model.provider === currentModel?.provider)?.name ?? currentModel?.id
-  const modelLabel = modelStatus === 'switching' ? '正在切换…'
-    : modelStatus === 'loading' ? '读取模型…'
-    : modelStatus === 'error' ? '模型读取失败'
-    : currentModel?.id && currentModel.provider ? (modelName ?? currentModel.id)
-    : runtimeDetails[selectedSessionId] ? '请选择模型' : '选择模型'
+  const modelLabel = currentModel?.id && currentModel.provider ? (modelName ?? currentModel.id) : '选择模型'
   const status = currentRun?.status ?? 'idle'
   const isActive = isRunActive(status)
   const isStreaming = status === 'running' || status === 'aborting'

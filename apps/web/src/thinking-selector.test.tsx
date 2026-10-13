@@ -5,7 +5,7 @@ import { ThinkingSelector } from './thinking-selector.js'
 
 vi.mock('radix-ui', () => {
   const Container = ({ children }: { children?: ReactNode }) => <>{children}</>
-  return { Popover: { Root: Container, Trigger: Container, Portal: Container, Content: Container }, Portal: { Root: Container } }
+  return { Popover: { Root: Container, Trigger: Container, Portal: Container, Content: ({ children, className }: { children?: ReactNode; className?: string }) => <div className={className}>{children}</div> }, Portal: { Root: Container } }
 })
 
 function render(status: 'switching' | 'loading' | 'error', levels: string[], error?: string) {
@@ -25,4 +25,14 @@ it('shows a skeleton on the initial read and a retry on read failure', () => {
   expect(failure).toContain('读取失败，请重试。')
   expect(failure).toContain('重试</button>')
   expect(failure).not.toContain('Internal RPC failure')
+})
+
+
+it('keeps the same outer height for loading, loaded choices and read errors', () => {
+  for (const markup of [render('loading', []), render('switching', ['off', 'low', 'medium', 'high', 'xhigh']), render('error', [], 'failure')]) {
+    expect(markup).toContain('h-[min(280px,var(--radix-popover-content-available-height))]')
+    expect(markup).toContain('min-h-0 flex-1 overflow-y-auto')
+  }
+  expect(render('loading', ['low', 'high'])).toContain('aria-pressed=')
+  expect(render('loading', ['low', 'high'])).not.toContain('aria-busy="true"')
 })
