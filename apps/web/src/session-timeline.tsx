@@ -18,7 +18,7 @@ import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 import type { PendingInput, PromptStatus } from './session-run-model.js'
 
-export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onSelectModel, onJumpToTurn, onJumpToUnloadedTurn, onReadTurnPrompt, onLoadEarlier, onPendingJumpHandled, onRetry, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, scrollViewport, systemEvents = [], turnIndex, turns = [] }: {
+export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onSelectModel, onJumpToTurn, onJumpToUnloadedTurn, onReadTurnPrompt, onLoadEarlier, onPendingJumpHandled, onRetry, onRetryNavigation, navigationNotice, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, scrollViewport, systemEvents = [], turnIndex, turns = [] }: {
   error: boolean
   hasEarlier?: boolean
   history: PiSessionHistoryResponse | undefined
@@ -34,6 +34,8 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   onLoadEarlier?: () => void
   onPendingJumpHandled?: () => void
   onRetry: () => void
+  onRetryNavigation?: () => void
+  navigationNotice?: string
   overlayRoot?: HTMLElement | null
   pendingInputs?: PendingInput[]
   pendingJumpTurnId?: string
@@ -122,7 +124,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     if (onJumpToTurn) onJumpToTurn(turnId, scrollTo, alignment)
     else scrollTo('auto')
   }
-  return <section className="conversation-stage pb-6">{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail key={history?.session.id} onReadPrompt={readPrompt} activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>{virtualItems.map((virtualItem) => {
+  return <section className="conversation-stage pb-6">{navigationNotice && <div className="conversation-stage-content mb-2 flex items-center justify-end gap-2 text-xs text-muted-foreground" role="status"><span>{navigationNotice}</span><Button onClick={onRetryNavigation} size="sm" variant="ghost" type="button">重试</Button></div>}{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail key={history?.session.id} onReadPrompt={readPrompt} activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>{virtualItems.map((virtualItem) => {
     if (virtualItem.index === 0) return <div className="absolute left-0 top-0 w-full" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>
     const item = items[virtualItem.index - 1]!
     return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><TurnItem onSelectModel={onSelectModel} isRunning={isRunning && virtualItem.index === items.length} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} runMessage={virtualItem.index === items.length ? runMessage : undefined} runStatus={virtualItem.index === items.length ? runStatus : undefined} /></div>

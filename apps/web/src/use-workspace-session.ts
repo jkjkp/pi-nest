@@ -9,7 +9,8 @@ import type { SessionRunController } from './session-run-controller.js'
 import { thinkingCommand } from './thinking-command.js'
 import { isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
-import { createSession, deleteSession, fetchSessionHistory, fetchSessionTurnIndex, fetchSessions, renameSession, revealProjectInFinder } from './workspace-api.js'
+import { createSession, deleteSession, fetchSessionHistory, fetchSessions, renameSession, revealProjectInFinder, RequestError } from './workspace-api.js'
+import { fetchSessionNavigation } from './session-navigation-query.js'
 import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
 
 const emptySessions: Awaited<ReturnType<typeof fetchSessions>> = []
@@ -102,12 +103,24 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     getPreviousPageParam: (firstPage) => firstPage.hasEarlier ? { before: firstPage.beforeCursor, revision: firstPage.revision } : undefined,
     initialPageParam: {},
     queryKey: sessionHistoryQueryKey(selectedSessionId),
-    queryFn: ({ pageParam }) => fetchSessionHistory(selectedSessionId, pageParam.before, pageParam.revision),
+    queryFn: ({ pageParam, signal }) => fetchSessionHistory(selectedSessionId, pageParam.before, pageParam.revision, signal),
     retry: false,
   })
   const completedRunId = useWorkspaceStore((state) => state.sessionNotifications[selectedSessionId]?.completedRunId)
   const history = useMemo(() => mergeSessionHistoryPages(historyQuery.data?.pages), [historyQuery.data?.pages])
-  const turnIndexQuery = useQuery({ enabled: historyEnabled && Boolean(history?.revision), queryKey: sessionTurnIndexQueryKey(selectedSessionId, history?.revision), queryFn: () => fetchSessionTurnIndex(selectedSessionId, history!.revision), retry: false })
+  const turnIndexQuery = useQuery({
+    enabled: historyEnabled && !isActive && historyQuery.isSuccess && !historyQuery.isFetching && Boolean(history?.revision),
+    queryKey: sessionTurnIndexQueryKey(selectedSessionId, history?.revision),
+    queryFn: ({ signal }) => fetchSessionNavigation(selectedSessionId, history!.revision, signal, queryClient),
+    retry: false,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  })
+  const navigationNotice = !isActive && turnIndexQuery.isError && !turnIndexQuery.isFetching
+    ? turnIndexQuery.error instanceof RequestError && turnIndexQuery.error.code === 'SESSION_RUNNING'
+      ? '执行结束后将更新轮次导航' : '完整轮次导航暂不可用'
+    : undefined
   const historyJumpSequence = useRef(0)
   const historyRevisionRef = useRef(history?.revision)
   useEffect(() => { historyRevisionRef.current = history?.revision }, [history?.revision])
@@ -125,7 +138,8 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId
-  }, [selectedSessionId])
+    return () => { void queryClient.cancelQueries({ queryKey: ['session-history-page', selectedSessionId] }) }
+  }, [selectedSessionId, queryClient])
 
   const sourceProjects = useMemo(() => groupSessionsByProject(sessions, navigationOrder.projectCreatedAt), [sessions, navigationOrder.projectCreatedAt])
   const orderedProjects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
@@ -250,7 +264,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
 
   const readHistoryPage = useCallback((cursor: string | undefined) => queryClient.fetchQuery({
     queryKey: ['session-history-page', selectedSessionId, historyCacheVersion, history?.revision, cursor],
-    queryFn: () => fetchSessionHistory(selectedSessionId, cursor, history?.revision),
+    queryFn: ({ signal }) => fetchSessionHistory(selectedSessionId, cursor, history?.revision, signal),
     staleTime: Infinity,
   }), [history?.revision, queryClient, selectedSessionId])
 
@@ -428,7 +442,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     extensionStatus, extensionWidget, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,
-    sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
+    sessionsQuery, historyQuery, history, turnIndexQuery, navigationNotice, retryNavigation: () => { void turnIndexQuery.refetch() }, pendingJump, setPendingJump,
     selectSession, startDraft, removeProject, submitPrompt, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel,
     loadEarlier: () => { void historyQuery.fetchPreviousPage() }, retryHistory: () => { void historyQuery.refetch() },

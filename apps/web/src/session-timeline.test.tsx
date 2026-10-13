@@ -18,6 +18,13 @@ const history = {
 }
 
 describe('SessionTimeline', () => {
+  it('keeps the answer readable while showing navigation failure and a retry action', () => {
+    const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} navigationNotice="完整轮次导航暂不可用" onRetryNavigation={() => undefined} />)
+    expect(markup).toContain('完整轮次导航暂不可用')
+    expect(markup).toContain('重试')
+    expect(markup).toContain('answer')
+    expect(markup).not.toContain('无法读取会话历史')
+  })
   it('keeps raw Pi records out of the reading flow while rendering a collapsed execution summary', () => {
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)
 

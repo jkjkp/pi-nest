@@ -28,7 +28,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     extensionStatus, extensionWidget, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
-    sessionsQuery, historyQuery, history, turnIndexQuery, pendingJump, setPendingJump,
+    sessionsQuery, historyQuery, history, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
     startDraft, removeProject, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
@@ -197,6 +197,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   runStatus={status}
                   runMessage={currentRun?.waitingMessage}
                   turnIndex={turnIndexQuery.data}
+                  navigationNotice={navigationNotice}
+                  onRetryNavigation={retryNavigation}
                   turns={currentRun?.turns}
                 /> : <div className="conversation-stage py-16"><p className="conversation-stage-content text-center text-sm text-muted-foreground">从左侧选择一个会话，或在项目中创建新对话。</p></div>}
                 <div className="conversation-stage">

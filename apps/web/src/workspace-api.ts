@@ -4,9 +4,23 @@ import type { PiSessionSummary } from './workspace.js'
 
 export type { PiRuntimeSettings, PiSettingsSnapshot } from '@pi-nest/contracts'
 
-async function fetchJson<T>(url: string) {
-  const response = await fetch(url)
-  if (!response.ok) throw new Error(`Request failed with status ${response.status}`)
+export class RequestError extends Error {
+  status: number
+  code?: string
+  constructor(status: number, code?: string) {
+    super(`Request failed with status ${status}`)
+    this.status = status
+    this.code = code
+  }
+}
+
+async function fetchJson<T>(url: string, signal?: AbortSignal) {
+  const response = await fetch(url, { signal })
+  if (!response.ok) {
+    const body = await response.json().catch(() => undefined)
+    signal?.throwIfAborted()
+    throw new RequestError(response.status, typeof body?.code === 'string' ? body.code : undefined)
+  }
   return (await response.json()) as T
 }
 
@@ -14,15 +28,15 @@ function sessionUrl(sessionId: string) {
   return `/api/sessions/${encodeURIComponent(sessionId)}`
 }
 
-export function fetchSessionHistory(sessionId: string, before?: string, revision?: string) {
+export function fetchSessionHistory(sessionId: string, before?: string, revision?: string, signal?: AbortSignal) {
   const query = new URLSearchParams({ limit: String(historyPageSize) })
   if (before) query.set('before', before)
   if (revision) query.set('revision', revision)
-  return fetchJson<PiSessionHistoryResponse>(`${sessionUrl(sessionId)}/history?${query}`)
+  return fetchJson<PiSessionHistoryResponse>(`${sessionUrl(sessionId)}/history?${query}`, signal)
 }
 
-export function fetchSessionTurnIndex(sessionId: string, revision: string) {
-  return fetchJson<PiSessionTurnIndex>(`${sessionUrl(sessionId)}/turn-index?${new URLSearchParams({ revision })}`)
+export function fetchSessionTurnIndex(sessionId: string, revision: string, signal?: AbortSignal) {
+  return fetchJson<PiSessionTurnIndex>(`${sessionUrl(sessionId)}/turn-index?${new URLSearchParams({ revision })}`, signal)
 }
 
 export async function fetchSessions() {
