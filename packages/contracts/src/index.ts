@@ -23,7 +23,7 @@ export type PiRuntimeSessionSnapshot = {
 }
 export type RuntimeCommandPayload = { sessionId: string } & (
   | { type: 'watch'; resume?: { after: number } }
-  | { type: 'unwatch' | 'resume' | 'abort' | 'compact' | 'get_runtime_state' | 'get_available_models' | 'get_available_thinking_levels' }
+  | { type: 'unwatch' | 'resume' | 'abort' | 'compact' | 'get_runtime_state' | 'get_session_stats' | 'get_available_models' | 'get_available_thinking_levels' }
   | { type: 'prompt' | 'steer' | 'follow_up'; message: string }
   | { type: 'set_model'; provider: string; modelId: string }
   | { type: 'set_thinking_level'; level: string }
@@ -95,3 +95,11 @@ export type PiSessionHistory = {
   revision: string
 }
 
+
+export type PiRuntimeStatistics = {
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
+  cost: number
+  contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null }
+  autoCompactionEnabled?: boolean
+  cacheHitRate?: number
+}
