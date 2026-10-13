@@ -33,4 +33,15 @@ describe('TurnExecution scrolling', () => {
     expect(shouldExecutionFollowLatest(1_000, 860, 100)).toBe(true)
     expect(shouldExecutionFollowLatest(1_000, 800, 100)).toBe(false)
   })
+
+  it('keeps a collapsed animation shell while excluding hidden execution from focus and reading', () => {
+    const presentation = { activities: [{ id: 'thinking', kind: 'thinking' as const, text: 'working' }], finalAnswer: [], hasExecution: true }
+    const collapsed = renderToStaticMarkup(<TurnExecution isRunning={false} item={item} presentation={presentation} />)
+    expect(collapsed).toContain('class="execution-collapse" data-expanded="false" aria-hidden="true" inert=""')
+    expect(collapsed).toContain('id="turn-execution-turn-1"')
+    expect(collapsed).not.toContain('working')
+    const expanded = renderToStaticMarkup(<TurnExecution isRunning item={item} presentation={presentation} />)
+    expect(expanded).toContain('data-expanded="true" aria-hidden="false"')
+    expect(expanded).not.toContain('inert=""')
+  })
 })

@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, FilePenLine, Terminal, Wrench } from 'lucide-react'
+import { ChevronRight, FilePenLine, Terminal, Wrench } from 'lucide-react'
 
 import { executionPhase, formatActivityDuration, formatElapsedTime, nextExecutionExpanded, turnElapsed, type TurnActivity, type TurnPresentation } from './turn-execution-model.js'
 import { startElapsedClock } from './turn-elapsed-clock.js'
@@ -9,6 +9,7 @@ import type { PromptStatus } from './session-run-model.js'
 
 export function TurnExecution({ item, isRunning, presentation, runMessage, runStatus }: { item: TimelineItem; isRunning: boolean; presentation: TurnPresentation; runMessage?: string; runStatus?: PromptStatus }) {
   const [expanded, setExpanded] = useState(isRunning)
+  const [contentMounted, setContentMounted] = useState(isRunning)
   const [userToggled, setUserToggled] = useState(false)
   const executionActive = isRunning || runStatus === 'awaiting_input'
   const previousRunning = useRef(executionActive)
@@ -37,15 +38,18 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
   const statusText = isRunning ? `${phase} · ${elapsed}`
     : runStatus === 'submitted' || runStatus === 'awaiting_agent' || runStatus === 'awaiting_input' || runStatus === 'aborting' || runStatus === 'aborted' || runStatus === 'error'
       ? phase : elapsed === '—' ? '正在同步执行状态…' : `用时 ${elapsed}`
-  if (!presentation.hasExecution) return <section className="my-4 text-sm text-muted-foreground"><p><span aria-live="polite">{isRunning ? phase : statusText}</span>{isRunning ? ` · ${elapsed}` : null}</p><div className="mt-2 border-b border-border/60" /></section>
+  if (expanded && !contentMounted) setContentMounted(true)
+  const contentExpanded = expanded && presentation.hasExecution
 
   return (
     <section className="my-4 text-sm" data-turn-execution="">
-      <button aria-controls={contentId} aria-expanded={expanded} className="flex w-full items-center gap-1 text-left text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setUserToggled(true); if (!expanded) setExecutionFollowLatest(true); setExpanded((value) => !value) }} type="button">
+      {presentation.hasExecution ? <button data-execution-toggle="" aria-controls={contentId} aria-expanded={expanded} className="flex w-full items-center gap-1 text-left text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setUserToggled(true); if (!expanded) setExecutionFollowLatest(true); setExpanded((value) => !value) }} type="button">
         <span><span aria-live="polite">{isRunning ? phase : statusText}</span>{isRunning ? ` · ${elapsed}` : null}</span>
-        {expanded ? <ChevronDown aria-hidden="true" className="size-4" /> : <ChevronRight aria-hidden="true" className="size-4" />}
-      </button>
-      {expanded && <div className="py-3" id={contentId}>
+        <ChevronRight aria-hidden="true" className={`size-4 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
+      </button> : <p className="text-muted-foreground"><span aria-live="polite">{isRunning ? phase : statusText}</span>{isRunning ? ` · ${elapsed}` : null}</p>}
+      <div className="execution-collapse" data-expanded={contentExpanded} aria-hidden={!contentExpanded} inert={!contentExpanded} id={contentId}>
+        <div className="min-h-0 overflow-hidden"><div className="py-3">
+        {contentMounted && <>
         <div aria-label="执行过程" className="max-h-[min(38vh,22.5rem)] space-y-3 overflow-y-auto overscroll-contain pr-2" onScroll={() => {
           const viewport = executionViewport.current
           if (viewport) setExecutionFollowLatest(shouldExecutionFollowLatest(viewport.scrollHeight, viewport.scrollTop, viewport.clientHeight))
@@ -55,7 +59,9 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
           setExecutionFollowLatest(true)
           if (viewport) viewport.scrollTop = viewport.scrollHeight
         }} type="button">↓ 查看最新</button>}
-      </div>}
+        </>}
+        </div></div>
+      </div>
       <div className="border-b border-border/60" />
     </section>
   )

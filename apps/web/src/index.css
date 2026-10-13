@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+.execution-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 200ms ease, opacity 200ms ease;
+}
+
+.execution-collapse[data-expanded="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
