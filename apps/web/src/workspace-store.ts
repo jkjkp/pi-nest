@@ -3,7 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 
 import type { NavigationOrder } from './navigation-order.js'
 import { isRunActive, nativeUserMessage, type PendingInput, type SessionRunSummary } from './session-run-model.js'
-import type { PiRuntimeEvent, PiRuntimeState, RuntimeStatus } from '@pi-nest/contracts'
+import type { PiRuntimeStatistics, PiRuntimeEvent, PiRuntimeState, RuntimeStatus } from '@pi-nest/contracts'
 
 export { isRunActive, nativeUserMessage } from './session-run-model.js'
 export type { PromptStatus, PendingInput, SessionRunSummary } from './session-run-model.js'
@@ -13,6 +13,8 @@ const unavailableStorage = {
   removeItem: () => undefined,
   setItem: () => undefined,
 }
+
+export type RuntimeStatisticsState = { data?: PiRuntimeStatistics; error?: string; loading?: boolean }
 
 type WorkspaceState = {
   collapsedProjectKeys: Record<string, boolean>
@@ -25,6 +27,8 @@ type WorkspaceState = {
   navigationOpen: boolean
   navigationWidth: number
   runtimeStates: Record<string, Omit<RuntimeStatus, 'sessionId'>>
+  runtimeStatistics: Record<string, RuntimeStatisticsState>
+  setRuntimeStatistics: (sessionId: string, statistics: RuntimeStatisticsState) => void
   runtimeDetails: Record<string, PiRuntimeState>
   setRuntimeDetails: (sessionId: string, details: PiRuntimeState) => void
   watchStates: Record<string, 'ready' | 'watching'>
@@ -69,6 +73,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   navigationOpen: false,
   navigationWidth: 272,
   runtimeStates: {},
+  runtimeStatistics: {},
+  setRuntimeStatistics: (sessionId, statistics) => set((state) => ({ runtimeStatistics: { ...state.runtimeStatistics, [sessionId]: statistics } })),
   runtimeDetails: {},
   watchStates: {},
   navigationOrder: { projectOrder: [], sessionOrderByProject: {} },
@@ -239,7 +245,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   clearRuntimeState: (sessionId) => set((state) => {
     const { [sessionId]: _runtime, ...runtimeStates } = state.runtimeStates
     const { [sessionId]: _details, ...runtimeDetails } = state.runtimeDetails
-    return { runtimeStates, runtimeDetails }
+    const { [sessionId]: _statistics, ...runtimeStatistics } = state.runtimeStatistics
+    return { runtimeStates, runtimeDetails, runtimeStatistics }
   }),
   setRuntimeDetails: (sessionId, details) => set((state) => ({ runtimeDetails: { ...state.runtimeDetails, [sessionId]: { ...details, model: details.model ? { ...details.model } : undefined } } })),
   setRuntimeState: (sessionId, runtime) => set((state) => {

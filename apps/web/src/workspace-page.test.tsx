@@ -12,6 +12,7 @@ const sessionRuns = {
   followUp: async () => undefined,
   getAvailableModels: async () => [],
   getAvailableThinkingLevels: async () => [],
+  getSessionStatistics: async () => undefined,
   getRuntimeState: async () => ({ isCompacting: false, isStreaming: false }),
   openSession: () => undefined,
   releaseForeground: () => undefined,

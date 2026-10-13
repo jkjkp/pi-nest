@@ -1,4 +1,4 @@
-import type { PiRuntimeEvent, RuntimeError, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel, RuntimeMessage, RuntimeCommandPayload } from '@pi-nest/contracts'
+import type { PiRuntimeStatistics, PiRuntimeEvent, RuntimeError, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel, RuntimeMessage, RuntimeCommandPayload } from '@pi-nest/contracts'
 export type { PiRuntimeEvent, RuntimeError, RuntimeLifecycle, RuntimeFailureKind, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel } from '@pi-nest/contracts'
 
 type RuntimeSocket = Pick<WebSocket, 'close' | 'readyState' | 'send'> & { addEventListener: WebSocket['addEventListener'] }
@@ -9,7 +9,7 @@ type RuntimeWebSocketClientOptions = {
   socketFactory?: (url: string) => RuntimeSocket
 }
 
-type PendingCommand = { reject: (cause: Error) => void; resolve: (data: unknown) => void }
+type PendingCommand = { command: RuntimeCommandPayload['type']; reject: (cause: Error) => void; resolve: (data: unknown) => void }
 
 const runtimeIdStorageKey = 'pi-nest-runtime-instance'
 const watchStorageKey = 'pi-nest-runtime-watches'
@@ -160,6 +160,7 @@ export class RuntimeWebSocketClient {
   setModel(sessionId: string, provider: string, modelId: string) { return this.command({ type: 'set_model', sessionId, modelId, provider }) }
   setThinkingLevel(sessionId: string, level: string) { return this.command({ type: 'set_thinking_level', sessionId, level }) }
   compact(sessionId: string) { return this.command({ type: 'compact', sessionId }) }
+  getSessionStatistics(sessionId: string) { return this.command<PiRuntimeStatistics>({ type: 'get_session_stats', sessionId }) }
   getRuntimeState(sessionId: string) { return this.command<PiRuntimeState>({ type: 'get_runtime_state', sessionId }) }
   getAvailableModels(sessionId: string) { return this.command<{ models: PiRuntimeModel[] }>({ type: 'get_available_models', sessionId }) }
   getAvailableThinkingLevels(sessionId: string) { return this.command<{ levels: string[] }>({ type: 'get_available_thinking_levels', sessionId }) }
@@ -170,7 +171,7 @@ export class RuntimeWebSocketClient {
   private async command<T = void>(command: RuntimeCommandPayload): Promise<T> {
     const socket = await this.connect()
     const id = `web-${++this.nextId}`
-    const result = new Promise<T>((resolve, reject) => this.pending.set(id, { reject, resolve: (data) => resolve(data as T) }))
+    const result = new Promise<T>((resolve, reject) => this.pending.set(id, { command: command.type, reject, resolve: (data) => resolve(data as T) }))
     socket.send(JSON.stringify({ ...command, id }))
     return result
   }
@@ -241,7 +242,7 @@ export class RuntimeWebSocketClient {
     const pending = message.id ? this.pending.get(message.id) : undefined
     if (message.id) this.pending.delete(message.id)
     pending?.reject(Object.assign(new Error(message.message), { code: message.code }))
-    this.notify(message)
+    if (pending?.command !== 'get_session_stats') this.notify(message)
   }
 
   private handleEvent(message: { type: 'pi_event' } & PiRuntimeEvent) {

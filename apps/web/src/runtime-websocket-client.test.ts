@@ -274,3 +274,22 @@ describe('RuntimeWebSocketClient', () => {
     vi.unstubAllGlobals()
   })
 })
+
+
+it('rejects a failed statistics read without publishing a session run error', async () => {
+  vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+  const socket = new FakeSocket()
+  const factory = vi.fn(() => socket as never)
+  const client = new RuntimeWebSocketClient({ fetchFn: vi.fn(async () => new Response(JSON.stringify({ runtimeId: 'runtime-1', token: 'token', websocketPath: '/api/runtime' }))), socketFactory: factory })
+  const listener = vi.fn()
+  client.onError(listener)
+  const request = client.getSessionStatistics('session-a')
+  const rejected = expect(request).rejects.toThrow('statistics failed')
+  await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce())
+  socket.open()
+  await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', sessionId: 'session-a', type: 'get_session_stats' }))
+  socket.receive({ id: 'web-1', sessionId: 'session-a', type: 'error', code: 'COMMAND_FAILED', message: 'statistics failed' })
+  await rejected
+  expect(listener).not.toHaveBeenCalled()
+  socket.close()
+})

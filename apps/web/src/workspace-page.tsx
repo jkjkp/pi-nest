@@ -1,3 +1,4 @@
+import { SessionStatistics } from './session-statistics.js'
 import { type CSSProperties, useEffect, useState } from 'react'
 import { ArrowDown, CircleX, Folder, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
 import { Link } from 'react-router'
@@ -31,6 +32,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     startDraft, removeProject, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
+  const runtimeStatistics = useWorkspaceStore((state) => state.runtimeStatistics[selectedSessionId])
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
   const inspectorWidth = useWorkspaceStore((state) => state.inspectorWidth)
   const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
@@ -247,6 +249,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               />
               <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-2">
                 {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
+                {selectedSession && <SessionStatistics key={selectedSessionId} details={runtimeStatistics} onRetry={() => void sessionRuns.getSessionStatistics(selectedSessionId)} />}
                 {isActive && <div className="flex gap-1 text-xs"><Button onClick={() => setQueueMode('steer')} size="sm" type="button" variant={queueMode === 'steer' ? 'secondary' : 'ghost'}>Steer</Button><Button onClick={() => setQueueMode('follow_up')} size="sm" type="button" variant={queueMode === 'follow_up' ? 'secondary' : 'ghost'}>Follow-up</Button></div>}
                 <div className="ml-auto flex items-center gap-2">
                   <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen} key={selectedSessionId} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={!selectedSession} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />

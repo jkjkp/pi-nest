@@ -1,7 +1,7 @@
 import { stripAnsiText } from './ansi-text.js'
 import { isRuntimeConnectionError, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
 import { nativeUserMessage, type PromptStatus } from './session-run-model.js'
-import { useWorkspaceStore } from './workspace-store.js'
+import { useWorkspaceStore, type RuntimeStatisticsState } from './workspace-store.js'
 
 type SessionRunControllerOptions = {
   invalidateHistory: (sessionId: string) => void | Promise<void>
@@ -17,6 +17,7 @@ export type SessionRunController = {
   followUp: (sessionId: string, message: string) => Promise<void>
   getAvailableModels: (sessionId: string) => Promise<PiRuntimeModel[]>
   getAvailableThinkingLevels: (sessionId: string) => Promise<string[]>
+  getSessionStatistics: (sessionId: string) => Promise<void>
   getRuntimeState: (sessionId: string) => Promise<PiRuntimeState>
   openSession: (sessionId: string) => void
   releaseForeground: () => void
@@ -53,8 +54,22 @@ function isExtensionDialog(event: PiRuntimeEvent) {
 export function createSessionRunController({ invalidateHistory, runtime }: SessionRunControllerOptions): SessionRunController {
   const activeRuns = new Map<string, ActiveRun>()
   const awaitingAgentTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const statisticsRequests = new Map<string, number>()
   let foregroundSessionId: string | undefined
   let nextPendingInputId = 0
+
+  async function getSessionStatistics(sessionId: string) {
+    const request = (statisticsRequests.get(sessionId) ?? 0) + 1
+    statisticsRequests.set(sessionId, request)
+    const write = (update: RuntimeStatisticsState) => {
+      if (statisticsRequests.get(sessionId) !== request) return
+      const store = useWorkspaceStore.getState()
+      store.setRuntimeStatistics(sessionId, { ...store.runtimeStatistics[sessionId], ...update })
+    }
+    write({ loading: true, error: undefined })
+    try { write({ data: await runtime.getSessionStatistics(sessionId), loading: false }) }
+    catch { write({ loading: false, error: '统计读取失败，请重试。' }) }
+  }
 
   function clearAwaitingAgentCheck(sessionId: string) {
     const timer = awaitingAgentTimers.get(sessionId)
@@ -110,6 +125,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
         if (raw.method === 'setWidget' && typeof raw.widgetKey === 'string' && raw.widgetKey) store.setExtensionWidget(event.sessionId, raw.widgetKey, Array.isArray(raw.widgetLines) && raw.widgetLines.every((line) => typeof line === 'string') ? raw.widgetLines : undefined)
       }
     }
+    if (raw.type === 'auto_compaction_end' && runtime.shouldApplyExtensionUi(event)) void getSessionStatistics(event.sessionId)
     let activeRun = activeRuns.get(event.sessionId)
     if (!activeRun && event.event.type === 'agent_start' && event.runId) {
       clearAwaitingAgentCheck(event.sessionId)
@@ -142,11 +158,13 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       status: activeRun.stopReason === 'error' ? 'error' : activeRun.stopReason === 'aborted' ? 'aborted' : 'complete',
       stopReason: activeRun.stopReason ?? 'stop',
     })
+    void getSessionStatistics(event.sessionId)
     void invalidateHistory(event.sessionId)
   })
 
   runtime.onError((error) => {
     if (error.code === 'RUNTIME_RESTARTED' && error.sessionId) {
+      statisticsRequests.set(error.sessionId, (statisticsRequests.get(error.sessionId) ?? 0) + 1)
       useWorkspaceStore.getState().clearRuntimeState(error.sessionId)
       activeRuns.delete(error.sessionId)
       useWorkspaceStore.getState().updateRun(error.sessionId, { error: 'Pi 运行服务已重启，本轮已中断。', status: 'error' })
@@ -167,6 +185,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   })
 
   runtime.onResyncRequired((message) => {
+    statisticsRequests.set(message.sessionId, (statisticsRequests.get(message.sessionId) ?? 0) + 1)
     useWorkspaceStore.getState().clearRuntimeState(message.sessionId)
     useWorkspaceStore.getState().clearExtensionUi(message.sessionId)
     clearAwaitingAgentCheck(message.sessionId)
@@ -182,6 +201,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     store.replaceExtensionUi(snapshot.sessionId, snapshot.extensionUi)
     store.setRuntimeState(snapshot.sessionId, snapshot.runtime)
     applyModelStatus({ ...snapshot.runtime, sessionId: snapshot.sessionId })
+    if (snapshot.runtime.lifecycle === 'idle' || snapshot.runtime.lifecycle === 'active') void getSessionStatistics(snapshot.sessionId)
     useWorkspaceStore.getState().setWatchState(snapshot.sessionId, 'ready')
     if (snapshot.activeTurn && !activeRuns.has(snapshot.sessionId)) {
       const status = snapshot.activeTurn.waitingForExtension ? 'awaiting_input' : 'running'
@@ -198,6 +218,11 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     if ((store.runtimeStates[status.sessionId]?.revision ?? -1) > status.revision) return
     store.setRuntimeState(status.sessionId, status)
     applyModelStatus(status)
+    if (status.lifecycle === 'notLoaded' || status.lifecycle === 'failed') {
+      statisticsRequests.set(status.sessionId, (statisticsRequests.get(status.sessionId) ?? 0) + 1)
+      store.setRuntimeStatistics(status.sessionId, { ...store.runtimeStatistics[status.sessionId], loading: false, error: '等待 Pi 运行恢复后更新统计。' })
+    }
+    if (status.lifecycle === 'idle') void getSessionStatistics(status.sessionId)
     if (status.lifecycle === 'failed') store.clearExtensionUi(status.sessionId)
     if (status.lifecycle === 'active' && !activeRuns.has(status.sessionId)) {
       activeRuns.set(status.sessionId, { awaitingRunId: false, runId: undefined, stopReason: undefined })
@@ -229,6 +254,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     const state = await runtime.getRuntimeState(sessionId)
     const store = useWorkspaceStore.getState()
     store.setRuntimeDetails(sessionId, state)
+    void getSessionStatistics(sessionId)
     if (store.runs[sessionId] && state.model?.id && state.model.provider) store.updateRun(sessionId, { model: `${state.model.provider}/${state.model.id}` })
     return state
   }
@@ -240,13 +266,14 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
         checkAwaitingAgent(options.sessionId, undefined)
       }
     },
-    compact: async (sessionId) => { await resumeRuntime(sessionId); await runtime.compact(sessionId) },
+    compact: async (sessionId) => { await resumeRuntime(sessionId); await runtime.compact(sessionId); await getSessionStatistics(sessionId) },
     followUp: async (sessionId, message) => {
       await runtime.followUp(sessionId, message)
       useWorkspaceStore.getState().appendPendingInput(sessionId, { id: `pending-input:${++nextPendingInputId}`, message, mode: 'follow_up', submittedAt: new Date().toISOString() })
     },
     getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,
     getAvailableThinkingLevels: async (sessionId) => (await runtime.getAvailableThinkingLevels(sessionId)).levels,
+    getSessionStatistics,
     getRuntimeState,
     openSession: (sessionId) => {
       void (async () => {

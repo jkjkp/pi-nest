@@ -21,6 +21,7 @@ function runtimeMock() {
     setModel: vi.fn().mockResolvedValue(undefined),
     setThinkingLevel: vi.fn().mockResolvedValue(undefined),
     followUp: vi.fn().mockResolvedValue(undefined),
+    getSessionStatistics: vi.fn().mockResolvedValue({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 }),
     getRuntimeState: vi.fn().mockResolvedValue({ isCompacting: false, isStreaming: false }),
     onError: vi.fn((listener: (error: { code?: string; message: string; sessionId?: string }) => void) => { errors.add(listener); return () => errors.delete(listener) }),
     onPiEvent: vi.fn((listener: (event: PiRuntimeEvent) => void) => { events.add(listener); return () => events.delete(listener) }),
@@ -404,4 +405,54 @@ it('ends a rejected model call as an error and allows the next prompt to succeed
   runtime.emit({ event: { type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } }, observedAt: 'now', runId: 'run-1', sequence: 3, sessionId: 'session-a', turnId: 'turn-2' })
   runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 4, sessionId: 'session-a' })
   expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'complete', stopReason: 'stop' })
+})
+
+it('isolates session statistics, rejects superseded responses and survives failed reads', async () => {
+  useWorkspaceStore.setState({ runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  const runtime = runtimeMock()
+  let release!: (stats: any) => void
+  runtime.getSessionStatistics.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  const older = controller.getSessionStatistics('session-a')
+  const newerStats = { tokens: { input: 20, output: 10, cacheRead: 90, cacheWrite: 0, total: 120 }, cost: 0.1, contextUsage: { tokens: null, percent: null, contextWindow: 1000000 } }
+  runtime.getSessionStatistics.mockResolvedValueOnce(newerStats as never)
+  await controller.getSessionStatistics('session-a')
+  release({ ...newerStats, cost: 999 })
+  await older
+  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']?.data).toEqual(newerStats)
+  await controller.getSessionStatistics('session-b')
+  expect(useWorkspaceStore.getState().runtimeStatistics['session-b']?.data?.cost).toBe(0)
+  runtime.getSessionStatistics.mockRejectedValueOnce(new Error('failed'))
+  await controller.getSessionStatistics('session-a')
+  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']).toMatchObject({ data: newerStats, loading: false, error: expect.stringContaining('读取失败') })
+  expect(useWorkspaceStore.getState().runs['session-a']).toBeUndefined()
+})
+
+it('does not resurrect statistics from a request interrupted by resync', async () => {
+  useWorkspaceStore.setState({ runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  const runtime = runtimeMock()
+  let release!: (stats: any) => void
+  runtime.getSessionStatistics.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  const pending = controller.getSessionStatistics('session-a')
+  runtime.resync({ sessionId: 'session-a' })
+  release({ cost: 999 })
+  await pending
+  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']).toBeUndefined()
+})
+
+it('refreshes statistics on restoration, compaction and model changes instead of token deltas', async () => {
+  useWorkspaceStore.setState({ runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  const runtime = runtimeMock()
+  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 1 } })
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
+  for (let sequence = 1; sequence <= 20; sequence++) runtime.emit({ event: { type: 'message_update' }, observedAt: 'now', sequence, sessionId: 'session-a' })
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
+  runtime.emit({ event: { type: 'auto_compaction_end' }, observedAt: 'now', sequence: 21, sessionId: 'session-a' })
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(2)
+  await controller.setModel('session-a', 'test', 'model')
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(3)
 })
