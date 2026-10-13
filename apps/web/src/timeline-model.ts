@@ -200,7 +200,7 @@ function diagnostic(item: TimelineItem, event: TimelineEvent, reason: TimelineDi
 }
 
 function isMetadata(type: string) {
-  return type === 'model_change' || type === 'thinking_level_change' || type === 'thinking_level_changed' || type.startsWith('compaction') || type === 'turn_start' || type === 'turn_end' || type === 'agent_start' || type === 'agent_end' || type === 'agent_settled' || type === 'aborted'
+  return type === 'context_edit' || type === 'model_change' || type === 'thinking_level_change' || type === 'thinking_level_changed' || type.startsWith('compaction') || type === 'turn_start' || type === 'turn_end' || type === 'agent_start' || type === 'agent_end' || type === 'agent_settled' || type === 'aborted'
 }
 
 function projectEvent(item: TimelineItem, event: TimelineEvent) {

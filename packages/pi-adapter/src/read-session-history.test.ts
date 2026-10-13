@@ -150,7 +150,8 @@ describe('readPiSessionHistory', () => {
       { ...user('sibling', timestamp, 'Other branch'), parentId: 'user-1' },
       { ...user('user-3', timestamp, 'Third turn'), parentId: 'compact-1' },
       { type: 'compaction', id: 'compact-2', parentId: 'user-3', timestamp, firstKeptEntryId: 'user-3', summary: 'Second summary', tokensBefore: 100 },
-      { ...user('user-4', timestamp, 'After compaction'), parentId: 'compact-2' },
+      { type: 'context_edit', id: 'edit-1', parentId: 'compact-2', timestamp, targetId: 'user-3', replacement: null },
+      { ...user('user-4', timestamp, 'After compaction'), parentId: 'edit-1' },
     ]
     writeFileSync(sourceSessionFile, records.map((entry) => JSON.stringify(entry)).join('\n') + '\n')
     open.mockImplementation((path: string) => SessionManager.open(path, dirname(path)))
@@ -163,7 +164,8 @@ describe('readPiSessionHistory', () => {
     expect(latest.beforeCursor).toBe('user-3')
     const earlier = readPiSessionHistory({ ...options, before: latest.beforeCursor, limit: 2, revision: index.revision })
     expect(earlier.hasEarlier).toBe(false)
-    expect([...earlier.entries, ...latest.entries].map((entry) => entry.id)).toEqual(['user-1', 'user-2', 'compact-1', 'user-3', 'compact-2', 'user-4'])
+    expect([...earlier.entries, ...latest.entries].map((entry) => entry.id)).toEqual(['user-1', 'user-2', 'compact-1', 'user-3', 'compact-2', 'edit-1', 'user-4'])
+    expect(latest.entries.find((entry) => entry.id === 'edit-1')?.raw).toMatchObject({ targetId: 'user-3', replacement: null })
     expect(readFileSync(sourceSessionFile)).toEqual(before)
     records.push({ ...user('sibling-2', timestamp, 'Switched branch'), parentId: 'sibling' })
     writeFileSync(sourceSessionFile, records.map((entry) => JSON.stringify(entry)).join('\n') + '\n')

@@ -74,12 +74,13 @@ describe('timelineItems', () => {
       { id: 'unknown-1', parentId: 'user-1', raw: { id: 'unknown-1', payload: { all: 'retained' }, type: 'custom' }, timestamp: '2026-09-22T00:00:02.000Z', type: 'custom' },
       { id: 'assistant-1', parentId: 'user-1', raw: { id: 'assistant-1', message: { content: [{ text: 'answer', type: 'text' }], role: 'assistant' }, type: 'message' }, timestamp: '2026-09-22T00:00:03.000Z', type: 'message' },
       { id: 'end-1', parentId: 'user-1', raw: { id: 'end-1', type: 'agent_settled' }, timestamp: '2026-09-22T00:00:04.000Z', type: 'agent_settled' },
+      { id: 'edit-1', parentId: 'end-1', raw: { id: 'edit-1', type: 'context_edit', targetId: 'assistant-1', replacement: null }, timestamp: '2026-09-22T00:00:05.000Z', type: 'context_edit' },
     ], [], [])
 
     expect(turn).toMatchObject({ kind: 'turn', prompt: 'question' })
     expect(turn?.parts.map((part) => part.kind)).toEqual(['assistant_text'])
-    expect(turn?.diagnostics.map(diagnosticLabel)).toEqual(['未识别的 Pi 事件：custom', '运行元数据：agent_settled'])
-    expect(turn?.events.map((event) => event.id)).toEqual(['user-1', 'unknown-1', 'assistant-1', 'end-1'])
+    expect(turn?.diagnostics.map(diagnosticLabel)).toEqual(['未识别的 Pi 事件：custom', '运行元数据：agent_settled', '运行元数据：context_edit'])
+    expect(turn?.events.map((event) => event.id)).toEqual(['user-1', 'unknown-1', 'assistant-1', 'end-1', 'edit-1'])
   })
 
   it('projects persisted thinking, tool calls, and tool results into execution parts in source order', () => {
