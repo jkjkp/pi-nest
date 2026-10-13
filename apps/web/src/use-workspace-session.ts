@@ -127,7 +127,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     selectedSessionIdRef.current = selectedSessionId
   }, [selectedSessionId])
 
-  const sourceProjects = useMemo(() => groupSessionsByProject(sessions), [sessions])
+  const sourceProjects = useMemo(() => groupSessionsByProject(sessions, navigationOrder.projectCreatedAt), [sessions, navigationOrder.projectCreatedAt])
   const orderedProjects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
   const projects = useMemo(() => orderedProjects.filter((project) => !project.cwd || !hiddenProjectCwds[project.cwd]), [hiddenProjectCwds, orderedProjects])
   const removedProjects = useMemo(() => orderedProjects.filter((project) => Boolean(project.cwd && hiddenProjectCwds[project.cwd])), [hiddenProjectCwds, orderedProjects])
@@ -144,9 +144,11 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }, [isDraft, projects, selectedSessionId, sessions.length, setSearchParams])
 
   useEffect(() => {
+    // An unloaded list must not erase the persisted drag order on startup.
+    if (!sessionsQuery.isSuccess) return
     const reconciled = reconcileNavigationOrder(navigationOrder, sourceProjects)
     if (!navigationOrdersEqual(navigationOrder, reconciled)) setNavigationOrder(reconciled)
-  }, [navigationOrder, setNavigationOrder, sourceProjects])
+  }, [navigationOrder, setNavigationOrder, sourceProjects, sessionsQuery.isSuccess])
 
   useEffect(() => {
     if (!selectedSession) return

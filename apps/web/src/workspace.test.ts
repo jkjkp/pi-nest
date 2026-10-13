@@ -71,20 +71,20 @@ describe('workspace presentation helpers', () => {
     expect(projectName('/Users/example/AIWorking')).toBe('AIWorking')
   })
 
-  it('groups sessions by full cwd without merging same-named projects', () => {
+  it('groups by full cwd and sorts projects by earliest creation and sessions by creation', () => {
     const groups = groupSessionsByProject([
-      { cwd: '/work/alpha', id: 'alpha-old', updatedAt: '2026-09-20T00:00:00.000Z' },
-      { cwd: '/elsewhere/alpha', id: 'other-alpha', updatedAt: '2026-09-21T00:00:00.000Z' },
+      { cwd: '/work/alpha', id: 'alpha-old', createdAt: '2026-09-20T00:00:00.000Z' },
+      { cwd: '/elsewhere/alpha', id: 'other-alpha', createdAt: '2026-09-21T00:00:00.000Z' },
       { id: 'unknown' },
-      { cwd: '/work/alpha', id: 'alpha-new', updatedAt: '2026-09-22T00:00:00.000Z' },
-      { cwd: '/work/beta', id: 'beta-invalid', updatedAt: 'not-a-date' },
+      { cwd: '/work/alpha', id: 'alpha-new', createdAt: '2026-09-22T00:00:00.000Z' },
+      { cwd: '/work/beta', id: 'beta-invalid', createdAt: 'not-a-date' },
     ])
 
     expect(groups).toMatchObject([
-      { key: 'cwd:/work/alpha', name: 'alpha', sessions: [{ id: 'alpha-new' }, { id: 'alpha-old' }] },
       { key: 'cwd:/elsewhere/alpha', name: 'alpha', sessions: [{ id: 'other-alpha' }] },
-      { key: 'cwd:unavailable', name: '工作目录不可用', sessions: [{ id: 'unknown' }] },
+      { key: 'cwd:/work/alpha', name: 'alpha', sessions: [{ id: 'alpha-new' }, { id: 'alpha-old' }] },
       { key: 'cwd:/work/beta', name: 'beta', sessions: [{ id: 'beta-invalid' }] },
+      { key: 'cwd:unavailable', name: '工作目录不可用', sessions: [{ id: 'unknown' }] },
     ])
     expect(projectSessionGroupKey()).toBe('cwd:unavailable')
   })
@@ -177,7 +177,7 @@ describe('workspace presentation helpers', () => {
     expect(useWorkspaceStore.getState().runs.first?.turns[0]?.completedAt).toBe('2026-09-22T00:00:26.000Z')
   })
 
-  it('reconciles persisted navigation order while appending newly discovered sessions', () => {
+  it('reconciles legacy manual order while prepending newly discovered items', () => {
     const source = [
       { key: 'cwd:/alpha', sessions: [{ id: 'new' }, { id: 'saved' }] },
       { key: 'cwd:/beta', sessions: [{ id: 'beta' }] },
@@ -191,12 +191,13 @@ describe('workspace presentation helpers', () => {
     )
 
     expect(order).toEqual({
-      projectOrder: ['cwd:/beta', 'cwd:/alpha'],
-      sessionOrderByProject: { 'cwd:/alpha': ['saved', 'new'], 'cwd:/beta': ['beta'] },
+      projectOrder: ['cwd:/alpha', 'cwd:/beta'],
+      sessionOrderByProject: { 'cwd:/alpha': ['new', 'saved'] },
+      projectCreatedAt: {},
     })
     expect(applyNavigationOrder(source, order)).toEqual([
+      { key: 'cwd:/alpha', sessions: [{ id: 'new' }, { id: 'saved' }] },
       { key: 'cwd:/beta', sessions: [{ id: 'beta' }] },
-      { key: 'cwd:/alpha', sessions: [{ id: 'saved' }, { id: 'new' }] },
     ])
   })
 

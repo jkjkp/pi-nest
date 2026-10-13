@@ -5,6 +5,7 @@ import { stripAnsiLine } from './ansi-text.js'
 export type { PiSessionSummary } from '@pi-nest/contracts'
 
 export type ProjectSessionGroup = {
+  createdAt?: string
   cwd?: string
   key: string
   name: string
@@ -39,54 +40,27 @@ export function projectSessionGroupKey(cwd?: string) {
   return cwd ? `cwd:${cwd}` : 'cwd:unavailable'
 }
 
-function updatedAtValue(updatedAt?: string) {
-  const value = updatedAt ? Date.parse(updatedAt) : Number.NaN
-  return Number.isNaN(value) ? undefined : value
+function createdAtValue(createdAt?: string) {
+  const value = createdAt ? Date.parse(createdAt) : Number.NaN
+  return Number.isNaN(value) ? Number.NEGATIVE_INFINITY : value
 }
 
-function sortByUpdatedAt(sessions: PiSessionSummary[]) {
-  return sessions
-    .map((session, index) => ({ index, session, updatedAt: updatedAtValue(session.updatedAt) }))
-    .sort((left, right) => {
-      if (left.updatedAt === undefined) return right.updatedAt === undefined ? left.index - right.index : 1
-      if (right.updatedAt === undefined) return -1
-      return right.updatedAt - left.updatedAt || left.index - right.index
-    })
-}
-
-export function groupSessionsByProject(sessions: PiSessionSummary[]): ProjectSessionGroup[] {
-  const groups = new Map<string, { firstIndex: number; group: ProjectSessionGroup }>()
-
-  sessions.forEach((session, index) => {
+export function groupSessionsByProject(sessions: PiSessionSummary[], projectCreatedAt: Record<string, string> = {}): ProjectSessionGroup[] {
+  const groups = new Map<string, ProjectSessionGroup>()
+  for (const session of sessions) {
     const key = projectSessionGroupKey(session.cwd)
     const existing = groups.get(key)
-    if (existing) {
-      existing.group.sessions.push(session)
-      return
-    }
-
-    groups.set(key, {
-      firstIndex: index,
-      group: {
-        cwd: session.cwd,
-        key,
-        name: session.cwd ? projectName(session.cwd) : '工作目录不可用',
-        sessions: [session],
-      },
-    })
-  })
+    if (existing) existing.sessions.push(session)
+    else groups.set(key, { cwd: session.cwd, key, name: session.cwd ? projectName(session.cwd) : '工作目录不可用', sessions: [session] })
+  }
 
   return [...groups.values()]
-    .map(({ firstIndex, group }) => {
-      const sorted = sortByUpdatedAt(group.sessions)
-      return { firstIndex, group: { ...group, sessions: sorted.map(({ session }) => session) }, latest: sorted[0]?.updatedAt }
+    .map((group) => {
+      const sorted = [...group.sessions].sort((left, right) => createdAtValue(right.createdAt) - createdAtValue(left.createdAt) || left.id.localeCompare(right.id))
+      const earliest = sorted.filter((session) => Number.isFinite(createdAtValue(session.createdAt))).at(-1)?.createdAt
+      return { ...group, createdAt: projectCreatedAt[group.key] ?? earliest, sessions: sorted }
     })
-    .sort((left, right) => {
-      if (left.latest === undefined) return right.latest === undefined ? left.firstIndex - right.firstIndex : 1
-      if (right.latest === undefined) return -1
-      return right.latest - left.latest || left.firstIndex - right.firstIndex
-    })
-    .map(({ group }) => group)
+    .sort((left, right) => createdAtValue(right.createdAt) - createdAtValue(left.createdAt) || left.key.localeCompare(right.key))
 }
 
 export function filterProjectsByQuery(projects: ProjectSessionGroup[], value: string) {
