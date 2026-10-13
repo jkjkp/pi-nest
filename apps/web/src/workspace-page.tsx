@@ -1,6 +1,6 @@
 import { SessionStatistics } from './session-statistics.js'
 import { type CSSProperties, useEffect, useState } from 'react'
-import { ArrowDown, CircleX, Folder, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
+import { ArrowDown, CircleX, Folder, LoaderCircle, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
 import { Link } from 'react-router'
 
 import { Button } from '@/components/ui/button'
@@ -33,6 +33,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
   const runtimeStatistics = useWorkspaceStore((state) => state.runtimeStatistics[selectedSessionId])
+  const runtimeLoading = runtimeStates[selectedSessionId]?.lifecycle === 'loading'
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
   const inspectorWidth = useWorkspaceStore((state) => state.inspectorWidth)
   const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
@@ -159,6 +160,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {(selectedSession || draftProject) && <Folder aria-hidden="true" className="size-[18px] shrink-0 text-muted-foreground" />}
               <h1 className="min-w-0 truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : draftProject ? `新对话 · ${draftProject.name}` : '选择一个会话'}</h1>
+              {selectedSession && <span className="inline-flex size-4 shrink-0" role={runtimeLoading ? 'status' : undefined} aria-label={runtimeLoading ? '正在加载 Pi 运行时' : undefined}>{runtimeLoading && <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />}</span>}
             </div>
             {selectedSession && <Button asChild className="shrink-0" size="sm" variant="ghost"><Link to={`/settings?session=${encodeURIComponent(selectedSession.id)}`}><Settings aria-hidden="true" />设置</Link></Button>}
           </header>

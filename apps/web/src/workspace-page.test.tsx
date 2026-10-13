@@ -1,10 +1,16 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { WorkspacePage } from './workspace-page.js'
 import { useWorkspaceStore } from './workspace-store.js'
+
+vi.mock('./workspace-store.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./workspace-store.js')>()
+  const store = original.useWorkspaceStore
+  return { ...original, useWorkspaceStore: Object.assign((selector: (state: ReturnType<typeof store.getState>) => unknown) => selector(store.getState()), store) }
+})
 
 const sessionRuns = {
   adopt: () => undefined,
@@ -48,4 +54,14 @@ describe('WorkspacePage new conversation draft', () => {
     expect(markup).toContain('pb-[calc(var(--composer-height)+3rem)]')
     expect(markup).not.toContain('shadow-[0_16px_32px')
   })
+})
+
+it('keeps runtime loading feedback in the header instead of inserting a timeline paragraph', () => {
+  useWorkspaceStore.setState({ hiddenProjectCwds: {}, runs: {}, watchStates: {}, runtimeStates: { 'session-1': { lifecycle: 'loading', revision: 1 } }, runtimeDetails: {}, runtimeStatistics: {} })
+  const queryClient = new QueryClient()
+  queryClient.setQueryData(['sessions'], [{ cwd: '/work/pi-nest', id: 'session-1', name: 'Loading session' }])
+  const markup = renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-1']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
+  expect(markup).toContain('aria-label="正在加载 Pi 运行时"')
+  expect(markup).not.toContain('>正在加载 Pi 运行时<')
+  queryClient.clear()
 })

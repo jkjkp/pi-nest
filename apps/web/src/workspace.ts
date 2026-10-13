@@ -131,7 +131,6 @@ export function extensionWidgetText(widgets: Record<string, string[]> | undefine
 
 export function runtimeStatusLabel(runtime: Omit<RuntimeStatus, 'sessionId'> | undefined, localRunActive: boolean) {
   if (!runtime || localRunActive) return undefined
-  if (runtime.lifecycle === 'loading') return '正在加载 Pi 运行时'
   if (runtime.lifecycle === 'active') return 'Pi 正在运行'
   if (runtime.lifecycle === 'failed') return runtime.error ? `Pi 运行时失败：${stripAnsiLine(runtime.error)}` : 'Pi 运行时失败'
   return undefined

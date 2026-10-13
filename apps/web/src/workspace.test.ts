@@ -46,6 +46,7 @@ describe('workspace presentation helpers', () => {
 
   it('only exposes non-silent server lifecycle state when no local turn is active', () => {
     expect(runtimeStatusLabel({ lifecycle: 'idle', revision: 1 }, false)).toBeUndefined()
+    expect(runtimeStatusLabel({ lifecycle: 'loading', revision: 2 }, false)).toBeUndefined()
     expect(runtimeStatusLabel({ lifecycle: 'active', revision: 2 }, true)).toBeUndefined()
     expect(runtimeStatusLabel({ lifecycle: 'active', revision: 2 }, false)).toBe('Pi 正在运行')
     expect(runtimeStatusLabel({ error: 'broken', lifecycle: 'failed', revision: 3 }, false)).toBe('Pi 运行时失败：broken')
