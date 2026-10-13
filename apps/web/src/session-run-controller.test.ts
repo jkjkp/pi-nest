@@ -44,6 +44,23 @@ describe('session run controller', () => {
   beforeEach(() => useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {}, extensionStatuses: {}, extensionWidgets: {}, drafts: {} }))
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
+  it('buffers a burst of deltas without losing order and flushes before tool execution and settlement', async () => {
+    vi.useFakeTimers()
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ sessionId: 'session-a', prompt: 'stream' })
+    await tick()
+    for (let sequence = 1; sequence <= 100; sequence++) runtime.emit({ sessionId: 'session-a', runId: 'run-1', turnId: 'turn-1', sequence, observedAt: 'now', event: { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: `${sequence}` } } })
+    expect(useWorkspaceStore.getState().runs['session-a']?.turns[0]?.events).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(32)
+    expect(useWorkspaceStore.getState().runs['session-a']?.turns[0]?.events.map((event) => event.sequence)).toEqual(Array.from({ length: 100 }, (_, index) => index + 1))
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', turnId: 'turn-1', sequence: 101, observedAt: 'now', event: { type: 'message_update' } })
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', turnId: 'turn-1', sequence: 102, observedAt: 'now', event: { type: 'tool_execution_start', toolName: 'read', toolCallId: 'tool-1' } })
+    expect(useWorkspaceStore.getState().runs['session-a']?.turns[0]?.events).toHaveLength(102)
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 103, observedAt: 'now', event: { type: 'agent_settled' } })
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+  })
+
   it('keeps the background watch through idle and records completion once', async () => {
     const runtime = runtimeMock()
     const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
@@ -198,7 +215,7 @@ describe('session run controller', () => {
     expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('awaiting_agent')
 
     runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Hi' } }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('running')
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('running'))
     runtime.emit({ event: { type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a', turnId: 'turn-1' })
     runtime.emit({ event: { type: 'turn_end' }, observedAt: 'now', runId: 'run-1', sequence: 3, sessionId: 'session-a', turnId: 'turn-1' })
     vi.setSystemTime(new Date('2026-09-22T00:00:26.000Z'))
@@ -285,7 +302,7 @@ describe('session run controller', () => {
     expect(invalidateHistory).toHaveBeenCalledWith('session-a')
   })
 
-  it('continues from a settled plan with the Pi CLI implementation prompt before Pi reports a user message', () => {
+  it('continues from a settled plan with the Pi CLI implementation prompt before Pi reports a user message', async () => {
     const runtime = runtimeMock()
     createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
     useWorkspaceStore.setState({
@@ -299,7 +316,7 @@ describe('session run controller', () => {
     runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { delta: 'Working…', type: 'thinking_delta' } }, observedAt: '2026-09-29T16:47:51.000Z', runId: 'implementation-run', sequence: 2, sessionId: 'session-a', turnId: 'turn-1' })
 
     expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'running', turns: [{ prompt: '/plan research' }, { prompt: 'Implement the plan.' }] })
-    expect(useWorkspaceStore.getState().runs['session-a']?.turns.at(-1)?.events.map((event) => event.event.type)).toEqual(['message_update'])
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().runs['session-a']?.turns.at(-1)?.events.map((event) => event.event.type)).toEqual(['message_update']))
 
     runtime.emit({ event: { messages: [{ content: [{ text: 'Implement the plan.', type: 'text' }], role: 'user' }], type: 'agent_end' }, observedAt: '2026-09-29T16:48:34.913Z', runId: 'implementation-run', sequence: 3, sessionId: 'session-a' })
     expect(useWorkspaceStore.getState().runs['session-a']?.turns.at(-1)).toMatchObject({ prompt: 'Implement the plan.' })
@@ -367,7 +384,7 @@ describe('session run controller', () => {
     expect(run?.turns[0]?.events.map((event) => event.turnId)).toEqual(['runtime-turn-1', 'runtime-turn-2'])
   })
 
-  it('rebuilds an active Turn from its snapshot and makes a runtime restart visible', () => {
+  it('rebuilds an active Turn from its snapshot and makes a runtime restart visible', async () => {
     const runtime = runtimeMock()
     createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
 
@@ -375,7 +392,7 @@ describe('session run controller', () => {
     runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { delta: 'thinking', type: 'thinking_delta' } }, observedAt: 'now', runId: 'run-1', sequence: 5, sessionId: 'session-a', turnId: 'turn-1' })
 
     expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'running', turns: [{ prompt: 'resume me', startedAt: '2026-09-27T06:12:41.000Z' }] })
-    expect(useWorkspaceStore.getState().runs['session-a']?.turns[0]?.events).toHaveLength(1)
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().runs['session-a']?.turns[0]?.events).toHaveLength(1))
     runtime.fail({ code: 'RUNTIME_RESTARTED', message: 'Pi runtime server restarted', sessionId: 'session-a' })
     expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ error: 'Pi 运行服务已重启，本轮已中断。', status: 'error' })
   })

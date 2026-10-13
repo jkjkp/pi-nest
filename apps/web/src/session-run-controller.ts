@@ -1,3 +1,4 @@
+import { unstable_batchedUpdates } from 'react-dom'
 import { stripAnsiText } from './ansi-text.js'
 import { isRuntimeConnectionError, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
 import { nativeUserMessage, type PromptStatus } from './session-run-model.js'
@@ -135,7 +136,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     })
   }
 
-  runtime.onPiEvent((event) => {
+  const handlePiEvent = (event: PiRuntimeEvent) => {
     const store = useWorkspaceStore.getState()
     const raw = event.event
     if (raw.type === 'thinking_level_changed' && typeof raw.level === 'string' && runtime.shouldApplyExtensionUi(event)) {
@@ -175,9 +176,26 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     if (event.event.aborted === true) activeRun.stopReason = 'aborted'
 
     finishRun(event.sessionId, activeRun.runId, activeRun.stopReason ?? (store.runs[event.sessionId]?.status === 'aborting' ? 'aborted' : 'stop'))
+  }
+
+  const streamEvents: PiRuntimeEvent[] = []
+  let streamTimer: ReturnType<typeof setTimeout> | undefined
+  const flushStreamEvents = () => {
+    clearTimeout(streamTimer)
+    streamTimer = undefined
+    unstable_batchedUpdates(() => {
+      for (const event of streamEvents.splice(0)) handlePiEvent(event)
+    })
+  }
+  runtime.onPiEvent((event) => {
+    streamEvents.push(event)
+    // Keep every delta, but render at most once per 32 ms burst; boundaries flush immediately.
+    if (event.event.type !== 'message_update') flushStreamEvents()
+    else streamTimer ??= setTimeout(flushStreamEvents, 32)
   })
 
   runtime.onError((error) => {
+    flushStreamEvents()
     if (error.code === 'RUNTIME_RESTARTED' && error.sessionId) {
       statisticsRequests.set(error.sessionId, (statisticsRequests.get(error.sessionId) ?? 0) + 1)
       useWorkspaceStore.getState().clearRuntimeState(error.sessionId)
@@ -213,6 +231,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   })
 
   runtime.onSessionSnapshot((snapshot) => {
+    flushStreamEvents()
     const store = useWorkspaceStore.getState()
     if ((store.runtimeStates[snapshot.sessionId]?.revision ?? -1) > snapshot.runtime.revision) return
     store.replaceExtensionUi(snapshot.sessionId, snapshot.extensionUi)
@@ -233,6 +252,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   })
 
   runtime.onRuntimeStatus((status) => {
+    flushStreamEvents()
     const store = useWorkspaceStore.getState()
     if ((store.runtimeStates[status.sessionId]?.revision ?? -1) > status.revision) return
     store.setRuntimeState(status.sessionId, status)
