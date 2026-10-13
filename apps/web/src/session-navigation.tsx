@@ -20,6 +20,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 
+import { useWorkspaceStore } from './workspace-store.js'
+import { SessionStatusIndicator } from './session-status-indicator.js'
 import { NavigationTitle } from './navigation-title.js'
 import { isRunActive, type SessionRunSummary } from './session-run-model.js'
 import { filterProjectsByQuery, type PiSessionSummary, type ProjectSessionGroup, sessionDisplayName } from './workspace.js'
@@ -379,7 +381,9 @@ function SortableSession({
     id: `session:${session.id}`,
   })
   const [menuOpen, setMenuOpen] = useState(false)
-  const status = run?.status ?? 'idle'
+  const notification = useWorkspaceStore((state) => state.sessionNotifications[session.id])
+  const unread = Boolean(notification?.completedRunId && notification.completedRunId !== notification.readRunId)
+  const status = run?.status ?? (notification?.pendingRunId ? 'running' : 'idle')
   const cannotDelete = selected || isRunActive(status) || mutationSessionId === session.id
 
   return (
@@ -396,6 +400,7 @@ function SortableSession({
             {...listeners}
           >
             <NavigationTitle className="text-sm font-medium" stopped={isDragging || menuOpen}>{sessionDisplayName(session)}</NavigationTitle>
+            <SessionStatusIndicator status={status} unread={unread} />
           </Button>
         </div>
       </ContextMenuTrigger>
