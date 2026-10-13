@@ -94,6 +94,10 @@ export class PiRuntimeRegistry {
   private readonly runtimeStartTimeoutMs: number
   private readonly maxLoadedRuntimes: number
 
+  getSessionStatistics(sessionId: string) {
+    return this.entries.get(sessionId)?.host.command({ type: 'get_session_stats' })
+  }
+
   isPromptActive(sessionId: string) {
     return this.locks.get(sessionId) === 'prompt'
   }

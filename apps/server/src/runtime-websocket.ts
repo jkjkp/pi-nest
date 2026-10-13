@@ -1,3 +1,4 @@
+import { runtimeStatisticsSchema } from './runtime-statistics.js'
 import type { RuntimeMessage, RuntimeCommand } from '@pi-nest/contracts'
 import { listPiSessions, PiRpcCommandError } from '@pi-nest/pi-adapter'
 import { z } from 'zod'
@@ -18,6 +19,7 @@ const commandSchema = z.discriminatedUnion('type', [
   z.object({ id: z.string().min(1).max(128), level: z.string().min(1).max(64), sessionId: z.string().min(1), type: z.literal('set_thinking_level') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('compact') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_runtime_state') }).strict(),
+  z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_session_stats') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_available_models') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_available_thinking_levels') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('extension_ui_response'), value: z.unknown().optional(), confirmed: z.boolean().optional(), cancelled: z.boolean().optional(), dialogId: z.string().min(1).max(256) }).strict(),
@@ -114,6 +116,14 @@ export class RuntimeWebSocketBroker {
       }
     }
 
+    if (command.data.type === 'get_session_stats') {
+      try {
+        const result = this.runtime.getSessionStatistics(command.data.sessionId)
+        if (!result) return this.error(socket, command.data.id, 'RUNTIME_NOT_LOADED', 'Pi runtime is not loaded', command.data.sessionId)
+        const response = await result
+        return this.ack(socket, command.data.id, command.data.type, command.data.sessionId, runtimeStatisticsSchema.parse(response.data))
+      } catch { return this.error(socket, command.data.id, 'COMMAND_FAILED', '无法读取会话统计，请重试。', command.data.sessionId) }
+    }
     if (command.data.type === 'get_runtime_state' || command.data.type === 'get_available_models' || command.data.type === 'get_available_thinking_levels' || command.data.type === 'set_model' || command.data.type === 'set_thinking_level' || command.data.type === 'compact') {
       const rpc = command.data.type === 'set_model'
         ? { type: 'set_model', provider: command.data.provider, modelId: command.data.modelId }

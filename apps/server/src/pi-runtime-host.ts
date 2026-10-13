@@ -1,3 +1,4 @@
+import { latestCacheHitRate } from './runtime-statistics.js'
 import type { PiRuntimeEvent, RuntimeFailureKind as PiRuntimeFailureKind } from '@pi-nest/contracts'
 import { PiRpcConnectionError, PiRpcProcess, type PiRpcProcessState } from '@pi-nest/pi-adapter'
 
@@ -217,6 +218,10 @@ export class PiRuntimeHost {
     await this.start()
     if (!this.process) throw new Error('Pi runtime process is unavailable')
     const response = await this.process.send(command) as Record<string, unknown>
+    if (command.type === 'get_session_stats') {
+      const state = stateFrom(await this.process.send({ type: 'get_state' }))
+      return { ...response, data: { ...stateFrom(response), autoCompactionEnabled: state.autoCompactionEnabled, cacheHitRate: latestCacheHitRate(this.session.sessionFile) } }
+    }
     if (command.type === 'get_state') {
       const state = stateFrom(response)
       this.model = modelFrom(state)

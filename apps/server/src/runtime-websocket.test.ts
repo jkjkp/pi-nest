@@ -18,6 +18,7 @@ function runtime() {
   return {
     abort: vi.fn().mockResolvedValue(true),
     commandWhenIdle: vi.fn<(...args: any[]) => Promise<any> | undefined>().mockResolvedValue({ data: { levels: ['low', 'high'], models: [{ id: 'model-2', name: 'Model 2', provider: 'test' }] } }),
+    getSessionStatistics: vi.fn().mockResolvedValue({ data: { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 }, cost: 0.1, contextUsage: { tokens: null, percent: null, contextWindow: 1000000 }, sessionFile: "/private/session.jsonl" } }),
     commandWhileRunning: vi.fn().mockResolvedValue({ success: true }),
     respondToExtension: vi.fn().mockResolvedValue(true),
     beginPrompt: vi.fn().mockReturnValue({ runId: 'run-1', settled: Promise.resolve({ stopReason: 'stop' }) }),
@@ -228,4 +229,21 @@ describe('RuntimeWebSocketBroker', () => {
     expect(registry.respondToExtension).toHaveBeenCalledWith('session-1', { cancelled: true, id: 'dialog-1', type: 'extension_ui_response' })
     expect(client.sent).toContainEqual({ command: 'extension_ui_response', id: 'c1', sessionId: 'session-1', type: 'ack' })
   })
+})
+
+
+it('reads safe statistics without an idle mutation and reports invalid data', async () => {
+  const registry = runtime()
+  const broker = new RuntimeWebSocketBroker(registry as never)
+  const client = socket()
+  broker.open(client)
+  await broker.message(client, JSON.stringify({ id: 'watch-stats', sessionId: 'session-1', type: 'watch' }))
+  await broker.message(client, JSON.stringify({ id: 'stats', sessionId: 'session-1', type: 'get_session_stats' }))
+  const ack = client.sent.find((message: any) => message.id === 'stats') as any
+  expect(ack).toMatchObject({ type: 'ack', command: 'get_session_stats', data: { cost: 0.1, contextUsage: { percent: null } } })
+  expect(ack.data).not.toHaveProperty('sessionFile')
+  expect(registry.commandWhenIdle).not.toHaveBeenCalled()
+  registry.getSessionStatistics.mockResolvedValueOnce({ data: { cost: -1 } } as never)
+  await broker.message(client, JSON.stringify({ id: 'invalid-stats', sessionId: 'session-1', type: 'get_session_stats' }))
+  expect(client.sent).toContainEqual(expect.objectContaining({ id: 'invalid-stats', type: 'error', code: 'COMMAND_FAILED' }))
 })

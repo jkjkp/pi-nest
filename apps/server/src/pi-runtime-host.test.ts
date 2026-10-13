@@ -135,3 +135,18 @@ describe('PiRuntimeHost', () => {
     vi.useRealTimers()
   })
 })
+
+it('reads native session totals and adds the actual auto-compaction setting', async () => {
+  const process = new FakeProcess()
+  const send = process.send.bind(process)
+  vi.spyOn(process, 'send').mockImplementation(async (command) => {
+    if (command.type === 'get_session_stats') return { data: { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 }, cost: 0.01, contextUsage: { tokens: null, percent: null, contextWindow: 1000000 } } } as never
+    const response = await send(command)
+    if (command.type === 'get_state') return { ...response, data: { ...response.data, autoCompactionEnabled: true } } as never
+    return response
+  })
+  const host = hostFor(process)
+  const response = await host.command({ type: 'get_session_stats' })
+  expect(response.data).toMatchObject({ cost: 0.01, autoCompactionEnabled: true, contextUsage: { percent: null } })
+  await host.close()
+})
