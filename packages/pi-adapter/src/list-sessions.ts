@@ -1,6 +1,7 @@
 import { SessionManager } from '@earendil-works/pi-coding-agent'
 
 export type PiSessionSummary = {
+  createdAt?: string
   id: string
   name: string | undefined
   firstMessage: string | undefined
@@ -28,6 +29,7 @@ export async function listPiSessions(): Promise<PiSessionSummary[]> {
 
     return sessions.map((session) => ({
       id: session.id,
+      createdAt: session.created.toISOString(),
       name: session.name || undefined,
       firstMessage: sessionFirstMessage(session.firstMessage),
       sessionFile: session.path,

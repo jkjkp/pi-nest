@@ -38,7 +38,7 @@ describe('Pi session mutations', () => {
       getSessionId: () => 'session-1',
     })
     create.mockReturnValue({
-      getHeader: () => ({ cwd: '/working' }),
+      getHeader: () => ({ cwd: '/working', timestamp: '2026-10-13T00:00:00.000Z' }),
       getSessionFile: () => '/pi/created.jsonl',
       getSessionId: () => 'created-session',
     })
@@ -55,9 +55,9 @@ describe('Pi session mutations', () => {
   it('creates a session bound to the requested absolute workspace', async () => {
     const { createPiSession } = await import('./index.js')
 
-    expect(createPiSession('/working')).toEqual({ cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' })
+    expect(createPiSession('/working')).toEqual({ createdAt: '2026-10-13T00:00:00.000Z', cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' })
     expect(create).toHaveBeenCalledWith('/working')
-    expect(writeFileSync).toHaveBeenCalledWith('/pi/created.jsonl', '{"cwd":"/working"}\n', { flag: 'wx', mode: 0o600 })
+    expect(writeFileSync).toHaveBeenCalledWith('/pi/created.jsonl', '{"cwd":"/working","timestamp":"2026-10-13T00:00:00.000Z"}\n', { flag: 'wx', mode: 0o600 })
     expect(() => createPiSession('relative')).toThrow('Pi workspace path must be absolute')
   })
 
@@ -67,7 +67,7 @@ describe('Pi session mutations', () => {
     const { createPiSession } = await import('./index.js')
 
     expect(() => createPiSession('/working')).toThrow('Failed to create Pi session for /working')
-    expect(writeFileSync).toHaveBeenCalledWith('/pi/created.jsonl', '{"cwd":"/working"}\n', { flag: 'wx', mode: 0o600 })
+    expect(writeFileSync).toHaveBeenCalledWith('/pi/created.jsonl', '{"cwd":"/working","timestamp":"2026-10-13T00:00:00.000Z"}\n', { flag: 'wx', mode: 0o600 })
   })
 
   it('normalizes equivalent absolute workspace paths before binding the new session', async () => {

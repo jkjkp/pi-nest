@@ -25,7 +25,7 @@ describe('listPiSessions', () => {
         firstMessage: 'First question',
         path: '/pi/sessions/session-1.jsonl',
         cwd: '',
-        modified: new Date('2026-09-20T08:00:00.000Z'),
+        created: new Date('2026-09-19T08:00:00.000Z'), modified: new Date('2026-09-20T08:00:00.000Z'),
       },
     ])
 
@@ -38,6 +38,7 @@ describe('listPiSessions', () => {
         firstMessage: 'First question',
         sessionFile: '/pi/sessions/session-1.jsonl',
         cwd: undefined,
+        createdAt: '2026-09-19T08:00:00.000Z',
         updatedAt: '2026-09-20T08:00:00.000Z',
       },
     ])
@@ -50,14 +51,14 @@ describe('listPiSessions', () => {
         path: '/pi/sessions/multiline.jsonl',
         cwd: '/work',
         firstMessage: '  fix   the\n\nsidebar   title  ',
-        modified: new Date('2026-09-20T08:00:00.000Z'),
+        created: new Date('2026-09-19T08:00:00.000Z'), modified: new Date('2026-09-20T08:00:00.000Z'),
       },
       {
         id: 'session-long',
         path: '/pi/sessions/long.jsonl',
         cwd: '/work',
         firstMessage: 'x'.repeat(200),
-        modified: new Date('2026-09-20T08:00:00.000Z'),
+        created: new Date('2026-09-19T08:00:00.000Z'), modified: new Date('2026-09-20T08:00:00.000Z'),
       },
     ])
 
@@ -71,8 +72,8 @@ describe('listPiSessions', () => {
 
   it('treats empty and placeholder first messages as absent', async () => {
     listAll.mockResolvedValue([
-      { id: 'empty', path: '/pi/empty.jsonl', cwd: '/work', firstMessage: '   ', modified: new Date() },
-      { id: 'placeholder', path: '/pi/none.jsonl', cwd: '/work', firstMessage: '(no messages)', modified: new Date() },
+      { id: 'empty', path: '/pi/empty.jsonl', cwd: '/work', firstMessage: '   ', created: new Date('2026-09-19T08:00:00.000Z'), modified: new Date() },
+      { id: 'placeholder', path: '/pi/none.jsonl', cwd: '/work', firstMessage: '(no messages)', created: new Date('2026-09-19T08:00:00.000Z'), modified: new Date() },
     ])
 
     const { listPiSessions } = await import('./index.js')

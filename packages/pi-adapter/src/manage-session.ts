@@ -17,6 +17,7 @@ export type PiDeletedSession = {
 }
 
 export type PiCreatedSession = {
+  createdAt: string
   cwd: string
   id: string
   sessionFile: string
@@ -90,7 +91,7 @@ export function createPiSession(cwd: string): PiCreatedSession {
     // The Pi SDK defers its first write until a user or assistant message. Seed its own
     // header so the RPC process opens this exact native session instead of creating another ID.
     writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, { flag: 'wx', mode: 0o600 })
-    return { cwd: expectedCwd, id, sessionFile }
+    return { createdAt: header.timestamp, cwd: expectedCwd, id, sessionFile }
   } catch (cause) {
     throw new Error(`Failed to create Pi session for ${expectedCwd}`, { cause })
   }
