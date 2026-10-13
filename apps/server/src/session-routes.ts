@@ -80,7 +80,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
         const sessions = await listPiSessions()
 
         return context.json({
-          sessions: sessions.map(({ id, cwd, name, firstMessage, updatedAt }) => ({ id, cwd, name, firstMessage, updatedAt })),
+          sessions: sessions.map(({ id, cwd, name, firstMessage, createdAt, updatedAt }) => ({ id, cwd, name, firstMessage, createdAt, updatedAt })),
         } satisfies PiSessionsResponse)
       } catch {
         return context.json({ error: 'Failed to list Pi sessions' }, 500)
@@ -106,6 +106,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
         await prompt.accepted
         return context.json({
           session: {
+            createdAt: created.createdAt,
             cwd: created.cwd,
             firstMessage: parsed.data.prompt.replace(/\s+/g, ' ').trim(),
             id: created.id,

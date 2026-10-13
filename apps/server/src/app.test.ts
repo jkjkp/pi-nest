@@ -28,7 +28,7 @@ vi.mock('@pi-nest/pi-adapter', () => ({
 }))
 
 const nativeSession = {
-  cwd: '/working', firstMessage: 'Original question', id: 'session-1', name: 'Existing session',
+  createdAt: '2026-09-19T00:00:00.000Z', cwd: '/working', firstMessage: 'Original question', id: 'session-1', name: 'Existing session',
   sessionFile: '/pi/session.jsonl', updatedAt: '2026-09-21T00:00:00.000Z',
 }
 function runtimeMock() {
@@ -51,7 +51,7 @@ describe('Pi Nest API', () => {
     listPiSessions.mockResolvedValue([nativeSession])
     readPiSessionHistory.mockReturnValue({ entries: [], hasEarlier: false, revision: 'a'.repeat(64) })
     readPiSessionTurnIndex.mockReturnValue({ entries: [], revision: 'a'.repeat(64) })
-    createPiSession.mockReturnValue({ cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' })
+    createPiSession.mockReturnValue({ createdAt: '2026-10-13T00:00:00.000Z', cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' })
     deletePiSession.mockResolvedValue({ method: 'trash' })
     revealPiWorkspace.mockResolvedValue(undefined)
   })
@@ -63,7 +63,7 @@ describe('Pi Nest API', () => {
     await expect(health.json()).resolves.toEqual({ status: 'ok' })
     const response = await app().request('/api/sessions')
     await expect(response.json()).resolves.toEqual({
-      sessions: [{ cwd: '/working', firstMessage: 'Original question', id: 'session-1', name: 'Existing session', updatedAt: nativeSession.updatedAt }],
+      sessions: [{ createdAt: '2026-09-19T00:00:00.000Z', cwd: '/working', firstMessage: 'Original question', id: 'session-1', name: 'Existing session', updatedAt: nativeSession.updatedAt }],
     })
   })
 
@@ -140,8 +140,8 @@ describe('Pi Nest API', () => {
 
     expect(response.status).toBe(201)
     expect(createPiSession).toHaveBeenCalledWith('/working')
-    expect(runtime.beginPrompt).toHaveBeenCalledWith({ cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' }, 'First prompt')
-    await expect(response.json()).resolves.toMatchObject({ session: { cwd: '/working', firstMessage: 'First prompt', id: 'created-session' } })
+    expect(runtime.beginPrompt).toHaveBeenCalledWith({ createdAt: '2026-10-13T00:00:00.000Z', cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' }, 'First prompt')
+    await expect(response.json()).resolves.toMatchObject({ session: { createdAt: '2026-10-13T00:00:00.000Z', cwd: '/working', firstMessage: 'First prompt', id: 'created-session' } })
   })
 
   it('rolls back an unadmitted first prompt without exposing an empty session', async () => {
