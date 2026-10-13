@@ -16,7 +16,14 @@ const unavailableStorage = {
 
 export type RuntimeStatisticsState = { data?: PiRuntimeStatistics; error?: string; loading?: boolean }
 
+type SessionNotification = { pendingRunId?: string; completedRunId?: string; readRunId?: string }
+
 type WorkspaceState = {
+  sessionNotifications: Record<string, SessionNotification>
+  trackPendingRun: (sessionId: string, runId: string) => void
+  finishNotification: (sessionId: string, runId: string, unread: boolean, successful: boolean) => void
+  markSessionRead: (sessionId: string, runId: string) => void
+  removeSessionNotification: (sessionId: string) => void
   collapsedProjectKeys: Record<string, boolean>
   drafts: Record<string, string>
   extensionStatuses: Record<string, Record<string, string>>
@@ -63,6 +70,29 @@ type WorkspaceState = {
 
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist((set) => ({
+  sessionNotifications: {},
+  trackPendingRun: (sessionId, runId) => set((state) => {
+    const current = state.sessionNotifications[sessionId] ?? {}
+    if (current.completedRunId === runId || current.pendingRunId === runId) return state
+    return { sessionNotifications: { ...state.sessionNotifications, [sessionId]: { ...current, pendingRunId: runId } } }
+  }),
+  finishNotification: (sessionId, runId, unread, successful) => set((state) => {
+    const current = state.sessionNotifications[sessionId] ?? {}
+    if (current.pendingRunId !== runId) return state
+    return { sessionNotifications: { ...state.sessionNotifications, [sessionId]: {
+      ...current, pendingRunId: undefined,
+      ...(successful ? { completedRunId: runId, readRunId: unread ? current.readRunId : runId } : {}),
+    } } }
+  }),
+  markSessionRead: (sessionId, runId) => set((state) => {
+    const current = state.sessionNotifications[sessionId]
+    if (!current || current.completedRunId !== runId || current.readRunId === runId) return state
+    return { sessionNotifications: { ...state.sessionNotifications, [sessionId]: { ...current, readRunId: runId } } }
+  }),
+  removeSessionNotification: (sessionId) => set((state) => {
+    const { [sessionId]: _removed, ...sessionNotifications } = state.sessionNotifications
+    return { sessionNotifications }
+  }),
   collapsedProjectKeys: {},
   drafts: {},
   extensionStatuses: {},
@@ -269,7 +299,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
       storage: createJSONStorage(() => (typeof window === 'undefined' ? unavailableStorage : window.localStorage)),
     },
   ),

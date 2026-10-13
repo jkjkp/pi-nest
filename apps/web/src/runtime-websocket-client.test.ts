@@ -160,6 +160,7 @@ describe('RuntimeWebSocketClient', () => {
     await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
     socket.receive({
       atSequence: 3,
+      completedRun: { runId: 'finished', stopReason: 'error' },
       extensionUi: { freshness: 'known', statuses: { agent: 'fresh' }, widgets: { todo: ['one'] } },
       runtime: { lifecycle: 'active', revision: 2 },
       sessionId: 'session-a',
@@ -171,6 +172,9 @@ describe('RuntimeWebSocketClient', () => {
     socket.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
     await watch
     expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]).toMatchObject({ completedRun: { runId: 'finished', stopReason: 'error' } })
+    socket.receive({ type: 'session_snapshot', sessionId: 'session-a', atSequence: 3, completedRun: { runId: 42, stopReason: null }, extensionUi: { freshness: 'known', statuses: {}, widgets: {} }, runtime: { lifecycle: 'active', revision: 2 } })
+    expect(snapshots.at(-1)).not.toHaveProperty('completedRun')
     expect(statuses).toEqual([{ lifecycle: 'active', revision: 2, sessionId: 'session-a' }])
     expect(events).toEqual([])
     expect(client.watchedSessions()).toEqual([{ after: 3, role: 'foreground', sessionId: 'session-a' }])

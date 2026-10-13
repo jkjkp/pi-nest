@@ -272,10 +272,13 @@ export class RuntimeWebSocketClient {
     const activeTurn = message.activeTurn && typeof message.activeTurn.runId === 'string' && typeof message.activeTurn.startedAt === 'string' && (message.activeTurn.prompt === undefined || typeof message.activeTurn.prompt === 'string')
       ? { ...(typeof message.activeTurn.prompt === 'string' ? { prompt: message.activeTurn.prompt } : {}), runId: message.activeTurn.runId, startedAt: message.activeTurn.startedAt, ...(message.activeTurn.waitingForExtension === true ? { waitingForExtension: true as const } : {}) }
       : undefined
+    const completedRun = message.completedRun && typeof message.completedRun.runId === 'string' && message.completedRun.runId && typeof message.completedRun.stopReason === 'string'
+      ? { runId: message.completedRun.runId, stopReason: message.completedRun.stopReason } : undefined
     this.projectionFloors.set(message.sessionId, message.atSequence)
     this.uiFreshness.set(message.sessionId, message.extensionUi.freshness)
     const snapshot: SessionSnapshot = {
       ...(activeTurn ? { activeTurn } : {}),
+      ...(completedRun ? { completedRun } : {}),
       atSequence: message.atSequence,
       extensionUi: {
         freshness: message.extensionUi.freshness,

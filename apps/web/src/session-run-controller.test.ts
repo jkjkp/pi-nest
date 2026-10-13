@@ -41,8 +41,78 @@ function runtimeMock() {
 async function tick() { for (let index = 0; index < 12; index++) await Promise.resolve() }
 
 describe('session run controller', () => {
-  beforeEach(() => useWorkspaceStore.setState({ runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {}, extensionStatuses: {}, extensionWidgets: {}, drafts: {} }))
+  beforeEach(() => useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {}, extensionStatuses: {}, extensionWidgets: {}, drafts: {} }))
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+
+  it('keeps the background watch through idle and records completion once', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.openSession('session-a')
+    controller.start({ sessionId: 'session-a', prompt: 'hello' })
+    await tick()
+    controller.openSession('session-b')
+    await tick()
+    runtime.status({ sessionId: 'session-a', lifecycle: 'idle', revision: 2 })
+    expect(runtime.unwatch).not.toHaveBeenCalledWith('session-a')
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'agent_settled' } })
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']).toMatchObject({ completedRunId: 'run-1', readRunId: undefined, pendingRunId: undefined })
+    expect(runtime.unwatch).toHaveBeenCalledWith('session-a')
+    useWorkspaceStore.getState().markSessionRead('session-a', 'run-1')
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2 }, completedRun: { runId: 'run-1', stopReason: 'stop' } })
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'agent_start' } })
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.readRunId).toBe('run-1')
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+  })
+
+  it('recovers a known pending completion from an idle snapshot without flagging old history', () => {
+    const runtime = runtimeMock()
+    const snapshot = { sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2 }, completedRun: { runId: 'run-1', stopReason: 'stop' } }
+    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    runtime.snapshot(snapshot)
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']).toBeUndefined()
+    useWorkspaceStore.getState().trackPendingRun('session-a', 'run-1')
+    runtime.snapshot(snapshot)
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.completedRunId).toBe('run-1')
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+  })
+
+  it.each(['error', 'aborted'])('does not create an unread completion for %s', async (stopReason) => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ sessionId: 'session-a', prompt: 'hello' })
+    await tick()
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'message_end', message: { role: 'assistant', stopReason } } })
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 2, observedAt: 'now', event: { type: 'agent_settled' } })
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe(stopReason)
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.completedRunId).toBeUndefined()
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.pendingRunId).toBeUndefined()
+  })
+
+  it.each(['visible', 'hidden'])('marks foreground completion according to document visibility: %s', async (visibilityState) => {
+    vi.stubGlobal('document', { visibilityState })
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.openSession('session-a')
+    controller.start({ sessionId: 'session-a', prompt: 'hello' })
+    await tick()
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'agent_settled' } })
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.readRunId).toBe(visibilityState === 'visible' ? 'run-1' : undefined)
+  })
+
+  it('does not let an old read acknowledgement clear a newer reply', () => {
+    const store = useWorkspaceStore.getState()
+    store.trackPendingRun('session-a', 'one')
+    store.finishNotification('session-a', 'one', true, true)
+    store.trackPendingRun('session-a', 'two')
+    store.finishNotification('session-a', 'two', true, true)
+    store.markSessionRead('session-a', 'one')
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.readRunId).toBeUndefined()
+    store.markSessionRead('session-a', 'two')
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.readRunId).toBe('two')
+    store.removeSessionNotification('session-a')
+    expect(useWorkspaceStore.getState().sessionNotifications['session-a']).toBeUndefined()
+  })
 
   it('restores the active model from snapshots and ignores older revisions without RPC reads', () => {
     const runtime = runtimeMock()
@@ -391,7 +461,7 @@ describe('session run controller', () => {
 
 
 it('ends a rejected model call as an error and allows the next prompt to succeed', async () => {
-  useWorkspaceStore.setState({ runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {} })
+  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {} })
   const runtime = runtimeMock()
   const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
   expect(controller.start({ prompt: 'first', sessionId: 'session-a' })).toBe(true)
@@ -408,7 +478,7 @@ it('ends a rejected model call as an error and allows the next prompt to succeed
 })
 
 it('isolates session statistics, rejects superseded responses and survives failed reads', async () => {
-  useWorkspaceStore.setState({ runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
   let release!: (stats: any) => void
   runtime.getSessionStatistics.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
@@ -429,7 +499,7 @@ it('isolates session statistics, rejects superseded responses and survives faile
 })
 
 it('does not resurrect statistics from a request interrupted by resync', async () => {
-  useWorkspaceStore.setState({ runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
   let release!: (stats: any) => void
   runtime.getSessionStatistics.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
@@ -442,7 +512,7 @@ it('does not resurrect statistics from a request interrupted by resync', async (
 })
 
 it('refreshes statistics on restoration, compaction and model changes instead of token deltas', async () => {
-  useWorkspaceStore.setState({ runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
   const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
   runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 1 } })

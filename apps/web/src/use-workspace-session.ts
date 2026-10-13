@@ -105,12 +105,23 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     queryFn: ({ pageParam }) => fetchSessionHistory(selectedSessionId, pageParam.before, pageParam.revision),
     retry: false,
   })
+  const completedRunId = useWorkspaceStore((state) => state.sessionNotifications[selectedSessionId]?.completedRunId)
   const history = useMemo(() => mergeSessionHistoryPages(historyQuery.data?.pages), [historyQuery.data?.pages])
   const turnIndexQuery = useQuery({ enabled: historyEnabled && Boolean(history?.revision), queryKey: sessionTurnIndexQueryKey(selectedSessionId, history?.revision), queryFn: () => fetchSessionTurnIndex(selectedSessionId, history!.revision), retry: false })
   const historyJumpSequence = useRef(0)
   const historyRevisionRef = useRef(history?.revision)
   useEffect(() => { historyRevisionRef.current = history?.revision }, [history?.revision])
   const historyTurnCount = historyUserTurnCount(history?.entries)
+
+  useEffect(() => {
+    if (!selectedSessionId || watchStates[selectedSessionId] !== 'ready' || !completedRunId || !historyQuery.isSuccess || historyQuery.isFetching || historyQuery.isError) return
+    const markRead = () => {
+      if (document.visibilityState === 'visible') useWorkspaceStore.getState().markSessionRead(selectedSessionId, completedRunId)
+    }
+    markRead()
+    document.addEventListener('visibilitychange', markRead)
+    return () => document.removeEventListener('visibilitychange', markRead)
+  }, [selectedSessionId, watchStates, completedRunId, historyQuery.isSuccess, historyQuery.isFetching, historyQuery.isError])
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId
@@ -342,6 +353,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     setMutatingSessionId(sessionId)
     try {
       await deleteSession(sessionId)
+      useWorkspaceStore.getState().removeSessionNotification(sessionId)
       queryClient.removeQueries({ queryKey: sessionHistoryQueryKey(sessionId) })
       queryClient.removeQueries({ queryKey: ['session-history-page', sessionId] })
       await sessionsQuery.refetch()

@@ -92,8 +92,31 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     }, 4_000))
   }
 
+  function finishRun(sessionId: string, runId: string | undefined, stopReason: string) {
+    const store = useWorkspaceStore.getState()
+    // A fresh watch of old history must not create an unread reply.
+    if (runId && store.sessionNotifications[sessionId]?.pendingRunId !== runId) return
+    clearAwaitingAgentCheck(sessionId)
+    activeRuns.delete(sessionId)
+    store.completeLatestRunTurn(sessionId, new Date().toISOString())
+    store.clearPendingInputs(sessionId)
+    store.updateRun(sessionId, { status: stopReason === 'error' ? 'error' : stopReason === 'aborted' ? 'aborted' : 'complete', stopReason })
+    const visible = foregroundSessionId === sessionId && (typeof document === 'undefined' || document.visibilityState === 'visible')
+    if (runId) store.finishNotification(sessionId, runId, !visible, stopReason !== 'error' && stopReason !== 'aborted')
+    void getSessionStatistics(sessionId)
+    void invalidateHistory(sessionId)
+    if (runtime.watchedSessions().some((watch) => watch.sessionId === sessionId && watch.role === 'background')) void runtime.unwatch(sessionId)
+  }
+
+  function cancelNotification(sessionId: string) {
+    const store = useWorkspaceStore.getState()
+    const runId = store.sessionNotifications[sessionId]?.pendingRunId
+    if (runId) store.finishNotification(sessionId, runId, false, false)
+  }
+
   function fail(sessionId: string, message: string) {
     clearAwaitingAgentCheck(sessionId)
+    cancelNotification(sessionId)
     if (!activeRuns.delete(sessionId)) return
     useWorkspaceStore.getState().updateRun(sessionId, { error: message, status: 'error' })
     void invalidateHistory(sessionId)
@@ -103,6 +126,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     const completedTurns = useWorkspaceStore.getState().runs[sessionId]?.turns.filter((turn) => turn.completedAt) ?? []
     const submittedAt = startedAt ?? new Date().toISOString()
     activeRuns.set(sessionId, { awaitingRunId, runId, stopReason: undefined })
+    if (runId) useWorkspaceStore.getState().trackPendingRun(sessionId, runId)
     useWorkspaceStore.getState().setRun(sessionId, {
       status,
       systemEvents: [],
@@ -127,7 +151,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     }
     if (raw.type === 'auto_compaction_end' && runtime.shouldApplyExtensionUi(event)) void getSessionStatistics(event.sessionId)
     let activeRun = activeRuns.get(event.sessionId)
-    if (!activeRun && event.event.type === 'agent_start' && event.runId) {
+    if (!activeRun && event.event.type === 'agent_start' && event.runId && store.sessionNotifications[event.sessionId]?.completedRunId !== event.runId) {
       clearAwaitingAgentCheck(event.sessionId)
       activeRun = { awaitingRunId: false, runId: event.runId, stopReason: undefined }
       activeRuns.set(event.sessionId, activeRun)
@@ -136,6 +160,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     if (!activeRun) return
     if (activeRun.awaitingRunId || (activeRun.runId !== undefined && event.runId !== activeRun.runId)) return
     if (activeRun.runId === undefined && event.runId !== undefined) activeRun.runId = event.runId
+    if (activeRun.runId) store.trackPendingRun(event.sessionId, activeRun.runId)
     if (startsExecution(event)) {
       clearAwaitingAgentCheck(event.sessionId)
       if (Number.isFinite(Date.parse(event.observedAt))) useWorkspaceStore.getState().markRunExecutionStarted(event.sessionId, event.observedAt)
@@ -148,18 +173,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     activeRun.stopReason = assistantStopReason(event) ?? activeRun.stopReason
     if (event.event.type !== 'agent_settled') return
 
-    clearAwaitingAgentCheck(event.sessionId)
-    activeRuns.delete(event.sessionId)
-    // Both timestamps are captured in this browser, so a completed duration never
-    // switches to the daemon/history clock when the persisted entry arrives.
-    useWorkspaceStore.getState().completeLatestRunTurn(event.sessionId, new Date().toISOString())
-    useWorkspaceStore.getState().clearPendingInputs(event.sessionId)
-    useWorkspaceStore.getState().updateRun(event.sessionId, {
-      status: activeRun.stopReason === 'error' ? 'error' : activeRun.stopReason === 'aborted' ? 'aborted' : 'complete',
-      stopReason: activeRun.stopReason ?? 'stop',
-    })
-    void getSessionStatistics(event.sessionId)
-    void invalidateHistory(event.sessionId)
+    finishRun(event.sessionId, activeRun.runId, activeRun.stopReason ?? (store.runs[event.sessionId]?.status === 'aborting' ? 'aborted' : 'stop'))
   })
 
   runtime.onError((error) => {
@@ -167,6 +181,8 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       statisticsRequests.set(error.sessionId, (statisticsRequests.get(error.sessionId) ?? 0) + 1)
       useWorkspaceStore.getState().clearRuntimeState(error.sessionId)
       activeRuns.delete(error.sessionId)
+      clearAwaitingAgentCheck(error.sessionId)
+      cancelNotification(error.sessionId)
       useWorkspaceStore.getState().updateRun(error.sessionId, { error: 'Pi 运行服务已重启，本轮已中断。', status: 'error' })
       useWorkspaceStore.getState().setWatchState(error.sessionId, 'watching')
       void invalidateHistory(error.sessionId)
@@ -203,6 +219,8 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     applyModelStatus({ ...snapshot.runtime, sessionId: snapshot.sessionId })
     if (snapshot.runtime.lifecycle === 'idle' || snapshot.runtime.lifecycle === 'active') void getSessionStatistics(snapshot.sessionId)
     useWorkspaceStore.getState().setWatchState(snapshot.sessionId, 'ready')
+    if (snapshot.completedRun) finishRun(snapshot.sessionId, snapshot.completedRun.runId, snapshot.completedRun.stopReason)
+    if (snapshot.activeTurn) store.trackPendingRun(snapshot.sessionId, snapshot.activeTurn.runId)
     if (snapshot.activeTurn && !activeRuns.has(snapshot.sessionId)) {
       const status = snapshot.activeTurn.waitingForExtension ? 'awaiting_input' : 'running'
       if (status === 'running' && snapshot.activeTurn.prompt) beginRun({ ...snapshot.activeTurn, prompt: snapshot.activeTurn.prompt, sessionId: snapshot.sessionId }, status, false, snapshot.activeTurn.runId)
@@ -229,7 +247,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       useWorkspaceStore.getState().setRun(status.sessionId, { pendingInputs: [], status: 'running', systemEvents: [], turns: [] })
     }
     if (status.lifecycle === 'failed') fail(status.sessionId, status.error ?? 'Pi runtime failed')
-    if (status.lifecycle === 'idle' && runtime.watchedSessions().some((watch) => watch.sessionId === status.sessionId && watch.role === 'background')) {
+    if (status.lifecycle === 'idle' && !activeRuns.has(status.sessionId) && !store.sessionNotifications[status.sessionId]?.pendingRunId && runtime.watchedSessions().some((watch) => watch.sessionId === status.sessionId && watch.role === 'background')) {
       void runtime.unwatch(status.sessionId)
       void invalidateHistory(status.sessionId)
     }
@@ -282,7 +300,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
         useWorkspaceStore.getState().setWatchState(sessionId, 'watching')
         if (previous && previous !== sessionId) {
           const lifecycle = useWorkspaceStore.getState().runtimeStates[previous]?.lifecycle
-          if (lifecycle === 'active' || lifecycle === 'loading') await runtime.watch(previous, 'background')
+          if (lifecycle === 'active' || lifecycle === 'loading' || activeRuns.has(previous) || useWorkspaceStore.getState().sessionNotifications[previous]?.pendingRunId) await runtime.watch(previous, 'background')
           else await runtime.unwatch(previous)
         }
         await runtime.watch(sessionId, 'foreground')
@@ -294,7 +312,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       foregroundSessionId = undefined
       if (!sessionId) return
       const lifecycle = useWorkspaceStore.getState().runtimeStates[sessionId]?.lifecycle
-      if (lifecycle === 'active' || lifecycle === 'loading') {
+      if (lifecycle === 'active' || lifecycle === 'loading' || activeRuns.has(sessionId) || useWorkspaceStore.getState().sessionNotifications[sessionId]?.pendingRunId) {
         void runtime.watch(sessionId, 'background')
       } else {
         void runtime.unwatch(sessionId)
@@ -327,6 +345,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
           if (!activeRun || typeof accepted?.runId !== 'string') throw new Error('Pi runtime did not acknowledge this prompt')
           activeRun.awaitingRunId = false
           activeRun.runId = accepted.runId
+          useWorkspaceStore.getState().trackPendingRun(sessionId, accepted.runId)
           useWorkspaceStore.getState().updateRun(sessionId, { status: 'awaiting_agent' })
           checkAwaitingAgent(sessionId, accepted.runId)
         } catch (cause) {
