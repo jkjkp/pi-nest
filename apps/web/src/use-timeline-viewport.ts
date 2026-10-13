@@ -29,6 +29,14 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
   const positionedTurn = useRef<string | undefined>(undefined)
   const previouslyScrolledSessionId = useRef(selectedSessionId)
   const scrollFrame = useRef<number | undefined>(undefined)
+  const executionTransitions = useRef(new Set<Element>())
+  const pendingFinalAnswer = useRef<string | undefined>(undefined)
+  const executionIsTransitioning = useCallback(() => {
+    for (const element of executionTransitions.current) {
+      if (!element.isConnected) executionTransitions.current.delete(element)
+    }
+    return executionTransitions.current.size > 0
+  }, [])
   const scheduleScroll = useCallback((scroll: () => void) => {
     if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current)
     scrollFrame.current = requestAnimationFrame(() => {
@@ -39,6 +47,8 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
   useLayoutEffect(() => () => {
     if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current)
     scrollFrame.current = undefined
+    executionTransitions.current.clear()
+    pendingFinalAnswer.current = undefined
   }, [selectedSessionId, scrollViewport])
   const setFollowingLatest = useCallback((value: boolean) => {
     if (followLatestRef.current === value) return
@@ -78,23 +88,25 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
 
   const scrollToFinalAnswer = useCallback((turnId: string) => {
     if (!followLatestRef.current || !scrollViewport) return
+    pendingFinalAnswer.current = turnId
     scheduleScroll(() => {
-      if (!followLatestRef.current) return
+      if (!followLatestRef.current || executionIsTransitioning()) return
       const answer = [...(messageScrollAreaRef.current?.querySelectorAll<HTMLElement>('[data-final-answer-turn-id]') ?? [])].find((element) => element.dataset.finalAnswerTurnId === turnId)
       if (!answer) return
+      pendingFinalAnswer.current = undefined
       const offset = answer.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top
       scrollViewport.scrollTo({ top: Math.max(0, scrollViewport.scrollTop + offset - 48) })
     })
-  }, [scrollViewport, scheduleScroll])
+  }, [scrollViewport, scheduleScroll, executionIsTransitioning])
 
   const followFinalAnswer = useCallback(() => {
     if (!followLatestRef.current || !scrollViewport) return
     scheduleScroll(() => {
-      if (!followLatestRef.current || navigationInProgress.current) return
+      if (!followLatestRef.current || navigationInProgress.current || executionIsTransitioning()) return
       const bottom = Math.max(0, scrollViewport.scrollHeight - scrollViewport.clientHeight)
       if (Math.abs(scrollViewport.scrollTop - bottom) > 1) scrollViewport.scrollTop = bottom
     })
-  }, [scrollViewport, scheduleScroll])
+  }, [scrollViewport, scheduleScroll, executionIsTransitioning])
 
   useEffect(() => {
     if (!scrollViewport) return
@@ -104,6 +116,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
       const resized = previousScrollHeight !== scrollViewport.scrollHeight || previousViewportHeight !== scrollViewport.clientHeight
       previousScrollHeight = scrollViewport.scrollHeight
       previousViewportHeight = scrollViewport.clientHeight
+      if (executionIsTransitioning()) return
       // Measure here; defer writes so scroll and resize callbacks cannot feed each other.
       if (resized && followLatestRef.current && !navigationInProgress.current) {
         followFinalAnswer()
@@ -139,6 +152,28 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
       setFollowingLatest(false)
       scrollViewport.scrollTo({ top: scrollViewport.scrollTop, behavior: 'instant' })
     }
+    const pauseExecutionFollow = (event: Event) => {
+      if (!(event.target instanceof Element) || !event.target.closest('[data-execution-toggle]')) return
+      setFollowingLatest(false)
+      pendingFinalAnswer.current = undefined
+      if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current)
+      scrollFrame.current = undefined
+    }
+    const handleExecutionTransition = (event: TransitionEvent) => {
+      if (!(event.target instanceof Element) || !event.target.classList.contains('execution-collapse') || event.propertyName !== 'grid-template-rows') return
+      if (event.type === 'transitionrun') {
+        executionTransitions.current.add(event.target)
+        return
+      }
+      executionTransitions.current.delete(event.target)
+      if (executionIsTransitioning()) return
+      // Wait for the virtualizer's final height measurement before repositioning.
+      scheduleScroll(() => {
+        if (executionIsTransitioning()) return
+        if (pendingFinalAnswer.current) scrollToFinalAnswer(pendingFinalAnswer.current)
+        else followFinalAnswer()
+      })
+    }
     const observer = new ResizeObserver(() => {
       if (returningToBottom.current) scheduleScroll(() => scrollViewport.scrollTo({ top: scrollViewport.scrollHeight, behavior: 'smooth' }))
       updateFollowLatest()
@@ -151,6 +186,10 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
     scrollViewport.addEventListener('keydown', interruptNavigation)
     scrollViewport.addEventListener('scroll', handleScroll, { passive: true })
     scrollViewport.addEventListener('scrollend', completeNavigation)
+    scrollViewport.addEventListener('click', pauseExecutionFollow, true)
+    scrollViewport.addEventListener('transitionrun', handleExecutionTransition)
+    scrollViewport.addEventListener('transitionend', handleExecutionTransition)
+    scrollViewport.addEventListener('transitioncancel', handleExecutionTransition)
     return () => {
       clearTimeout(navigationFallback.current)
       observer.disconnect()
@@ -160,8 +199,12 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
       scrollViewport.removeEventListener('keydown', interruptNavigation)
       scrollViewport.removeEventListener('scroll', handleScroll)
       scrollViewport.removeEventListener('scrollend', completeNavigation)
+      scrollViewport.removeEventListener('click', pauseExecutionFollow, true)
+      scrollViewport.removeEventListener('transitionrun', handleExecutionTransition)
+      scrollViewport.removeEventListener('transitionend', handleExecutionTransition)
+      scrollViewport.removeEventListener('transitioncancel', handleExecutionTransition)
     }
-  }, [scrollViewport, setFollowingLatest, followFinalAnswer, scheduleScroll])
+  }, [scrollViewport, setFollowingLatest, followFinalAnswer, scrollToFinalAnswer, scheduleScroll, executionIsTransitioning])
 
   useLayoutEffect(() => {
     const selectedSessionChanged = previouslyScrolledSessionId.current !== selectedSessionId
