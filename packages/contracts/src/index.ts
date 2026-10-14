@@ -13,6 +13,7 @@ export type RuntimeFailureKind = 'process_error' | 'process_exit' | 'protocol_er
 export type RuntimeStatus = { completedRun?: PiRuntimeSessionSnapshot['completedRun']; thinkingLevel?: string; model?: { id: string; provider: string }; error?: string; failureKind?: RuntimeFailureKind; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
 export type PiRuntimeExtensionUi = { freshness: 'known' | 'restored' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
 export type PiRuntimeSessionSnapshot = {
+  inputQueue?: { steering: string[]; followUp: string[] }
   activeTurn?: { prompt?: string; runId: string; startedAt: string; waitingForExtension?: true }
   completedRun?: { runId: string; stopReason: string }
   atSequence: number
