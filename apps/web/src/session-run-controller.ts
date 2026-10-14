@@ -28,6 +28,7 @@ export type SessionRunController = {
   setThinkingLevel: (sessionId: string, level: string) => Promise<void>
   start: (options: StartSessionRunOptions) => boolean
   steer: (sessionId: string, message: string) => Promise<void>
+  steerQueued: (sessionId: string, inputId: string) => Promise<void>
   stop: (sessionId: string) => Promise<boolean>
 }
 
@@ -416,5 +417,11 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       }
     },
     steer: (sessionId, message) => submitRunningInput(sessionId, message, 'steer'),
+    steerQueued: async (sessionId, inputId) => {
+      const inputs = useWorkspaceStore.getState().runs[sessionId]?.pendingInputs?.filter((input) => input.mode === 'follow_up') ?? []
+      const index = inputs.findIndex((input) => input.id === inputId)
+      if (index < 0 || inputs[index]!.submitting) throw new Error('排队消息已发生变化，请重试。')
+      await runtime.steerQueued(sessionId, inputs[index]!.message, index)
+    },
   }
 }

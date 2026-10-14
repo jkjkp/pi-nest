@@ -32,6 +32,7 @@ function runtimeMock() {
     onSessionSnapshot: vi.fn((listener: (snapshot: any) => void) => { snapshots.add(listener); return () => snapshots.delete(listener) }),
     prompt: vi.fn().mockResolvedValue({ runId: 'run-1' }),
     steer: vi.fn().mockResolvedValue(undefined),
+    steerQueued: vi.fn().mockResolvedValue(undefined),
     emit: (event: PiRuntimeEvent) => { for (const listener of events) listener(event) },
     fail: (error: { code?: string; message: string; sessionId?: string }) => { for (const listener of errors) listener(error) },
     snapshot: (snapshot: any) => { for (const listener of snapshots) listener({ atSequence: 0, extensionUi: { freshness: 'unknown', statuses: {}, widgets: {} }, ...snapshot }) },
@@ -352,6 +353,21 @@ describe('session run controller', () => {
     acknowledge()
     await submission
     expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toEqual([])
+  })
+
+  it('converts the selected queue entry without adding another copy', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ prompt: 'first', sessionId: 'session-a' })
+    await tick()
+    runtime.emit({ event: { type: 'queue_update', steering: [], followUp: ['later', 'next'] }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a' })
+    const chosen = useWorkspaceStore.getState().runs['session-a']!.pendingInputs![1]!
+    await controller.steerQueued('session-a', chosen.id)
+    expect(runtime.steerQueued).toHaveBeenCalledWith('session-a', 'next', 1)
+    expect(runtime.steer).not.toHaveBeenCalled()
+    runtime.emit({ event: { type: 'queue_update', steering: ['next'], followUp: ['later'] }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a' })
+    expect(useWorkspaceStore.getState().runs['session-a']!.pendingInputs!.map((input) => input.message)).toEqual(['next', 'later'])
+    await expect(controller.steerQueued('session-a', chosen.id)).rejects.toThrow('排队消息已发生变化')
   })
 
   it('uses authoritative queues for repeated text, aborted runs and reconnects', async () => {

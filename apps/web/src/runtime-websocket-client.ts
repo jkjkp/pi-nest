@@ -157,6 +157,7 @@ export class RuntimeWebSocketClient {
   abort(sessionId: string) { return this.command({ type: 'abort', sessionId }) }
   steer(sessionId: string, message: string) { return this.command({ type: 'steer', sessionId, message }) }
   followUp(sessionId: string, message: string) { return this.command({ type: 'follow_up', sessionId, message }) }
+  steerQueued(sessionId: string, message: string, index: number) { return this.command({ type: 'steer_queued', sessionId, message, index }) }
   setModel(sessionId: string, provider: string, modelId: string) { return this.command({ type: 'set_model', sessionId, modelId, provider }) }
   setThinkingLevel(sessionId: string, level: string) { return this.command({ type: 'set_thinking_level', sessionId, level }) }
   compact(sessionId: string) { return this.command({ type: 'compact', sessionId }) }
@@ -242,7 +243,7 @@ export class RuntimeWebSocketClient {
     const pending = message.id ? this.pending.get(message.id) : undefined
     if (message.id) this.pending.delete(message.id)
     pending?.reject(Object.assign(new Error(message.message), { code: message.code }))
-    if (pending?.command !== 'get_session_stats' && pending?.command !== 'steer' && pending?.command !== 'follow_up') this.notify(message)
+    if (pending?.command !== 'get_session_stats' && pending?.command !== 'steer' && pending?.command !== 'follow_up' && pending?.command !== 'steer_queued') this.notify(message)
   }
 
   private handleEvent(message: { type: 'pi_event' } & PiRuntimeEvent) {
