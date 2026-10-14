@@ -292,3 +292,28 @@ it('does not let a stale history response erase a live error after partial outpu
   ] }]
   expect(timelineItems(history, turns, [])[0]?.modelErrors).toHaveLength(1)
 })
+
+it('shows confirmed plan completion data once and prefers it to legacy presentation', () => {
+  const details = { version: 1, source: 'plan_mode_complete', plan: '# Confirmed plan\n\n1. Research\n2. Report' }
+  const events = [
+    runtime(1, { type: 'custom_message', customType: 'proposed-plan', display: true, content: 'Legacy plan' }),
+    runtime(2, { type: 'tool_execution_end', toolCallId: 'complete', result: { details } }),
+    runtime(3, { type: 'message', message: { role: 'toolResult', toolName: 'plan_mode_complete', toolCallId: 'complete', details } }),
+    runtime(4, { type: 'custom_message', customType: 'proposed-plan', display: true, content: 'Repeated legacy plan' }),
+  ]
+  const turn = { id: 'live', prompt: 'research', startedAt: events[0]!.observedAt, events }
+  const projected = timelineItems(undefined, [turn], [])[0]!
+  expect(projected.plan).toEqual({ text: details.plan, id: 'complete', source: 'completion' })
+  expect(projected.parts.filter((part) => part.kind === 'assistant_text')).toHaveLength(0)
+  const failed = timelineItems(undefined, [{ ...turn, events: [runtime(2, { type: 'tool_execution_end', isError: true, result: { details } })] }], [])[0]!
+  expect(failed.plan).toBeUndefined()
+})
+
+it('matches a stripped native plan prompt to history rather than adding a duplicate round', () => {
+  const entries = [
+    { id: 'user', parentId: null, type: 'message', timestamp: '2026-09-22T00:00:00.000Z', raw: { type: 'message', message: { role: 'user', content: 'research' } } },
+    { id: 'answer', parentId: 'user', type: 'message', timestamp: '2026-09-22T00:00:03.000Z', raw: { type: 'message', message: { role: 'assistant', content: 'Planning summary' } } },
+  ]
+  const turns = [{ id: 'pending', prompt: '/plan research', startedAt: entries[0]!.timestamp, events: [runtime(1, { type: 'message_start', message: { role: 'user', content: 'research' } })] }]
+  expect(timelineItems(entries, turns, [])).toHaveLength(1)
+})

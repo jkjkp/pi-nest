@@ -170,6 +170,7 @@ const TurnItem = memo(function TurnItem({ isRunning, item, onFinalAnswerStart, o
       {item.prompt && <UserPrompt prompt={item.prompt} startedAt={item.startedAt} />}
       <TurnExecution isRunning={isRunning} item={item} presentation={presentation} runMessage={runMessage} runStatus={runStatus} />
       {item.modelErrors?.map((error, index) => <ModelCallErrorNotice error={error} onSelectModel={onSelectModel} key={index} />)}
+      {item.plan && <section aria-label="计划正文" id={`plan-${item.id}`} className="rounded-lg border bg-card p-4"><h2 className="mb-3 text-sm font-semibold">计划已制定</h2><AssistantMarkdown source={item.plan.text} isStreaming={false} /></section>}
       <FinalAnswer isRunning={isRunning} onStart={() => onFinalAnswerStart?.(item.id)} onStream={onFinalAnswerStream} parts={presentation.finalAnswer} turnId={item.id} />
     </article>
   )

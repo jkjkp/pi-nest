@@ -87,18 +87,19 @@ function activity(part: TimelinePart, index: number): TurnActivity {
 }
 
 function createTurnPresentation(item: TimelineItem, isRunning: boolean): TurnPresentation {
-  const lastExecutionIndex = item.parts.reduce((last, part, index) => part.kind === 'assistant_text' ? last : index, -1)
-  if (lastExecutionIndex < 0) return { activities: [], finalAnswer: item.parts.filter((part): part is Extract<TimelinePart, { kind: 'assistant_text' }> => part.kind === 'assistant_text'), hasExecution: false }
+  const parts = item.plan ? item.parts.filter((part) => part.kind !== 'assistant_text' || part.text.replace(/^\*\*Proposed Plan\*\*\s*/, '').trim() !== item.plan!.text.replace(/^\*\*Proposed Plan\*\*\s*/, '').trim()) : item.parts
+  const lastExecutionIndex = parts.reduce((last, part, index) => part.kind === 'assistant_text' ? last : index, -1)
+  if (lastExecutionIndex < 0) return { activities: [], finalAnswer: parts.filter((part): part is Extract<TimelinePart, { kind: 'assistant_text' }> => part.kind === 'assistant_text'), hasExecution: false }
 
-  const finalIndexes = new Set(item.parts.flatMap((part, index) => part.kind === 'assistant_text' && index > lastExecutionIndex ? [index] : []))
+  const finalIndexes = new Set(parts.flatMap((part, index) => part.kind === 'assistant_text' && index > lastExecutionIndex ? [index] : []))
   if (!isRunning && finalIndexes.size === 0) {
-    const fallback = item.parts.reduce((last, part, index) => part.kind === 'assistant_text' ? index : last, -1)
+    const fallback = parts.reduce((last, part, index) => part.kind === 'assistant_text' ? index : last, -1)
     if (fallback >= 0) finalIndexes.add(fallback)
   }
 
   return {
-    activities: item.parts.flatMap((part, index) => part.kind === 'assistant_text' && finalIndexes.has(index) ? [] : [activity(part, index)]),
-    finalAnswer: item.parts.flatMap((part, index) => part.kind === 'assistant_text' && finalIndexes.has(index) ? [part] : []),
+    activities: parts.flatMap((part, index) => part.kind === 'assistant_text' && finalIndexes.has(index) ? [] : [activity(part, index)]),
+    finalAnswer: parts.flatMap((part, index) => part.kind === 'assistant_text' && finalIndexes.has(index) ? [part] : []),
     hasExecution: true,
   }
 }

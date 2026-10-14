@@ -179,3 +179,9 @@ it('derives phase from the newest event and prioritizes an active tool over old 
   expect(executionPhase(answering, projectTurnPresentation(answering, true), 'aborting')).toBe('正在停止…')
   expect(executionPhase(answering, projectTurnPresentation(answering, true), 'awaiting_input')).toBe('等待你的回答…')
 })
+
+it('renders a completed plan separately without duplicating its assistant echo', () => {
+  const turn = item([{ kind: 'assistant_text', text: '**Proposed Plan**\n\n# Plan\n\nResearch then report', events: [] }])
+  turn.plan = { text: '# Plan\n\nResearch then report', source: 'completion', id: 'complete' }
+  expect(projectTurnPresentation(turn, false).finalAnswer).toEqual([])
+})

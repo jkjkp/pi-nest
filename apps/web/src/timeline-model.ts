@@ -31,6 +31,7 @@ export type TimelinePart =
   | { arguments?: Record<string, unknown>; events: TimelineEvent[]; kind: 'tool'; toolCallId: string | undefined; toolName: string }
 
 export type TimelineItem = {
+  plan?: { text: string; source: 'completion' | 'custom'; id: string }
   diagnostics: TimelineDiagnostic[]
   modelErrors?: ModelCallError[]
   displayId?: string
@@ -206,6 +207,18 @@ function isMetadata(type: string) {
 function projectEvent(item: TimelineItem, event: TimelineEvent) {
   item.events.push(event)
   const type = eventType(event)
+  const native = message(event)
+  const result = native?.role === 'toolResult' ? native : type === 'tool_execution_end' ? record(event.event.result) : undefined
+  const details = record(result?.details)
+  if (event.event.isError !== true && result?.isError !== true && details?.source === 'plan_mode_complete' && details.version === 1 && typeof details.plan === 'string' && details.plan.trim()) {
+    item.plan = { text: details.plan, source: 'completion', id: typeof native?.toolCallId === 'string' ? native.toolCallId : typeof event.event.toolCallId === 'string' ? event.event.toolCallId : event.id }
+  }
+  const custom = type === 'custom_message' ? event.event : native?.role === 'custom' ? native : undefined
+  if (custom?.customType === 'proposed-plan' && custom.display !== false && item.plan?.source !== 'completion') {
+    const plan = textContent(custom.content)
+    if (plan?.trim()) item.plan = { text: plan, source: 'custom', id: event.id }
+    return
+  }
   const assistantUpdate = update(event)
   if (type === 'message_start' && message(event)?.role === 'assistant') {
     const previous = messageProjection.get(item)
@@ -298,11 +311,12 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
     const runtimeTiming = { ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }), startedAt: turn.startedAt }
     const nativeUser = turn.events.find((event) => record(event.event.message)?.role === 'user')
     const nativeId = record(nativeUser?.event.message)?.id
+    const nativePrompt = textContent(record(nativeUser?.event.message)?.content)
     const anchorIndex = historyProjection.findIndex((item) => item.id === turn.historyAnchorId)
     const persisted = historyProjection.find((item, index) => {
       if (matchedHistory.has(item.id)) return false
       if (typeof nativeId === 'string') return item.id === nativeId
-      if (item.prompt !== turn.prompt) return false
+      if (item.prompt !== (nativePrompt ?? turn.prompt)) return false
       // The submission boundary survives pagination and repeated identical prompts.
       if (turn.historyAnchorId && anchorIndex >= 0) return index > anchorIndex
       return Date.parse(item.startedAt) >= Date.parse(turn.submittedAt ?? turn.startedAt) - 2_000
@@ -313,8 +327,9 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
     if (persisted) {
       matchedHistory.add(persisted.id)
       item.modelErrors ??= persisted.modelErrors
+      item.plan ??= persisted.plan
       let savedIndex = 0
-      const covered = (item.modelErrors ?? []).every((error) => persisted.modelErrors?.some((saved) => saved.message === error.message && saved.model === error.model && saved.provider === error.provider)) && item.parts.every((part) => {
+      const covered = (!item.plan || item.plan.text === persisted.plan?.text) && (item.modelErrors ?? []).every((error) => persisted.modelErrors?.some((saved) => saved.message === error.message && saved.model === error.model && saved.provider === error.provider)) && item.parts.every((part) => {
         const index = persisted.parts.findIndex((saved, index) => {
           if (index < savedIndex) return false
           if (part.kind !== saved.kind) return false
