@@ -131,7 +131,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
       const prompt = nativeUserMessage(event)
       if (!event.turnId) {
-        if (prompt && !run.turns.at(-1)?.prompt?.trim()) {
+        if (prompt && (!run.turns.at(-1)?.prompt?.trim() || run.turns.at(-1)?.completedAt)) {
           return {
             runs: {
               ...state.runs,
@@ -148,7 +148,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       }
 
       const current = run.turns.at(-1)
-      if (!current?.prompt?.trim()) {
+      if (current?.completedAt && !prompt) {
+        return { runs: { ...state.runs, [sessionId]: { ...run, systemEvents: [...run.systemEvents, event] } } }
+      }
+      if (!current?.prompt?.trim() || (prompt && current.completedAt)) {
         if (prompt) {
           return {
             runs: {
@@ -205,7 +208,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         [sessionId]: {
           ...run,
           executionStartedAt: startedAt,
-          turns: current ? [...run.turns.slice(0, -1), { ...current, submittedAt: current.submittedAt ?? current.startedAt, startedAt }] : run.turns,
+          turns: current && !current.completedAt ? [...run.turns.slice(0, -1), { ...current, submittedAt: current.submittedAt ?? current.startedAt, startedAt }] : run.turns,
         },
       },
     }

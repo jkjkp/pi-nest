@@ -46,6 +46,26 @@ describe('session run controller', () => {
   beforeEach(() => useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {}, extensionStatuses: {}, extensionWidgets: {}, drafts: {} }))
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
+  it('keeps an extension implementation separate from its completed planning turn without a status callback', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ prompt: '/plan research', sessionId: 'session-a' })
+    await tick()
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, turnId: 'planning', observedAt: '2026-10-14T03:13:36.000Z', event: { type: 'tool_execution_end', toolCallId: 'complete', result: { details: { source: 'plan_mode_complete', version: 1, plan: 'Research then report' } } } })
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 2, observedAt: '2026-10-14T03:15:15.000Z', event: { type: 'agent_settled' } })
+    runtime.emit({ sessionId: 'session-a', runId: 'implementation', sequence: 3, observedAt: '2026-10-14T03:15:29.000Z', event: { type: 'agent_start' } })
+    runtime.emit({ sessionId: 'session-a', runId: 'implementation', sequence: 4, observedAt: '2026-10-14T03:15:29.000Z', event: { type: 'message_start', message: { role: 'user', content: 'Implement the plan.' } } })
+    runtime.emit({ sessionId: 'session-a', runId: 'implementation', sequence: 5, turnId: 'implementation', observedAt: '2026-10-14T03:16:52.000Z', event: { type: 'message_end', message: { role: 'assistant', content: 'Final report' } } })
+    runtime.emit({ sessionId: 'session-a', runId: 'implementation', sequence: 6, observedAt: '2026-10-14T03:16:52.000Z', event: { type: 'agent_settled' } })
+    const items = timelineItems(undefined, useWorkspaceStore.getState().runs['session-a']!.turns, [])
+    expect(items).toHaveLength(2)
+    expect(items[0]?.plan?.text).toBe('Research then report')
+    expect(items[0]?.parts.some((part) => part.kind === 'assistant_text' && part.text === 'Final report')).toBe(false)
+    expect(items[1]?.prompt).toBe('Implement the plan.')
+    expect(items[1]?.runtimeTiming?.startedAt).toBe('2026-10-14T03:15:29.000Z')
+    expect(items[1]?.parts.filter((part) => part.kind === 'assistant_text')).toHaveLength(1)
+  })
+
   it('keeps a plan run visible across questions, editor responses and resumed thought events', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-10-14T00:00:00.000Z'))

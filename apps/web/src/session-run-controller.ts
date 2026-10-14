@@ -156,6 +156,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       clearAwaitingAgentCheck(event.sessionId)
       activeRun = { awaitingRunId: false, runId: event.runId, stopReason: undefined }
       activeRuns.set(event.sessionId, activeRun)
+      useWorkspaceStore.getState().updateRun(event.sessionId, { executionStartedAt: undefined, stopReason: undefined })
       useWorkspaceStore.getState().promotePendingInput(event.sessionId, event.observedAt)
     }
     if (!activeRun) return

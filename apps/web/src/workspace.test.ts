@@ -231,3 +231,19 @@ describe('workspace presentation helpers', () => {
     })
   })
 })
+
+it('starts a new native user turn after completion instead of attaching implementation output to the plan', () => {
+  const startedAt = '2026-10-14T03:13:36.000Z'
+  const completedAt = '2026-10-14T03:15:15.000Z'
+  useWorkspaceStore.setState({ runs: { test: { status: 'running', executionStartedAt: startedAt, systemEvents: [], turns: [{ id: 'planning', prompt: '/plan research', startedAt, completedAt, events: [] }] } } })
+  const store = useWorkspaceStore.getState()
+  store.markRunExecutionStarted('test', '2026-10-14T03:15:29.000Z')
+  store.appendRunEvent('test', { sessionId: 'test', sequence: 1, turnId: 'implementation', observedAt: '2026-10-14T03:15:29.000Z', event: { type: 'turn_start' } })
+  store.appendRunEvent('test', { sessionId: 'test', sequence: 2, turnId: 'implementation', observedAt: '2026-10-14T03:15:29.000Z', event: { type: 'message_start', message: { role: 'user', content: 'Implement the plan.' } } })
+  store.appendRunEvent('test', { sessionId: 'test', sequence: 3, turnId: 'implementation', observedAt: '2026-10-14T03:16:52.000Z', event: { type: 'message_end', message: { role: 'assistant', content: 'Final report' } } })
+  const turns = useWorkspaceStore.getState().runs.test!.turns
+  expect(turns).toHaveLength(2)
+  expect(turns[0]).toMatchObject({ startedAt, completedAt, events: [] })
+  expect(turns[1]).toMatchObject({ prompt: 'Implement the plan.' })
+  expect(turns[1]!.events).toHaveLength(2)
+})
