@@ -189,13 +189,13 @@ export class PiRuntimeHost {
     })
 
     try {
-      const response = await process.send({ type: 'prompt', message })
-      const data = response.data as Record<string, unknown> | undefined
+      await process.send({ type: 'prompt', message })
       accept()
       const state = stateFrom(await process.send({ type: 'get_state' }))
       this.model = modelFrom(state)
       this.thinkingLevel = typeof state.thinkingLevel === 'string' ? state.thinkingLevel : undefined
-      if (state.isStreaming === true && data?.disposition !== 'handled') await settled
+      // A handled extension command can already have started its own agent turn.
+      if (state.isStreaming === true) await settled
       const finalState = stateFrom(await process.send({ type: 'get_state' }))
       this.model = modelFrom(finalState)
       this.thinkingLevel = typeof finalState.thinkingLevel === 'string' ? finalState.thinkingLevel : undefined

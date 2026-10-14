@@ -101,14 +101,14 @@ describe('PiRuntimeHost', () => {
     const send = process.send.bind(process)
     vi.spyOn(process, 'send').mockImplementation(async (command) => command.type === 'prompt'
       ? { success: true, data: { disposition: 'handled' } } as never
-      : send(command))
+      : command.type === 'get_state' ? { data: { isStreaming: false } } as never : send(command))
     const host = hostFor(process)
     await expect(host.prompt('/extension-command')).resolves.toMatchObject({ stopReason: 'stop' })
     expect(host.isRunning).toBe(false)
     await host.close()
   })
 
-  it.each(['started', 'queued'])('waits for settlement of a %s input', async (disposition) => {
+  it.each(['started', 'queued', 'handled'])('waits for settlement of a %s input', async (disposition) => {
     const process = new FakeProcess()
     const send = process.send.bind(process)
     vi.spyOn(process, 'send').mockImplementation(async (command) => command.type === 'prompt'
