@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { dialogFrom, isCustomAnswerEditor, isCustomAnswerSelection, isPlanModeLifecycleNotice, isQuestionnaireFailure, planImplementationPrompt, planActionOptions, selectResponse } from './runtime-extension-ui.js'
+import { dialogFrom, isCustomAnswerEditor, isCustomAnswerSelection, isPlanModeLifecycleNotice, isPonytailLoadedNotice, isQuestionnaireFailure, planImplementationPrompt, planActionOptions, selectResponse } from './runtime-extension-ui.js'
 
 function selectEvent(options: string[]) {
   return {
@@ -58,6 +58,17 @@ describe('RuntimeExtensionUi select mapping', () => {
   it('suppresses only the duplicated Plan-mode lifecycle notice', () => {
     expect(isPlanModeLifecycleNotice('Plan mode enabled. I will explore and plan, but not modify files.')).toBe(true)
     expect(isPlanModeLifecycleNotice('Plan mode is already active.')).toBe(false)
+  })
+
+  it('suppresses Ponytail loading success while preserving warnings, errors, and other notices', () => {
+    for (const level of ['lite', 'full', 'ultra']) {
+      expect(isPonytailLoadedNotice(`Ponytail loaded: ${level}`, 'info')).toBe(true)
+    }
+    expect(isPonytailLoadedNotice('Ponytail loaded: full', 'warning')).toBe(false)
+    expect(isPonytailLoadedNotice('Ponytail loaded: full', 'error')).toBe(false)
+    expect(isPonytailLoadedNotice('Ponytail failed to load', 'error')).toBe(false)
+    expect(isPonytailLoadedNotice('Another plugin loaded: full', 'info')).toBe(false)
+    expect(isPonytailLoadedNotice('Ponytail level changed: lite', 'info')).toBe(false)
   })
 })
 

@@ -83,6 +83,10 @@ export function isPlanModeLifecycleNotice(message: string) {
   return message === 'Plan mode enabled. I will explore and plan, but not modify files.'
 }
 
+export function isPonytailLoadedNotice(message: string, type: string) {
+  return type === 'info' && /^Ponytail loaded: (lite|full|ultra)$/.test(message)
+}
+
 /** Native Pi RPC Extension UI bridge. It keeps protocol values untouched and lets workspace render dialogs inline. */
 export function RuntimeExtensionUi({ children, runtime }: { children: React.ReactNode; runtime: RuntimeWebSocketClient }) {
   const [dialogs, setDialogs] = useState<Dialog[]>([])
@@ -159,7 +163,7 @@ export function RuntimeExtensionUi({ children, runtime }: { children: React.Reac
           }))
         } else if (!isPlanModeLifecycleNotice(message)) {
           const type = raw.notifyType === 'error' || raw.notifyType === 'warning' ? raw.notifyType : 'info'
-          setNotice({ message, type })
+          if (!isPonytailLoadedNotice(message, type)) setNotice({ message, type })
         }
       }
     })
