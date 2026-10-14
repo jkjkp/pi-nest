@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { dialogFrom, isCustomAnswerEditor, isCustomAnswerSelection, isPlanModeLifecycleNotice, isQuestionnaireFailure, planImplementationPrompt, selectResponse } from './runtime-extension-ui.js'
+import { dialogFrom, isCustomAnswerEditor, isCustomAnswerSelection, isPlanModeLifecycleNotice, isQuestionnaireFailure, planImplementationPrompt, planActionOptions, selectResponse } from './runtime-extension-ui.js'
 
 function selectEvent(options: string[]) {
   return {
@@ -98,4 +98,14 @@ it('only bridges the matching questionnaire editor in the same session and run',
   expect(isCustomAnswerEditor(question, { ...editor, runId: 'run-2' })).toBe(false)
   expect(isCustomAnswerEditor(question, { ...editor, title: '其他问题' })).toBe(false)
   expect(isCustomAnswerEditor(question, { ...editor, method: 'input' })).toBe(false)
+})
+
+it('only replaces the known plan action menu and preserves every exact RPC option', () => {
+  const options = ['Implement here', 'Start fresh and implement', 'Export plan…', 'Save for later', 'Stay in Plan mode', 'Discard plan and exit', 'Plugin-specific action']
+  const plan = dialogFrom({ ...selectEvent(options), event: { ...selectEvent(options).event, title: 'Proposed plan ready. What next? Long explanation.' } })!
+  const actions = planActionOptions(plan)!
+  expect(actions.primary.map((option) => option.rawValue)).toEqual(options.slice(0, 2))
+  expect(actions.more.map((option) => option.rawValue)).toEqual(options.slice(2))
+  expect(planActionOptions(dialogFrom(selectEvent(options))!)).toBeUndefined()
+  expect(planActionOptions({ ...plan, options: plan.options!.slice(0, 1) })).toBeUndefined()
 })

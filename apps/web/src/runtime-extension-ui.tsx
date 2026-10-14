@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useRef, useState, useCallback } f
 
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 
 import { stripAnsiLine, stripAnsiText } from './ansi-text.js'
 import { RuntimeWebSocketClient, type PiRuntimeEvent } from './runtime-websocket-client.js'
@@ -214,27 +215,61 @@ function optionParts(label: string) {
 
 type PlanPreview = { planTurnId?: string; onViewPlan?: () => void; onRetryPlan?: () => void }
 
-function ExtensionSelectCard({ dialog, reply, setValue, planTurnId, onViewPlan, onRetryPlan }: { dialog: Dialog; reply: ExtensionUi['reply']; setValue: ExtensionUi['setValue'] } & PlanPreview) {
+export function planActionOptions(dialog: Pick<Dialog, 'method' | 'title' | 'options'>) {
+  if (dialog.method !== 'select' || !dialog.title.startsWith('Proposed plan ready.')) return undefined
+  const options = dialog.options ?? []
+  const primary = options.filter((option) => option.rawValue === 'Implement here' || option.rawValue === 'Start fresh and implement')
+  if (primary.length !== 2) return undefined
+  return { primary, more: options.filter((option) => !primary.includes(option)) }
+}
+
+const planActionLabels: Record<string, string> = {
+  'Implement here': '在当前会话执行',
+  'Start fresh and implement': '新建会话执行',
+  'Export plan…': '导出计划',
+  'Export plan...': '导出计划',
+  'Save for later': '稍后保存',
+  'Stay in Plan mode': '继续规划',
+  'Discard plan and exit': '放弃计划并退出',
+}
+
+function PlanActions({ dialog, reply, planTurnId, onViewPlan, onRetryPlan }: { dialog: Dialog; reply: ExtensionUi['reply'] } & PlanPreview) {
+  const [reading, setReading] = useState(false)
+  const actions = planActionOptions(dialog)!
+  return <section aria-label="计划操作" className="mx-auto w-full max-w-[640px] space-y-2 rounded-lg border bg-card p-2 text-sm shadow-sm">
+    <div className="flex items-center justify-between gap-2"><span className="font-medium">{planTurnId ? '计划已就绪' : '计划内容待加载'}</span>{reading
+      ? <Button size="sm" variant="ghost" type="button" onClick={() => setReading(false)}>返回操作</Button>
+      : <Button size="sm" variant="ghost" type="button" onClick={() => { if (planTurnId) { setReading(true); onViewPlan?.() } else onRetryPlan?.() }}>{planTurnId ? '查看计划' : '加载计划'}</Button>}</div>
+    {!reading && <div className="flex flex-wrap items-center gap-2">{actions.primary.map((option) => <Button key={option.rawValue} disabled={dialog.submitting || !planTurnId} size="sm" type="button" variant={option.rawValue === 'Implement here' ? 'default' : 'outline'} onClick={() => void reply(dialog, { value: option.rawValue })}>{planActionLabels[option.rawValue]}</Button>)}
+      <DropdownMenu><DropdownMenuTrigger asChild><Button disabled={dialog.submitting} size="sm" type="button" variant="ghost">更多</Button></DropdownMenuTrigger><DropdownMenuContent side="top" align="end" className="max-h-[40dvh] max-w-xs overflow-y-auto">{actions.more.map((option) => <DropdownMenuItem key={option.rawValue} onSelect={() => void reply(dialog, { value: option.rawValue })}>{planActionLabels[option.displayLabel] ?? option.displayLabel}</DropdownMenuItem>)}<DropdownMenuItem onSelect={() => void reply(dialog, { cancelled: true })}>取消</DropdownMenuItem><div className="mt-1 border-t px-2 py-2 text-xs text-muted-foreground"><p className="mb-1 font-medium">操作说明</p><p className="whitespace-pre-wrap">{dialog.title}{dialog.message ? `\n${dialog.message}` : ''}</p></div></DropdownMenuContent></DropdownMenu>
+      {dialog.submitting && <span className="text-xs text-muted-foreground" role="status">提交中…</span>}
+    </div>}
+    {dialog.error && <p className="max-h-12 overflow-auto text-xs text-destructive" role="alert">{dialog.error}</p>}
+  </section>
+}
+
+function ExtensionSelectCard({ dialog, reply, setValue, planTurnId }: { dialog: Dialog; reply: ExtensionUi['reply']; setValue: ExtensionUi['setValue'] } & PlanPreview) {
+  const [collapsed, setCollapsed] = useState(false)
   const options = dialog.options ?? []
   const selectedIndex = options.findIndex((option) => option.rawValue === dialog.selectedValue)
-  const planDecision = dialog.title.startsWith('Proposed plan ready.')
-  const canSubmit = selectResponse(dialog) !== undefined && !(planDecision && !planTurnId && (dialog.selectedValue === 'Implement here' || dialog.selectedValue === 'Start fresh and implement'))
+  const canSubmit = selectResponse(dialog) !== undefined && !(dialog.title.startsWith('Proposed plan ready.') && !planTurnId && (dialog.selectedValue === 'Implement here' || dialog.selectedValue === 'Start fresh and implement'))
   function moveSelection(delta: number) {
     if (options.length === 0) return
     const next = (Math.max(selectedIndex, 0) + delta + options.length) % options.length
     setValue(dialog, options[next]!.rawValue)
   }
-  return <section aria-label={dialog.title} className="mx-auto w-full max-w-[640px] space-y-2 rounded-lg border bg-card p-3 text-sm shadow-sm" onKeyDown={(event) => {
-    if (dialog.submitting) return
+  return <section aria-label={dialog.title} data-extension-question-expanded={!collapsed} className={`mx-auto flex w-full max-w-[640px] flex-col gap-2 rounded-lg border bg-card p-3 text-sm shadow-sm ${collapsed ? '' : 'max-h-[min(35dvh,22rem)]'}`} onKeyDown={(event) => {
+    if (dialog.submitting || collapsed) return
     if (event.target !== event.currentTarget && (event.target as HTMLElement).getAttribute('role') !== 'radio') return
     if (event.key === 'ArrowDown') { event.preventDefault(); moveSelection(1) }
     else if (event.key === 'ArrowUp') { event.preventDefault(); moveSelection(-1) }
     else if (event.key === 'Escape') { event.preventDefault(); void reply(dialog, { cancelled: true }) }
     else if (event.key === 'Enter' && !event.nativeEvent.isComposing && canSubmit) { event.preventDefault(); const response = selectResponse(dialog); if (response) void reply(dialog, response) }
   }} tabIndex={0}>
-    <div className="space-y-1"><h2 className="font-semibold">{dialog.title}</h2>{dialog.message && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{dialog.message}</p>}</div>
-    {planDecision && <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span>{planTurnId ? '计划已制定，请先查看计划内容。' : '计划内容尚未加载，暂不能执行。'}</span><Button size="sm" type="button" variant="ghost" onClick={planTurnId ? onViewPlan : onRetryPlan}>{planTurnId ? '查看计划' : '重试加载'}</Button></div>}
-    <div aria-label="选项" className="max-h-[min(32vh,18rem)] space-y-1 overflow-y-auto overscroll-contain" role="radiogroup">
+    <div className="flex shrink-0 items-start justify-between gap-2"><h2 className="max-h-16 min-w-0 overflow-auto font-semibold">{collapsed ? dialog.error ? '回答提交失败' : '等待你的回答' : dialog.title}</h2><Button className="shrink-0" aria-expanded={!collapsed} size="sm" type="button" variant="ghost" onClick={() => setCollapsed(!collapsed)}>{collapsed ? '展开问题' : '收起问题'}</Button></div>
+    {!collapsed && <>
+    <div aria-label="选项" className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain" role="radiogroup">
+      {dialog.message && <p className="whitespace-pre-wrap text-xs text-muted-foreground">{dialog.message}</p>}
       {options.map((option, index) => {
         const { description, title } = optionParts(option.displayLabel)
         const selected = option.rawValue === dialog.selectedValue
@@ -253,8 +288,9 @@ function ExtensionSelectCard({ dialog, reply, setValue, planTurnId, onViewPlan, 
         </div>
       })}
     </div>
-    {dialog.error && <p className="text-sm text-destructive" role="alert">{dialog.error}</p>}
-    <div className="flex justify-end gap-2"><Button size="sm" disabled={dialog.submitting} onClick={() => void reply(dialog, { cancelled: true })} type="button" variant="ghost">取消</Button><Button size="sm" disabled={dialog.submitting || !canSubmit} onClick={() => { const response = selectResponse(dialog); if (response) void reply(dialog, response) }} type="button">{dialog.submitting ? '提交中…' : '继续'}</Button></div>
+    {dialog.error && <p className="max-h-12 shrink-0 overflow-auto text-xs text-destructive" role="alert">{dialog.error}</p>}
+    <div className="flex shrink-0 justify-end gap-2"><Button size="sm" disabled={dialog.submitting} onClick={() => void reply(dialog, { cancelled: true })} type="button" variant="ghost">取消</Button><Button size="sm" disabled={dialog.submitting || !canSubmit} onClick={() => { const response = selectResponse(dialog); if (response) void reply(dialog, response) }} type="button">{dialog.submitting ? '提交中…' : '继续'}</Button></div>
+    </>}
   </section>
 }
 
@@ -269,6 +305,7 @@ export function ExtensionUiInline({ sessionId, ...planPreview }: { sessionId: st
   if (!extensionUi || !sessionId) return null
   const dialog = extensionUi.dialogs.find((item) => item.sessionId === sessionId)
   if (!dialog) return null
+  if (planActionOptions(dialog)) return <PlanActions dialog={dialog} reply={extensionUi.reply} key={dialog.id} {...planPreview} />
   return dialog.method === 'select'
     ? <ExtensionSelectCard dialog={dialog} reply={extensionUi.reply} setValue={extensionUi.setValue} key={dialog.id} {...planPreview} />
     : <ExtensionTextCard dialog={dialog} reply={extensionUi.reply} setValue={extensionUi.setValue} key={dialog.id} />
