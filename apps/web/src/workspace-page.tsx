@@ -33,7 +33,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
     sessionsQuery, historyQuery, history, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
-    startDraft, removeProject, steerQueued, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    startDraft, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
   const runtimeStatistics = useWorkspaceStore((state) => state.runtimeStatistics[selectedSessionId])
@@ -52,7 +52,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const {
     setComposer, showScrollToBottom, scrollToBottom, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
     scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector,
-  } = useTimelineViewport({ selectedSessionId, history, activeTurn, isActive, inspectorOpen, setInspectorOpen })
+  } = useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId: currentRun?.turns.findLast((turn) => turn.steering)?.id, isActive, inspectorOpen, setInspectorOpen })
   const promptTextareaRef = useComposerTextarea(prompt)
   const promptHistory = useComposerHistory(
     selectedSessionId || (isDraft ? `draft:${draftProject?.key}` : ''),
@@ -69,7 +69,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up') {
     if ((!selectedSessionId && !isDraft) || !prompt.trim()) return
-    setFollowingLatest(true)
+    if (mode !== 'steer') setFollowingLatest(true)
     session.submitPrompt(mode)
   }
 
@@ -195,6 +195,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   onLoadEarlier={loadEarlier}
                   onFinalAnswerStart={scrollToFinalAnswer}
                   onFinalAnswerStream={followFinalAnswer}
+                  onRetrySteering={retrySteering}
                   onJumpToTurn={jumpToTurn}
                   onReadTurnPrompt={readTurnPrompt}
                   onJumpToUnloadedTurn={jumpToUnloadedTurn}
@@ -242,7 +243,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             <div className="conversation-stage">
               <div className="conversation-stage-content">
                 <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) setPendingJump({ sessionId: selectedSessionId, turnId: planTurnId }) }} onRetryPlan={retryHistory} /></div>
-                <PendingInputs inputs={currentRun?.pendingInputs ?? []} key={selectedSessionId} onSteer={steerQueued} disabled={submittingInput || status !== 'running'} />
+                <PendingInputs inputs={(currentRun?.pendingInputs ?? []).filter((input) => !currentRun?.turns.some((turn) => turn.steering?.queuedInputId === input.id && turn.steering.status !== 'failed'))} key={selectedSessionId} onSteer={steerQueued} disabled={submittingInput || status !== 'running'} />
                 <div data-slot="message-composer" className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-[#303030] sm:px-6">
               <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
               <Textarea
@@ -258,12 +259,12 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 }}
                 onKeyDown={(event) => {
                   if (promptHistory.onKeyDown(event)) return
-                  if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+                  if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.nativeEvent.isComposing) return
 
                   event.preventDefault()
-                  submitPrompt(event.altKey ? 'steer' : 'follow_up')
+                  submitPrompt(event.ctrlKey ? 'steer' : 'follow_up')
                 }}
-                placeholder={isDraft ? '随心输入…' : status === 'running' ? 'Enter 排队，Option/Alt + Enter 引导，Shift + Enter 换行' : 'Enter 发送，Shift + Enter 换行'}
+                placeholder={isDraft ? '随心输入…' : status === 'running' ? 'Enter 排队，Ctrl + Enter 引导，Shift + Enter 换行' : 'Enter 发送，Shift + Enter 换行'}
                 ref={promptTextareaRef}
                 rows={1}
                 style={{ lineHeight: '1.75rem' }}
@@ -298,7 +299,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
 export function PendingInputs({ inputs, onSteer, disabled = false }: { inputs: PendingInput[]; onSteer?: (inputId: string) => void; disabled?: boolean }) {
   const [expanded, setExpanded] = useState(false)
-  const pending = inputs.filter((input) => input.mode !== 'plan_implementation')
+  const pending = inputs.filter((input) => input.mode === 'follow_up')
   if (pending.length === 0) return null
   return <section aria-label="待处理消息" aria-live="polite" className="pointer-events-auto mb-2 rounded-xl border bg-background/95 px-3 py-2 text-xs">
     <ul className="max-h-32 space-y-1 overflow-y-auto">{(expanded ? pending : pending.slice(0, 2)).map((input) => <li className="flex min-w-0 items-center gap-2" key={input.id}><span className="shrink-0 text-muted-foreground">{input.submitting ? '正在提交' : input.mode === 'steer' ? '引导待生效' : '已排队'}</span><span className={expanded ? 'min-w-0 flex-1 whitespace-pre-wrap break-words' : 'min-w-0 flex-1 truncate'} title={input.message}>{input.message}</span>{input.mode === 'follow_up' && onSteer && <Button className="h-auto shrink-0 px-2 py-1 text-xs" disabled={disabled || input.submitting} onClick={() => onSteer(input.id)} type="button" variant="ghost">引导</Button>}</li>)}</ul>

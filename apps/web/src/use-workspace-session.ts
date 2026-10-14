@@ -8,7 +8,7 @@ import type { PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
 import { thinkingCommand } from './thinking-command.js'
 import { stripAnsiLine } from './ansi-text.js'
-import { isRunActive } from './session-run-model.js'
+import { activeRuntimeTurn, isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { createSession, deleteSession, fetchSessionHistory, fetchSessions, renameSession, revealProjectInFinder, RequestError } from './workspace-api.js'
 import { fetchSessionNavigation } from './session-navigation-query.js'
@@ -81,7 +81,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const sessions = sessionsQuery.data ?? emptySessions
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
   const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
-  const activeTurn = currentRun?.turns.at(-1)
+  const activeTurn = currentRun && activeRuntimeTurn(currentRun.turns)
   const currentModel = runtimeDetails[selectedSessionId]?.model
   const modelKey = `${currentModel?.provider}/${currentModel?.id}`
   const [thinkingModelKey, setThinkingModelKey] = useState(modelKey)
@@ -272,13 +272,14 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
       const message = prompt
       runningInputRequests.current.add(sessionId)
       setRunningInputSessions([...runningInputRequests.current])
+      if (mode === 'steer' && useWorkspaceStore.getState().drafts[sessionId] === message) setDraft(sessionId, '')
       void (async () => {
         try {
           if (mode === 'steer') await sessionRuns.steer(sessionId, message)
           else await sessionRuns.followUp(sessionId, message)
           if (useWorkspaceStore.getState().drafts[sessionId] === message) setDraft(sessionId, '')
         } catch (cause) {
-          const ended = cause instanceof Error && 'code' in cause && cause.code === 'SESSION_NOT_RUNNING' && !isRunActive(useWorkspaceStore.getState().runs[sessionId]?.status ?? 'idle')
+          const ended = mode === 'follow_up' && cause instanceof Error && 'code' in cause && cause.code === 'SESSION_NOT_RUNNING' && !isRunActive(useWorkspaceStore.getState().runs[sessionId]?.status ?? 'idle')
           if (ended && sessionRuns.start({ prompt: message, sessionId })) {
             if (useWorkspaceStore.getState().drafts[sessionId] === message) setDraft(sessionId, '')
           } else setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败', sessionId)
@@ -298,6 +299,19 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     setControlError(undefined)
     try { await sessionRuns.steerQueued(sessionId, inputId) }
     catch (cause) { setControlError(cause instanceof Error ? cause.message : '引导发送失败', sessionId) }
+    finally {
+      runningInputRequests.current.delete(sessionId)
+      setRunningInputSessions([...runningInputRequests.current])
+    }
+  }
+
+  async function retrySteering(turnId: string) {
+    const sessionId = selectedSessionId
+    if (status !== 'running' || runningInputRequests.current.has(sessionId)) return
+    runningInputRequests.current.add(sessionId)
+    setRunningInputSessions([...runningInputRequests.current])
+    try { await sessionRuns.retrySteering(sessionId, turnId) }
+    catch (cause) { setControlError(cause instanceof Error ? cause.message : '引导重试失败', sessionId) }
     finally {
       runningInputRequests.current.delete(sessionId)
       setRunningInputSessions([...runningInputRequests.current])
@@ -485,7 +499,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,
     sessionsQuery, historyQuery, history, planTurnId, turnIndexQuery, navigationNotice, retryNavigation: () => { void turnIndexQuery.refetch() }, pendingJump, setPendingJump,
-    selectSession, startDraft, removeProject, submitPrompt, steerQueued, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    selectSession, startDraft, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel,
     loadEarlier: () => { void historyQuery.fetchPreviousPage() }, retryHistory: () => { void historyQuery.refetch() },
   }

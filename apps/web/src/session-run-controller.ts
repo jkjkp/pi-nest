@@ -1,7 +1,7 @@
 import { unstable_batchedUpdates } from 'react-dom'
 import { stripAnsiText } from './ansi-text.js'
 import { isRuntimeConnectionError, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
-import { nativeUserMessage, reconcilePendingInputs, type PromptStatus } from './session-run-model.js'
+import { activeRuntimeTurn, nativeUserMessage, reconcilePendingInputs, type PromptStatus, type RuntimeTurn } from './session-run-model.js'
 import { useWorkspaceStore, type RuntimeStatisticsState } from './workspace-store.js'
 
 type SessionRunControllerOptions = {
@@ -29,6 +29,7 @@ export type SessionRunController = {
   start: (options: StartSessionRunOptions) => boolean
   steer: (sessionId: string, message: string) => Promise<void>
   steerQueued: (sessionId: string, inputId: string) => Promise<void>
+  retrySteering: (sessionId: string, turnId: string) => Promise<void>
   stop: (sessionId: string) => Promise<boolean>
 }
 
@@ -125,7 +126,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   }
 
   function beginRun({ historyAnchorId, historyTurnCount, prompt, sessionId, startedAt }: StartSessionRunOptions, status: Extract<PromptStatus, 'awaiting_agent' | 'submitted' | 'running'> = 'submitted', awaitingRunId = false, runId?: string) {
-    const completedTurns = useWorkspaceStore.getState().runs[sessionId]?.turns.filter((turn) => turn.completedAt) ?? []
+    const completedTurns = useWorkspaceStore.getState().runs[sessionId]?.turns.filter((turn) => turn.completedAt || (turn.steering && turn.steering.status !== 'applied')) ?? []
     const submittedAt = startedAt ?? new Date().toISOString()
     activeRuns.set(sessionId, { awaitingRunId, runId, stopReason: undefined })
     if (runId) useWorkspaceStore.getState().trackPendingRun(sessionId, runId)
@@ -217,7 +218,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     if (error.code === 'RESUME_GAP' && error.sessionId) {
       clearAwaitingAgentCheck(error.sessionId)
       activeRuns.delete(error.sessionId)
-      useWorkspaceStore.getState().clearRun(error.sessionId)
+      clearRunForResync(error.sessionId)
       useWorkspaceStore.getState().setWatchState(error.sessionId, 'watching')
       void invalidateHistory(error.sessionId)
       return
@@ -232,10 +233,17 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     useWorkspaceStore.getState().clearExtensionUi(message.sessionId)
     clearAwaitingAgentCheck(message.sessionId)
     activeRuns.delete(message.sessionId)
-    useWorkspaceStore.getState().clearRun(message.sessionId)
+    clearRunForResync(message.sessionId)
     useWorkspaceStore.getState().setWatchState(message.sessionId, 'watching')
     void invalidateHistory(message.sessionId)
   })
+
+  function clearRunForResync(sessionId: string) {
+    const store = useWorkspaceStore.getState()
+    const turns = store.runs[sessionId]?.turns.filter((turn) => turn.steering && turn.steering.status !== 'applied').map((turn) => ({ ...turn, steering: { ...turn.steering!, status: turn.steering!.status === 'failed' ? 'failed' as const : 'unknown' as const } })) ?? []
+    if (turns.length) store.setRun(sessionId, { turns, pendingInputs: [], status: 'idle', systemEvents: [] })
+    else store.clearRun(sessionId)
+  }
 
   runtime.onSessionSnapshot((snapshot) => {
     flushStreamEvents()
@@ -312,17 +320,45 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   }
 
   async function submitRunningInput(sessionId: string, message: string, mode: 'follow_up' | 'steer') {
+    if (mode === 'steer') return submitSteering(sessionId, message, () => runtime.steer(sessionId, message))
     const id = `pending-input:${++nextPendingInputId}`
     useWorkspaceStore.getState().appendPendingInput(sessionId, { id, message, mode, submittedAt: new Date().toISOString(), submitting: true })
     try {
-      if (mode === 'follow_up') await runtime.followUp(sessionId, message)
-      else await runtime.steer(sessionId, message)
+      await runtime.followUp(sessionId, message)
       const store = useWorkspaceStore.getState()
       store.updateRun(sessionId, { pendingInputs: store.runs[sessionId]?.pendingInputs?.map((input) => input.id === id ? { ...input, submitting: false } : input) ?? [] })
     } catch (cause) {
       useWorkspaceStore.getState().removePendingInput(sessionId, id)
       throw cause
     }
+  }
+
+  function updateSteering(sessionId: string, id: string, status: NonNullable<RuntimeTurn['steering']>['status'], error?: string) {
+    const store = useWorkspaceStore.getState()
+    store.updateRun(sessionId, { turns: store.runs[sessionId]?.turns.map((turn) => turn.id !== id || turn.steering?.status === 'applied' ? turn : { ...turn, steering: { ...turn.steering, status, error } }) ?? [] })
+  }
+
+  async function submitSteering(sessionId: string, message: string, send: () => Promise<unknown>, queuedInputId?: string, retryId?: string) {
+    const store = useWorkspaceStore.getState()
+    const run = store.runs[sessionId]
+    const id = retryId ?? `steering:${crypto.randomUUID()}`
+    const submittedAt = new Date().toISOString()
+    if (retryId) updateSteering(sessionId, id, 'sending')
+    else store.updateRun(sessionId, { turns: [...(run?.turns ?? []), { id, prompt: message, events: [], startedAt: submittedAt, submittedAt, executionStartedAt: run?.executionStartedAt ?? (run && activeRuntimeTurn(run.turns)?.startedAt), steering: { status: 'sending', queuedInputId } }] })
+    try {
+      await send()
+      updateSteering(sessionId, id, 'accepted')
+    } catch (cause) {
+      updateSteering(sessionId, id, isRuntimeConnectionError(cause) ? 'unknown' : 'failed', cause instanceof Error ? cause.message : '引导发送失败')
+      throw cause
+    }
+  }
+
+  async function steerQueued(sessionId: string, inputId: string, retryId?: string) {
+    const inputs = useWorkspaceStore.getState().runs[sessionId]?.pendingInputs?.filter((input) => input.mode === 'follow_up') ?? []
+    const index = inputs.findIndex((input) => input.id === inputId)
+    if (index < 0 || inputs[index]!.submitting) throw new Error('排队消息已发生变化，请重试。')
+    return submitSteering(sessionId, inputs[index]!.message, () => runtime.steerQueued(sessionId, inputs[index]!.message, index), inputId, retryId)
   }
 
   return {
@@ -417,11 +453,12 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       }
     },
     steer: (sessionId, message) => submitRunningInput(sessionId, message, 'steer'),
-    steerQueued: async (sessionId, inputId) => {
-      const inputs = useWorkspaceStore.getState().runs[sessionId]?.pendingInputs?.filter((input) => input.mode === 'follow_up') ?? []
-      const index = inputs.findIndex((input) => input.id === inputId)
-      if (index < 0 || inputs[index]!.submitting) throw new Error('排队消息已发生变化，请重试。')
-      await runtime.steerQueued(sessionId, inputs[index]!.message, index)
+    steerQueued,
+    retrySteering: async (sessionId, turnId) => {
+      const turn = useWorkspaceStore.getState().runs[sessionId]?.turns.find((turn) => turn.id === turnId)
+      if (!turn?.prompt || turn.steering?.status !== 'failed') return
+      if (turn.steering.queuedInputId) return steerQueued(sessionId, turn.steering.queuedInputId, turnId)
+      return submitSteering(sessionId, turn.prompt, () => runtime.steer(sessionId, turn.prompt!), undefined, turnId)
     },
   }
 }

@@ -12,7 +12,7 @@ vi.mock('react', async (original) => ({
 }))
 afterEach(() => vi.unstubAllGlobals())
 
-function setup() {
+function setup(latestSteeringId?: string) {
   const listeners = new Map<string, (event?: unknown) => void>()
   const viewport = { scrollHeight: 1000, clientHeight: 500, scrollTop: 500, firstElementChild: null, addEventListener: (type: string, listener: (event?: unknown) => void) => listeners.set(type, listener), removeEventListener: (type: string) => listeners.delete(type) }
   class TestElement {
@@ -30,7 +30,7 @@ function setup() {
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback } observe() {} disconnect() {} })
   hooks.state = 0; hooks.setters = []; hooks.viewport = viewport; hooks.effects = []; hooks.layouts = []
   // oxlint-disable-next-line react-hooks/rules-of-hooks -- Exercise the hook with mocked React effects and scroll geometry.
-  const hook = useTimelineViewport({ selectedSessionId: 'A', history: undefined, activeTurn: undefined, isActive: false, inspectorOpen: false, setInspectorOpen: vi.fn() })
+  const hook = useTimelineViewport({ selectedSessionId: 'A', history: undefined, activeTurn: undefined, latestSteeringId, isActive: false, inspectorOpen: false, setInspectorOpen: vi.fn() })
   const cleanups = hooks.effects.map((effect) => effect())
   return { hook, viewport, frames, panel, transition: (type: string) => listeners.get(type)?.({ type, target: panel, propertyName: 'grid-template-rows' }), click: () => listeners.get('click')?.({ target: panel }), resize: () => resize(), scroll: () => listeners.get('scroll')?.(), cleanup: () => { for (const cleanup of cleanups) cleanup?.() }, flush: () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback(0)) } }
 }
@@ -60,6 +60,21 @@ it('does not force the user back to the bottom after scrolling up', () => {
     test.resize()
     test.hook.followFinalAnswer()
     expect(test.frames.size).toBe(0)
+    expect(test.viewport.scrollTop).toBe(100)
+  } finally { test.cleanup() }
+})
+
+it('follows a steering bubble only while the user is following the latest messages', () => {
+  const test = setup('steering-1')
+  try {
+    const steeringLayout = hooks.layouts.at(-2)!
+    steeringLayout()
+    test.flush()
+    expect(test.viewport.scrollTop).toBe(test.viewport.scrollHeight)
+    test.viewport.scrollTop = 100
+    test.scroll()
+    steeringLayout()
+    test.flush()
     expect(test.viewport.scrollTop).toBe(100)
   } finally { test.cleanup() }
 })

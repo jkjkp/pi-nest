@@ -57,6 +57,23 @@ describe('SessionTimeline', () => {
     expect(markup).not.toContain('data-pending-input="pending-1"')
   })
 
+  it('shows a steering bubble immediately without pretending execution has started', () => {
+    const markup = render(<SessionTimeline error={false} history={history} isLoading={false} isRunning onRetry={() => undefined} turns={[{ id: 'steering', prompt: '现在改查落库', events: [], startedAt: '2026-10-14T00:00:00Z', steering: { status: 'accepted' } }]} />)
+    expect(markup).toContain('现在改查落库')
+    expect(markup).toContain('引导已发送')
+    expect(markup).not.toContain('turn-execution-steering')
+  })
+
+  it('shows a failed steering message with retry and does not offer retries for uncertain delivery', () => {
+    const turn = { id: 'steering', prompt: '补充要求', events: [], startedAt: '2026-10-14T00:00:00Z', steering: { status: 'failed' as const, error: 'Rejected' } }
+    const failed = render(<SessionTimeline error={false} history={undefined} isLoading={false} isRunning onRetry={() => undefined} onRetrySteering={() => undefined} turns={[turn]} />)
+    expect(failed).toContain('发送失败：Rejected')
+    expect(failed).toContain('>重试</button>')
+    const unknown = render(<SessionTimeline error={false} history={undefined} isLoading={false} isRunning onRetry={() => undefined} onRetrySteering={() => undefined} turns={[{ ...turn, steering: { status: 'unknown' } }]} />)
+    expect(unknown).toContain('正在确认发送状态，请勿重复发送')
+    expect(unknown).not.toContain('>重试</button>')
+  })
+
   it('keeps a persisted execution expandable after refresh', () => {
     const refreshed = {
       ...history,

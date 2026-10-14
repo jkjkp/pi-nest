@@ -46,6 +46,8 @@ export type SessionRunSummary = {
 }
 
 export type RuntimeTurn = {
+  steering?: { status: 'sending' | 'accepted' | 'applied' | 'failed' | 'unknown'; error?: string; queuedInputId?: string }
+  executionStartedAt?: string
   completedAt?: string
   events: PiRuntimeEvent[]
   submittedAt?: string
@@ -54,5 +56,17 @@ export type RuntimeTurn = {
   id: string
   prompt?: string
   startedAt: string
+}
+
+export function activeRuntimeTurn(turns: RuntimeTurn[]) {
+  return turns.findLast((turn) => !turn.steering || turn.steering.status === 'applied')
+}
+
+export function runtimeMessageIdentity(event: PiRuntimeEvent) {
+  const message = event.event.message ?? event.event.partial
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return undefined
+  const value = message as Record<string, unknown>
+  const id = value.id ?? value.timestamp
+  return (typeof id === 'string' || typeof id === 'number') ? `${value.role}:${id}` : undefined
 }
 

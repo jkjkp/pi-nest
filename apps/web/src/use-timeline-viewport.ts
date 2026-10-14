@@ -8,12 +8,13 @@ type TimelineViewportOptions = {
   selectedSessionId: string
   history: PiSessionHistoryResponse | undefined
   activeTurn: RuntimeTurn | undefined
+  latestSteeringId?: string
   isActive: boolean
   inspectorOpen: boolean
   setInspectorOpen: (open: boolean) => void
 }
 
-export function useTimelineViewport({ selectedSessionId, history, activeTurn, isActive, inspectorOpen, setInspectorOpen }: TimelineViewportOptions) {
+export function useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId, isActive, inspectorOpen, setInspectorOpen }: TimelineViewportOptions) {
   const [followLatest, setFollowLatest] = useState(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [railOverlay, setRailOverlay] = useState<HTMLElement | null>(null)
@@ -224,10 +225,15 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, is
 
   useLayoutEffect(() => {
     const key = activeTurn ? `${selectedSessionId}:${activeTurn.startedAt}` : undefined
-    if (!isActive || !key || !scrollViewport || positionedTurn.current === key) return
+    if (!isActive || !key || !scrollViewport || positionedTurn.current === key || !followLatestRef.current || navigationInProgress.current) return
     positionedTurn.current = key
     scheduleScroll(() => { scrollViewport.scrollTop = scrollViewport.scrollHeight })
   }, [activeTurn, isActive, scrollViewport, selectedSessionId, scheduleScroll])
+
+  useLayoutEffect(() => {
+    if (!latestSteeringId || !scrollViewport || !followLatestRef.current || navigationInProgress.current) return
+    scheduleScroll(() => { if (followLatestRef.current) scrollViewport.scrollTop = scrollViewport.scrollHeight })
+  }, [latestSteeringId, scrollViewport, scheduleScroll])
 
   useLayoutEffect(() => {
     if (inspectorToggleScrollTop.current === undefined || !scrollViewport) return

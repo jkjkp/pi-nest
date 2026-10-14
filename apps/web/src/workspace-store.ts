@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 
 import type { NavigationOrder } from './navigation-order.js'
-import { isRunActive, nativeUserMessage, type PendingInput, type SessionRunSummary } from './session-run-model.js'
+import { activeRuntimeTurn, isRunActive, nativeUserMessage, runtimeMessageIdentity, type PendingInput, type SessionRunSummary } from './session-run-model.js'
 import type { PiRuntimeStatistics, PiRuntimeEvent, PiRuntimeState, RuntimeStatus } from '@pi-nest/contracts'
 
 export { isRunActive, nativeUserMessage } from './session-run-model.js'
@@ -130,6 +130,24 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       if (!run) return state
 
       const prompt = nativeUserMessage(event)
+      const identity = runtimeMessageIdentity(event)
+      const messageOwner = identity ? run.turns.findIndex((turn) => turn.events.some((saved) => runtimeMessageIdentity(saved) === identity)) : -1
+      const toolCallId = event.event.toolCallId ?? (event.event.message as { toolCallId?: string } | undefined)?.toolCallId
+      const toolOwner = typeof toolCallId === 'string' ? run.turns.findIndex((turn) => turn.events.some((saved) => saved.event.toolCallId === toolCallId)) : -1
+      const active = activeRuntimeTurn(run.turns)
+      const steeringIndex = messageOwner < 0 && prompt ? run.turns.findIndex((turn) => turn.prompt === prompt && turn.steering && ['sending', 'accepted', 'unknown'].includes(turn.steering.status)) : -1
+      if (steeringIndex >= 0) {
+        const turns = run.turns.map((turn, index) => index === steeringIndex ? { ...turn, events: [...turn.events, event], steering: { ...turn.steering!, status: 'applied' as const } } : turn)
+        return { runs: { ...state.runs, [sessionId]: { ...run, turns } } }
+      }
+      if (messageOwner >= 0 || toolOwner >= 0 || (active && run.turns.some((turn) => turn.steering))) {
+        const owner = messageOwner >= 0 ? messageOwner : toolOwner >= 0 ? toolOwner : run.turns.indexOf(active!)
+        if (prompt && messageOwner < 0 && prompt !== active?.prompt) {
+          return { runs: { ...state.runs, [sessionId]: { ...run, turns: [...run.turns, { events: [event], id: `native:${sessionId}:${event.sequence}`, prompt, startedAt: event.observedAt, executionStartedAt: run.executionStartedAt }] } } }
+        }
+        const turns = run.turns.map((turn, index) => index === owner ? { ...turn, events: [...turn.events, event] } : turn)
+        return { runs: { ...state.runs, [sessionId]: { ...run, turns } } }
+      }
       if (!event.turnId) {
         if (prompt && (!run.turns.at(-1)?.prompt?.trim() || run.turns.at(-1)?.completedAt)) {
           return {
@@ -179,12 +197,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   completeLatestRunTurn: (sessionId, completedAt) =>
     set((state) => {
       const run = state.runs[sessionId]
-      const current = run?.turns.at(-1)
+      const current = run && activeRuntimeTurn(run.turns)
       if (!run || !current || current.completedAt) return state
       return {
         runs: {
           ...state.runs,
-          [sessionId]: { ...run, turns: [...run.turns.slice(0, -1), { ...current, completedAt }] },
+          [sessionId]: { ...run, turns: run.turns.map((turn) => !turn.completedAt && (!turn.steering || turn.steering.status === 'applied') ? { ...turn, completedAt } : turn) },
         },
       }
     }),
@@ -201,14 +219,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   markRunExecutionStarted: (sessionId, startedAt) => set((state) => {
     const run = state.runs[sessionId]
     if (!run || run.executionStartedAt) return state
-    const current = run.turns.at(-1)
+    const current = activeRuntimeTurn(run.turns)
     return {
       runs: {
         ...state.runs,
         [sessionId]: {
           ...run,
           executionStartedAt: startedAt,
-          turns: current && !current.completedAt ? [...run.turns.slice(0, -1), { ...current, submittedAt: current.submittedAt ?? current.startedAt, startedAt }] : run.turns,
+          turns: current && !current.completedAt ? run.turns.map((turn) => turn === current ? { ...turn, submittedAt: turn.submittedAt ?? turn.startedAt, startedAt } : turn) : run.turns,
         },
       },
     }

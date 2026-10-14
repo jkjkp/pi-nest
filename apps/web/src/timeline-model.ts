@@ -31,6 +31,7 @@ export type TimelinePart =
   | { arguments?: Record<string, unknown>; events: TimelineEvent[]; kind: 'tool'; toolCallId: string | undefined; toolName: string }
 
 export type TimelineItem = {
+  steering?: RuntimeTurn['steering']
   plan?: { text: string; source: 'completion' | 'custom'; id: string }
   diagnostics: TimelineDiagnostic[]
   modelErrors?: ModelCallError[]
@@ -308,12 +309,13 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
     // A local turn exists only after an explicit user prompt has been accepted.
     // Runtime events may enrich it, but cannot create another conversation node.
     if (!turn.prompt?.trim()) continue
-    const runtimeTiming = { ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }), startedAt: turn.startedAt }
+    const runtimeTiming = { ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }), startedAt: turn.executionStartedAt ?? turn.startedAt }
     const nativeUser = turn.events.find((event) => record(event.event.message)?.role === 'user')
     const nativeId = record(nativeUser?.event.message)?.id
     const nativePrompt = textContent(record(nativeUser?.event.message)?.content)
     const anchorIndex = historyProjection.findIndex((item) => item.id === turn.historyAnchorId)
     const persisted = historyProjection.find((item, index) => {
+      if (turn.steering?.status === 'failed' || turn.steering?.status === 'sending') return false
       if (matchedHistory.has(item.id)) return false
       if (typeof nativeId === 'string') return item.id === nativeId
       if (item.prompt !== (nativePrompt ?? turn.prompt)) return false
@@ -323,6 +325,7 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
     })
     const item = newTurn(persisted?.id ?? turn.id, turn.prompt ?? promptFrom(turn.events), persisted?.startedAt ?? turn.startedAt, runtimeTiming)
     item.displayId = `${turn.id}:${turn.submittedAt ?? turn.startedAt}`
+    item.steering = turn.steering ? { ...turn.steering, ...(persisted ? { status: 'applied' as const } : {}) } : undefined
     for (const event of turn.events) projectEvent(item, runtimeEvent(event))
     if (persisted) {
       matchedHistory.add(persisted.id)
@@ -343,7 +346,7 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
       })
       // A user entry or an intermediate message_end is not a completed response.
       if (turn.completedAt && covered && (persisted.parts.length > 0 || (persisted.modelErrors?.length ?? 0) > 0 || persisted.events.some((event) => eventType(event) === 'agent_settled'))) {
-        items[items.indexOf(persisted)] = { ...persisted, displayId: item.displayId }
+        items[items.indexOf(persisted)] = { ...persisted, displayId: item.displayId, steering: item.steering }
       } else {
         if (item.parts.length === 0) item.parts = persisted.parts
         items[items.indexOf(persisted)] = item

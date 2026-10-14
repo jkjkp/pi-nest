@@ -192,3 +192,16 @@ it('retains the draft if a running input fails', async () => {
   expect(useWorkspaceStore.getState().drafts['session-1']).toBe('不能丢失')
   queryClient.clear()
 })
+
+it('clears a steering draft immediately and preserves new typing while it is sent', async () => {
+  const { workspace, controller, queryClient } = thinkingProbe('引导内容', true)
+  let acknowledge!: () => void
+  vi.mocked(controller.steer).mockImplementation(() => new Promise<void>((resolve) => { acknowledge = resolve }))
+  workspace.submitPrompt('steer')
+  expect(useWorkspaceStore.getState().drafts['session-1']).toBe('')
+  useWorkspaceStore.getState().setDraft('session-1', '新的草稿')
+  acknowledge()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(useWorkspaceStore.getState().drafts['session-1']).toBe('新的草稿')
+  queryClient.clear()
+})

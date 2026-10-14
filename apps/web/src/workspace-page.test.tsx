@@ -29,6 +29,7 @@ const sessionRuns = {
   start: () => false,
   steer: async () => undefined,
   steerQueued: async () => undefined,
+  retrySteering: async () => undefined,
   stop: async () => false,
 }
 
@@ -39,18 +40,18 @@ it('offers default queueing and the steering shortcut while preserving the stop 
   const markup = renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-1']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
   expect(markup).not.toContain('>引导</button>')
   expect(markup).toContain('>排队</button>')
-  expect(markup).toContain('Enter 排队，Option/Alt + Enter 引导，Shift + Enter 换行')
+  expect(markup).toContain('Enter 排队，Ctrl + Enter 引导，Shift + Enter 换行')
   expect(markup).toContain('aria-label="停止生成"')
   queryClient.clear()
 })
 
 it('limits the pending list to two rows and reports additional messages', () => {
   const markup = renderToStaticMarkup(<PendingInputs inputs={[
-    { id: 'a', message: 'direction', mode: 'steer', submittedAt: 'now' },
+    { id: 'a', message: 'first', mode: 'follow_up', submittedAt: 'now' },
     { id: 'b', message: 'later', mode: 'follow_up', submittedAt: 'now' },
     { id: 'c', message: 'hidden task', mode: 'follow_up', submittedAt: 'now' },
   ]} onSteer={() => undefined} />)
-  expect(markup).toContain('引导待生效')
+  expect(markup).not.toContain('引导待生效')
   expect(markup).toContain('已排队')
   expect(markup).toContain('还有 1 条')
   expect(markup).toContain('>引导</button>')

@@ -5,6 +5,7 @@ import { createSessionRunController } from './session-run-controller.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { timelineItems } from './timeline-model.js'
 import { projectTurnPresentation, turnElapsed } from './turn-execution-model.js'
+import { RuntimeConnectionError } from './runtime-websocket-client.js'
 
 function runtimeMock() {
   const errors = new Set<(error: { code?: string; message: string; sessionId?: string }) => void>()
@@ -353,6 +354,67 @@ describe('session run controller', () => {
     acknowledge()
     await submission
     expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toEqual([])
+  })
+
+  it('shows steering immediately, merges its native echo and keeps old tool results in place', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ prompt: 'original', sessionId: 'session-a' })
+    await tick()
+    const emit = (sequence: number, event: Record<string, unknown>) => runtime.emit({ event, sequence, sessionId: 'session-a', runId: 'run-1', turnId: 'native-run', observedAt: '2026-10-14T00:00:10.000Z' })
+    emit(1, { type: 'message_start', message: { role: 'user', content: 'original', timestamp: 1 } })
+    emit(2, { type: 'tool_execution_start', toolCallId: 'old-tool', toolName: 'read' })
+    const executionStart = useWorkspaceStore.getState().runs['session-a']!.executionStartedAt
+    let acknowledge!: () => void
+    runtime.steer.mockImplementationOnce(() => new Promise<void>((resolve) => { acknowledge = resolve }))
+    const submission = controller.steer('session-a', 'new direction')
+    let run = useWorkspaceStore.getState().runs['session-a']!
+    const id = run.turns[1]!.id
+    expect(run.turns[1]).toMatchObject({ prompt: 'new direction', steering: { status: 'sending' }, events: [] })
+    emit(3, { type: 'message_start', message: { role: 'user', content: 'new direction', timestamp: 2 } })
+    emit(4, { type: 'tool_execution_end', toolCallId: 'old-tool', result: { content: [] } })
+    emit(5, { type: 'message_end', message: { role: 'user', content: 'new direction', timestamp: 2 } })
+    emit(6, { type: 'message_end', message: { role: 'assistant', content: 'Changing direction', timestamp: 3 } })
+    acknowledge()
+    await submission
+    run = useWorkspaceStore.getState().runs['session-a']!
+    expect(run.turns).toHaveLength(2)
+    expect(run.turns[1]).toMatchObject({ id, steering: { status: 'applied' }, executionStartedAt: executionStart })
+    expect(run.turns[0]!.events.some((event) => event.event.type === 'tool_execution_end')).toBe(true)
+    expect(run.turns[1]!.events.some((event) => event.event.type === 'tool_execution_end')).toBe(false)
+    const items = timelineItems(undefined, run.turns, [])
+    expect(items[1]!.parts.some((part) => part.kind === 'assistant_text' && part.text === 'Changing direction')).toBe(true)
+    expect(items[0]!.parts.some((part) => part.kind === 'assistant_text' && part.text === 'Changing direction')).toBe(false)
+    const persisted = timelineItems([{ id: 'saved-steering', parentId: null, type: 'message', timestamp: run.turns[1]!.submittedAt!, raw: { message: { role: 'user', content: 'new direction' } } }], run.turns, [])
+    expect(persisted.filter((item) => item.prompt === 'new direction')).toHaveLength(1)
+    expect(persisted.find((item) => item.prompt === 'new direction')?.displayId).toBe(items[1]?.displayId)
+  })
+
+  it('keeps identical steering submissions separate and retries definite failures in the same bubble', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ prompt: 'original', sessionId: 'session-a' })
+    await tick()
+    await controller.steer('session-a', 'same')
+    await controller.steer('session-a', 'same')
+    for (const sequence of [1, 2]) runtime.emit({ event: { type: 'message_start', message: { role: 'user', content: 'same', timestamp: sequence } }, sequence, sessionId: 'session-a', runId: 'run-1', observedAt: 'now' })
+    expect(useWorkspaceStore.getState().runs['session-a']!.turns.slice(1).map((turn) => turn.steering?.status)).toEqual(['applied', 'applied'])
+    runtime.steer.mockRejectedValueOnce(new Error('Rejected'))
+    await expect(controller.steer('session-a', 'retry me')).rejects.toThrow('Rejected')
+    const failed = useWorkspaceStore.getState().runs['session-a']!.turns.at(-1)!
+    expect(failed.steering).toMatchObject({ status: 'failed', error: 'Rejected' })
+    await controller.retrySteering('session-a', failed.id)
+    expect(useWorkspaceStore.getState().runs['session-a']!.turns).toHaveLength(4)
+    expect(useWorkspaceStore.getState().runs['session-a']!.turns.at(-1)).toMatchObject({ id: failed.id, steering: { status: 'accepted' } })
+    runtime.steer.mockRejectedValueOnce(new RuntimeConnectionError('Disconnected'))
+    await expect(controller.steer('session-a', 'uncertain')).rejects.toThrow('Disconnected')
+    const unknown = useWorkspaceStore.getState().runs['session-a']!.turns.at(-1)!
+    expect(unknown.steering?.status).toBe('unknown')
+    const calls = runtime.steer.mock.calls.length
+    await controller.retrySteering('session-a', unknown.id)
+    expect(runtime.steer).toHaveBeenCalledTimes(calls)
+    runtime.resync({ sessionId: 'session-a' })
+    expect(useWorkspaceStore.getState().runs['session-a']!.turns.find((turn) => turn.id === unknown.id)?.steering?.status).toBe('unknown')
   })
 
   it('converts the selected queue entry without adding another copy', async () => {
