@@ -27,6 +27,7 @@ export type RuntimeCommandPayload = { sessionId: string } & (
   | { type: 'watch'; resume?: { after: number } }
   | { type: 'unwatch' | 'resume' | 'abort' | 'compact' | 'get_runtime_state' | 'get_session_stats' | 'get_available_models' | 'get_available_thinking_levels' }
   | { type: 'prompt' | 'steer' | 'follow_up'; message: string }
+  | { type: 'steer_queued'; message: string; index: number }
   | { type: 'set_model'; provider: string; modelId: string }
   | { type: 'set_thinking_level'; level: string }
   | { type: 'extension_ui_response'; dialogId: string; value?: unknown; confirmed?: boolean; cancelled?: boolean }
