@@ -212,33 +212,39 @@ function optionParts(label: string) {
   return { description: description.join('\n'), title }
 }
 
-function ExtensionSelectCard({ dialog, reply, setValue }: { dialog: Dialog; reply: ExtensionUi['reply']; setValue: ExtensionUi['setValue'] }) {
+type PlanPreview = { planTurnId?: string; onViewPlan?: () => void; onRetryPlan?: () => void }
+
+function ExtensionSelectCard({ dialog, reply, setValue, planTurnId, onViewPlan, onRetryPlan }: { dialog: Dialog; reply: ExtensionUi['reply']; setValue: ExtensionUi['setValue'] } & PlanPreview) {
   const options = dialog.options ?? []
   const selectedIndex = options.findIndex((option) => option.rawValue === dialog.selectedValue)
+  const planDecision = dialog.title.startsWith('Proposed plan ready.')
+  const canSubmit = selectResponse(dialog) !== undefined && !(planDecision && !planTurnId && (dialog.selectedValue === 'Implement here' || dialog.selectedValue === 'Start fresh and implement'))
   function moveSelection(delta: number) {
     if (options.length === 0) return
     const next = (Math.max(selectedIndex, 0) + delta + options.length) % options.length
     setValue(dialog, options[next]!.rawValue)
   }
-  return <section aria-label={dialog.title} className="space-y-4 rounded-xl border bg-card p-4 shadow-sm" onKeyDown={(event) => {
+  return <section aria-label={dialog.title} className="mx-auto w-full max-w-[640px] space-y-2 rounded-lg border bg-card p-3 text-sm shadow-sm" onKeyDown={(event) => {
     if (dialog.submitting) return
     if (event.target !== event.currentTarget && (event.target as HTMLElement).getAttribute('role') !== 'radio') return
     if (event.key === 'ArrowDown') { event.preventDefault(); moveSelection(1) }
     else if (event.key === 'ArrowUp') { event.preventDefault(); moveSelection(-1) }
     else if (event.key === 'Escape') { event.preventDefault(); void reply(dialog, { cancelled: true }) }
-    else if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); const response = selectResponse(dialog); if (response) void reply(dialog, response) }
+    else if (event.key === 'Enter' && !event.nativeEvent.isComposing && canSubmit) { event.preventDefault(); const response = selectResponse(dialog); if (response) void reply(dialog, response) }
   }} tabIndex={0}>
     <div className="space-y-1"><h2 className="font-semibold">{dialog.title}</h2>{dialog.message && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{dialog.message}</p>}</div>
-    <div aria-label="选项" className="max-h-[min(50vh,24rem)] space-y-2 overflow-y-auto overscroll-contain" role="radiogroup">
+    {planDecision && <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span>{planTurnId ? '计划已制定，请先查看计划内容。' : '计划内容尚未加载，暂不能执行。'}</span><Button size="sm" type="button" variant="ghost" onClick={planTurnId ? onViewPlan : onRetryPlan}>{planTurnId ? '查看计划' : '重试加载'}</Button></div>}
+    <div aria-label="选项" className="max-h-[min(32vh,18rem)] space-y-1 overflow-y-auto overscroll-contain" role="radiogroup">
       {options.map((option, index) => {
         const { description, title } = optionParts(option.displayLabel)
         const selected = option.rawValue === dialog.selectedValue
+      const displayTitle = ({ 'Implement here': '在当前会话执行', 'Start fresh and implement': '新建会话执行' } as Record<string, string>)[title] ?? title
         const customOption = isCustomAnswerSelection({ options: [option], selectedValue: option.rawValue })
         return <div className={`rounded-lg border ${customOption ? 'flex items-center gap-2 pr-3' : ''} ${selected ? 'border-primary bg-primary/8' : 'border-transparent'}`} key={`${index}:${option.rawValue}`}>
-          <button disabled={dialog.submitting || dialog.editorId !== undefined} aria-checked={selected} className={`block rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${customOption ? 'shrink-0' : 'w-full'}`} onClick={() => setValue(dialog, option.rawValue)} role="radio" type="button">
-            <span className="flex items-start gap-3"><span aria-hidden="true" className="mt-0.5 text-primary">{selected ? '●' : '○'}</span><span className="min-w-0 whitespace-pre-wrap break-words"><span className="block font-medium">{customOption ? `${index + 1}.` : title}</span>{description && <span className="mt-1 block text-sm text-muted-foreground">{description}</span>}</span></span>
+          <button disabled={dialog.submitting || dialog.editorId !== undefined} aria-checked={selected} className={`block rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${customOption ? 'shrink-0' : 'w-full'}`} onClick={() => setValue(dialog, option.rawValue)} role="radio" type="button">
+            <span className="flex items-start gap-2"><span aria-hidden="true" className="mt-0.5 text-primary">{selected ? '●' : '○'}</span><span className="min-w-0 whitespace-pre-wrap break-words"><span className="block font-medium">{customOption ? `${index + 1}.` : displayTitle}</span>{description && <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{description}</span>}</span></span>
           </button>
-          {customOption && <input aria-label="自定义回答" className="my-2 min-w-0 flex-1 rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" disabled={dialog.submitting} placeholder="other" value={dialog.value ?? ''} onFocus={() => setValue(dialog, option.rawValue)} onChange={(event) => { setValue(dialog, option.rawValue); setValue(dialog, event.target.value, true) }} onKeyDown={(event) => {
+          {customOption && <input aria-label="自定义回答" className="my-1 h-8 min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" disabled={dialog.submitting} placeholder="other" value={dialog.value ?? ''} onFocus={() => setValue(dialog, option.rawValue)} onChange={(event) => { setValue(dialog, option.rawValue); setValue(dialog, event.target.value, true) }} onKeyDown={(event) => {
             if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
             event.preventDefault()
             const response = selectResponse(dialog)
@@ -248,7 +254,7 @@ function ExtensionSelectCard({ dialog, reply, setValue }: { dialog: Dialog; repl
       })}
     </div>
     {dialog.error && <p className="text-sm text-destructive" role="alert">{dialog.error}</p>}
-    <div className="flex justify-end gap-2"><Button disabled={dialog.submitting} onClick={() => void reply(dialog, { cancelled: true })} type="button" variant="ghost">取消</Button><Button disabled={dialog.submitting || selectResponse(dialog) === undefined} onClick={() => { const response = selectResponse(dialog); if (response) void reply(dialog, response) }} type="button">{dialog.submitting ? '提交中…' : '继续'}</Button></div>
+    <div className="flex justify-end gap-2"><Button size="sm" disabled={dialog.submitting} onClick={() => void reply(dialog, { cancelled: true })} type="button" variant="ghost">取消</Button><Button size="sm" disabled={dialog.submitting || !canSubmit} onClick={() => { const response = selectResponse(dialog); if (response) void reply(dialog, response) }} type="button">{dialog.submitting ? '提交中…' : '继续'}</Button></div>
   </section>
 }
 
@@ -258,12 +264,12 @@ function ExtensionTextCard({ dialog, reply, setValue }: { dialog: Dialog; reply:
 }
 
 /** Renders only the first pending request for the visible Pi session; other requests stay queued. */
-export function ExtensionUiInline({ sessionId }: { sessionId: string }) {
+export function ExtensionUiInline({ sessionId, ...planPreview }: { sessionId: string } & PlanPreview) {
   const extensionUi = useContext(ExtensionUiContext)
   if (!extensionUi || !sessionId) return null
   const dialog = extensionUi.dialogs.find((item) => item.sessionId === sessionId)
   if (!dialog) return null
   return dialog.method === 'select'
-    ? <ExtensionSelectCard dialog={dialog} reply={extensionUi.reply} setValue={extensionUi.setValue} key={dialog.id} />
+    ? <ExtensionSelectCard dialog={dialog} reply={extensionUi.reply} setValue={extensionUi.setValue} key={dialog.id} {...planPreview} />
     : <ExtensionTextCard dialog={dialog} reply={extensionUi.reply} setValue={extensionUi.setValue} key={dialog.id} />
 }
