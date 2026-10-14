@@ -19,6 +19,22 @@ class FakeSocket {
 }
 
 describe('RuntimeWebSocketClient', () => {
+  it('rejects an unsuccessful queue command without failing the current run', async () => {
+    vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+    const socket = new FakeSocket()
+    const factory = vi.fn(() => socket as never)
+    const client = new RuntimeWebSocketClient({ fetchFn: vi.fn(() => Promise.resolve(new Response(JSON.stringify({ runtimeId: 'runtime-1', token: 'token', websocketPath: '/api/runtime' })))), socketFactory: factory })
+    const errors = vi.fn()
+    client.onError(errors)
+    const queue = client.followUp('session-a', 'later')
+    const rejection = expect(queue).rejects.toMatchObject({ code: 'SESSION_NOT_RUNNING' })
+    await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce())
+    socket.open()
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    socket.receive({ type: 'error', id: socket.sent[0]!.id, sessionId: 'session-a', code: 'SESSION_NOT_RUNNING', message: 'Session ended' })
+    await rejection
+    expect(errors).not.toHaveBeenCalled()
+  })
   it('uses one connection for multiple commands and dispatches raw Pi events', async () => {
     vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
     const socket = new FakeSocket()

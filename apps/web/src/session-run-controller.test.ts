@@ -339,6 +339,36 @@ describe('session run controller', () => {
     expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toEqual([])
   })
 
+  it('does not restore a consumed input when its acknowledgement arrives late', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ prompt: 'first', sessionId: 'session-a' })
+    await tick()
+    let acknowledge!: () => void
+    runtime.followUp.mockImplementationOnce(() => new Promise<void>((resolve) => { acknowledge = resolve }))
+    const submission = controller.followUp('session-a', 'queued')
+    runtime.emit({ event: { type: 'queue_update', steering: [], followUp: ['queued'] }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a' })
+    runtime.emit({ event: { type: 'queue_update', steering: [], followUp: [] }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a' })
+    acknowledge()
+    await submission
+    expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toEqual([])
+  })
+
+  it('uses authoritative queues for repeated text, aborted runs and reconnects', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ prompt: 'first', sessionId: 'session-a' })
+    await tick()
+    runtime.emit({ event: { type: 'queue_update', steering: [], followUp: ['same', 'same'] }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a' })
+    runtime.emit({ event: { type: 'queue_update', steering: [], followUp: ['same'] }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a' })
+    runtime.emit({ event: { type: 'message_start', message: { role: 'user', content: 'same' } }, observedAt: 'now', runId: 'run-1', sequence: 3, sessionId: 'session-a' })
+    expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toHaveLength(1)
+    runtime.emit({ event: { type: 'agent_settled', aborted: true }, observedAt: 'now', runId: 'run-1', sequence: 4, sessionId: 'session-a' })
+    expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toHaveLength(1)
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2 }, inputQueue: { steering: ['direction'], followUp: ['later'] } })
+    expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toMatchObject([{ mode: 'steer', message: 'direction' }, { mode: 'follow_up', message: 'later' }])
+  })
+
   it('adopts a Pi Extension-started turn from its native user message and settles that run only', () => {
     const runtime = runtimeMock()
     const invalidateHistory = vi.fn()

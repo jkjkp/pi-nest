@@ -1,7 +1,7 @@
 import { unstable_batchedUpdates } from 'react-dom'
 import { stripAnsiText } from './ansi-text.js'
 import { isRuntimeConnectionError, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
-import { nativeUserMessage, type PromptStatus } from './session-run-model.js'
+import { nativeUserMessage, reconcilePendingInputs, type PromptStatus } from './session-run-model.js'
 import { useWorkspaceStore, type RuntimeStatisticsState } from './workspace-store.js'
 
 type SessionRunControllerOptions = {
@@ -58,6 +58,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   const statisticsRequests = new Map<string, number>()
   let foregroundSessionId: string | undefined
   let nextPendingInputId = 0
+  const queueSyncedSessions = new Set<string>()
 
   async function getSessionStatistics(sessionId: string) {
     const request = (statisticsRequests.get(sessionId) ?? 0) + 1
@@ -100,7 +101,6 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     clearAwaitingAgentCheck(sessionId)
     activeRuns.delete(sessionId)
     store.completeLatestRunTurn(sessionId, new Date().toISOString())
-    store.clearPendingInputs(sessionId)
     store.updateRun(sessionId, { status: stopReason === 'error' ? 'error' : stopReason === 'aborted' ? 'aborted' : 'complete', stopReason })
     const visible = foregroundSessionId === sessionId && (typeof document === 'undefined' || document.visibilityState === 'visible')
     if (runId) store.finishNotification(sessionId, runId, !visible, stopReason !== 'error' && stopReason !== 'aborted')
@@ -131,7 +131,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     useWorkspaceStore.getState().setRun(sessionId, {
       status,
       systemEvents: [],
-      pendingInputs: [],
+      pendingInputs: useWorkspaceStore.getState().runs[sessionId]?.pendingInputs ?? [],
       turns: [...completedTurns, { events: [], ...(historyAnchorId ? { historyAnchorId } : {}), ...(historyTurnCount === undefined ? {} : { historyTurnCount }), id: `pending:${sessionId}:${crypto.randomUUID()}`, prompt, submittedAt, startedAt: submittedAt }],
     })
   }
@@ -139,6 +139,10 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   const handlePiEvent = (event: PiRuntimeEvent) => {
     const store = useWorkspaceStore.getState()
     const raw = event.event
+    if (raw.type === 'queue_update' && Array.isArray(raw.steering) && raw.steering.every((message) => typeof message === 'string') && Array.isArray(raw.followUp) && raw.followUp.every((message) => typeof message === 'string')) {
+      queueSyncedSessions.add(event.sessionId)
+      store.updateRun(event.sessionId, { pendingInputs: reconcilePendingInputs(store.runs[event.sessionId]?.pendingInputs ?? [], { steering: raw.steering, followUp: raw.followUp }, String(event.sequence)) })
+    }
     if (raw.type === 'thinking_level_changed' && typeof raw.level === 'string' && runtime.shouldApplyExtensionUi(event)) {
       const details = store.runtimeDetails[event.sessionId]
       store.setRuntimeDetails(event.sessionId, { ...(details ?? { isCompacting: false, isStreaming: store.runtimeStates[event.sessionId]?.lifecycle === 'active' }), thinkingLevel: raw.level })
@@ -171,7 +175,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     if (isExtensionDialog(event)) useWorkspaceStore.getState().updateRun(event.sessionId, { status: 'awaiting_input', waitingMessage: undefined })
     if (raw.type === 'extension_ui_resolved' && store.runs[event.sessionId]?.status === 'awaiting_input') useWorkspaceStore.getState().updateRun(event.sessionId, { status: 'running', waitingMessage: undefined })
     const userInput = nativeUserMessage(event)
-    if (userInput) useWorkspaceStore.getState().consumePendingInput(event.sessionId, userInput)
+    if (userInput && !queueSyncedSessions.has(event.sessionId)) useWorkspaceStore.getState().consumePendingInput(event.sessionId, userInput)
     useWorkspaceStore.getState().appendRunEvent(event.sessionId, event)
     activeRun.stopReason = assistantStopReason(event) ?? activeRun.stopReason
     if (event.event.type !== 'agent_settled') return
@@ -248,8 +252,12 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       if (status === 'running' && snapshot.activeTurn.prompt) beginRun({ ...snapshot.activeTurn, prompt: snapshot.activeTurn.prompt, sessionId: snapshot.sessionId }, status, false, snapshot.activeTurn.runId)
       else {
         activeRuns.set(snapshot.sessionId, { awaitingRunId: false, runId: snapshot.activeTurn.runId, stopReason: undefined })
-        useWorkspaceStore.getState().setRun(snapshot.sessionId, { pendingInputs: [], status, systemEvents: [], turns: [] })
+        useWorkspaceStore.getState().setRun(snapshot.sessionId, { pendingInputs: store.runs[snapshot.sessionId]?.pendingInputs ?? [], status, systemEvents: [], turns: [] })
       }
+    }
+    if (snapshot.inputQueue) {
+      queueSyncedSessions.add(snapshot.sessionId)
+      useWorkspaceStore.getState().updateRun(snapshot.sessionId, { pendingInputs: reconcilePendingInputs(useWorkspaceStore.getState().runs[snapshot.sessionId]?.pendingInputs ?? [], snapshot.inputQueue, String(snapshot.atSequence)) })
     }
   })
 
@@ -261,6 +269,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     applyModelStatus(status)
     if (status.lifecycle === 'idle' && status.completedRun) finishRun(status.sessionId, status.completedRun.runId, status.completedRun.stopReason)
     if (status.lifecycle === 'notLoaded' || status.lifecycle === 'failed') {
+      store.updateRun(status.sessionId, { pendingInputs: store.runs[status.sessionId]?.pendingInputs?.filter((input) => input.mode === 'plan_implementation') ?? [] })
       statisticsRequests.set(status.sessionId, (statisticsRequests.get(status.sessionId) ?? 0) + 1)
       store.setRuntimeStatistics(status.sessionId, { ...store.runtimeStatistics[status.sessionId], loading: false, error: '等待 Pi 运行恢复后更新统计。' })
     }
@@ -301,6 +310,20 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     return state
   }
 
+  async function submitRunningInput(sessionId: string, message: string, mode: 'follow_up' | 'steer') {
+    const id = `pending-input:${++nextPendingInputId}`
+    useWorkspaceStore.getState().appendPendingInput(sessionId, { id, message, mode, submittedAt: new Date().toISOString(), submitting: true })
+    try {
+      if (mode === 'follow_up') await runtime.followUp(sessionId, message)
+      else await runtime.steer(sessionId, message)
+      const store = useWorkspaceStore.getState()
+      store.updateRun(sessionId, { pendingInputs: store.runs[sessionId]?.pendingInputs?.map((input) => input.id === id ? { ...input, submitting: false } : input) ?? [] })
+    } catch (cause) {
+      useWorkspaceStore.getState().removePendingInput(sessionId, id)
+      throw cause
+    }
+  }
+
   return {
     adopt: (options) => {
       if (!activeRuns.has(options.sessionId)) {
@@ -309,10 +332,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       }
     },
     compact: async (sessionId) => { await resumeRuntime(sessionId); await runtime.compact(sessionId); await getSessionStatistics(sessionId) },
-    followUp: async (sessionId, message) => {
-      await runtime.followUp(sessionId, message)
-      useWorkspaceStore.getState().appendPendingInput(sessionId, { id: `pending-input:${++nextPendingInputId}`, message, mode: 'follow_up', submittedAt: new Date().toISOString() })
-    },
+    followUp: (sessionId, message) => submitRunningInput(sessionId, message, 'follow_up'),
     getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,
     getAvailableThinkingLevels: async (sessionId) => (await runtime.getAvailableThinkingLevels(sessionId)).levels,
     getSessionStatistics,
@@ -395,9 +415,6 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
         return false
       }
     },
-    steer: async (sessionId, message) => {
-      await runtime.steer(sessionId, message)
-      useWorkspaceStore.getState().appendPendingInput(sessionId, { id: `pending-input:${++nextPendingInputId}`, message, mode: 'steer', submittedAt: new Date().toISOString() })
-    },
+    steer: (sessionId, message) => submitRunningInput(sessionId, message, 'steer'),
   }
 }

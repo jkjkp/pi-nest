@@ -242,7 +242,7 @@ export class RuntimeWebSocketClient {
     const pending = message.id ? this.pending.get(message.id) : undefined
     if (message.id) this.pending.delete(message.id)
     pending?.reject(Object.assign(new Error(message.message), { code: message.code }))
-    if (pending?.command !== 'get_session_stats') this.notify(message)
+    if (pending?.command !== 'get_session_stats' && pending?.command !== 'steer' && pending?.command !== 'follow_up') this.notify(message)
   }
 
   private handleEvent(message: { type: 'pi_event' } & PiRuntimeEvent) {
@@ -277,6 +277,7 @@ export class RuntimeWebSocketClient {
     this.projectionFloors.set(message.sessionId, message.atSequence)
     this.uiFreshness.set(message.sessionId, message.extensionUi.freshness)
     const snapshot: SessionSnapshot = {
+      ...(message.inputQueue && Array.isArray(message.inputQueue.steering) && message.inputQueue.steering.every((value) => typeof value === 'string') && Array.isArray(message.inputQueue.followUp) && message.inputQueue.followUp.every((value) => typeof value === 'string') ? { inputQueue: { steering: [...message.inputQueue.steering], followUp: [...message.inputQueue.followUp] } } : {}),
       ...(activeTurn ? { activeTurn } : {}),
       ...(completedRun ? { completedRun } : {}),
       atSequence: message.atSequence,
