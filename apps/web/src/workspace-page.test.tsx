@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 
-import { WorkspacePage } from './workspace-page.js'
+import { PendingInputs, WorkspacePage } from './workspace-page.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
 vi.mock('./workspace-store.js', async (importOriginal) => {
@@ -30,6 +30,30 @@ const sessionRuns = {
   steer: async () => undefined,
   stop: async () => false,
 }
+
+it('offers explicit steering and default queueing while preserving the stop button', () => {
+  useWorkspaceStore.setState({ drafts: { 'session-1': 'next task' }, runs: { 'session-1': { status: 'running', turns: [], systemEvents: [], pendingInputs: [] } }, runtimeStates: {}, watchStates: {} })
+  const queryClient = new QueryClient()
+  queryClient.setQueryData(['sessions'], [{ id: 'session-1', cwd: '/fixture' }])
+  const markup = renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-1']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
+  expect(markup).toContain('>引导</button>')
+  expect(markup).toContain('>排队</button>')
+  expect(markup).toContain('Enter 排队，Shift + Enter 换行')
+  expect(markup).toContain('aria-label="停止生成"')
+  queryClient.clear()
+})
+
+it('limits the pending list to two rows and reports additional messages', () => {
+  const markup = renderToStaticMarkup(<PendingInputs inputs={[
+    { id: 'a', message: 'direction', mode: 'steer', submittedAt: 'now' },
+    { id: 'b', message: 'later', mode: 'follow_up', submittedAt: 'now' },
+    { id: 'c', message: 'hidden task', mode: 'follow_up', submittedAt: 'now' },
+  ]} />)
+  expect(markup).toContain('引导待生效')
+  expect(markup).toContain('已排队')
+  expect(markup).toContain('还有 1 条')
+  expect(markup).not.toContain('hidden task')
+})
 
 describe('WorkspacePage new conversation draft', () => {
   it('renders a project-bound draft without inventing a sidebar session', () => {

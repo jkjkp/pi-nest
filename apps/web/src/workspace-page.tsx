@@ -23,6 +23,7 @@ import { useWorkspaceStore } from './workspace-store.js'
 import { useWorkspaceSession } from './use-workspace-session.js'
 import { useTimelineViewport } from './use-timeline-viewport.js'
 import { sessionDisplayName, sessionStatusLabel } from './workspace.js'
+import type { PendingInput } from './session-run-model.js'
 
 export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunController }) {
   const session = useWorkspaceSession(sessionRuns)
@@ -32,7 +33,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
     sessionsQuery, historyQuery, history, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
-    startDraft, removeProject, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    startDraft, removeProject, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
   const runtimeStatistics = useWorkspaceStore((state) => state.runtimeStatistics[selectedSessionId])
@@ -66,10 +67,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     session.selectSession(sessionId)
   }
 
-  function submitPrompt() {
+  function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up') {
     if ((!selectedSessionId && !isDraft) || !prompt.trim()) return
     setFollowingLatest(true)
-    session.submitPrompt()
+    session.submitPrompt(mode)
   }
 
   useEffect(() => {
@@ -241,6 +242,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             <div className="conversation-stage">
               <div className="conversation-stage-content">
                 <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) setPendingJump({ sessionId: selectedSessionId, turnId: planTurnId }) }} onRetryPlan={retryHistory} /></div>
+                <PendingInputs inputs={currentRun?.pendingInputs ?? []} key={selectedSessionId} />
                 <div data-slot="message-composer" className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-[#303030] sm:px-6">
               <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
               <Textarea
@@ -261,7 +263,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   event.preventDefault()
                   submitPrompt()
                 }}
-                placeholder={isDraft ? '随心输入…' : 'Enter 发送，Shift + Enter 换行'}
+                placeholder={isDraft ? '随心输入…' : status === 'running' ? 'Enter 排队，Shift + Enter 换行' : 'Enter 发送，Shift + Enter 换行'}
                 ref={promptTextareaRef}
                 rows={1}
                 style={{ lineHeight: '1.75rem' }}
@@ -277,7 +279,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   <ThinkingSelector key={`thinking:${selectedSessionId}`} open={thinkingOpen} onOpenChange={setThinkingOpen} current={currentThinkingLevel} levels={thinkingLevels} status={thinkingStatus} error={thinkingError} failure={thinkingFailure} disabled={!selectedSession || modelStatus === 'loading' || modelStatus === 'switching'} isActive={isActive} onLoad={() => void openThinking()} onRetry={() => void openThinking(true)} onSelect={changeThinkingLevel} />
                   {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
-                  {status === 'running' && <Button aria-label="发送补充指令" className="rounded-full" disabled={prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>}
+                  {status === 'running' && prompt.trim().length > 0 && <><Button className="rounded-full" disabled={submittingInput} onClick={() => submitPrompt('steer')} title="调整当前任务，在下一个可处理节点生效" type="button" variant="outline">引导</Button><Button className="rounded-full" disabled={submittingInput} onClick={() => submitPrompt()} title="当前任务完成后执行" type="button">{submittingInput ? '提交中…' : '排队'}</Button></>}
                   {!isActive && (
                     <Button aria-label="发送提示词" className="rounded-full" disabled={(!selectedSession && !isDraft) || creatingDraft || modelStatus === 'loading' || modelStatus === 'switching' || thinkingStatus === 'loading' || thinkingStatus === 'switching' || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
                   )}
@@ -292,4 +294,14 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       </div>
     </main>
   )
+}
+
+export function PendingInputs({ inputs }: { inputs: PendingInput[] }) {
+  const [expanded, setExpanded] = useState(false)
+  const pending = inputs.filter((input) => input.mode !== 'plan_implementation')
+  if (pending.length === 0) return null
+  return <section aria-label="待处理消息" aria-live="polite" className="pointer-events-auto mb-2 rounded-xl border bg-background/95 px-3 py-2 text-xs">
+    <ul className="max-h-32 space-y-1 overflow-y-auto">{(expanded ? pending : pending.slice(0, 2)).map((input) => <li className="flex min-w-0 gap-2" key={input.id}><span className="shrink-0 text-muted-foreground">{input.submitting ? '正在提交' : input.mode === 'steer' ? '引导待生效' : '已排队'}</span><span className={expanded ? 'min-w-0 whitespace-pre-wrap break-words' : 'min-w-0 truncate'} title={input.message}>{input.message}</span></li>)}</ul>
+    {pending.length > 2 && <Button className="mt-1 h-auto p-0 text-xs text-muted-foreground" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} type="button" variant="ghost">{expanded ? '收起' : `还有 ${pending.length - 2} 条`}</Button>}
+  </section>
 }

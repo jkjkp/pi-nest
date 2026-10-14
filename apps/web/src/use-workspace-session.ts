@@ -48,6 +48,9 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const [draftError, setDraftError] = useState<string>()
   const [draftPrompt, setDraftPrompt] = useState('')
   const [creatingDraft, setCreatingDraft] = useState(false)
+  const runningInputRequests = useRef(new Set<string>())
+  const [runningInputSessions, setRunningInputSessions] = useState<string[]>([])
+  const submittingInput = runningInputSessions.includes(selectedSessionId)
   const [models, setModels] = useState<PiRuntimeModel[]>([])
   const [modelStatus, setModelStatus] = useState<'unloaded' | 'loading' | 'ready' | 'error' | 'switching'>('unloaded')
   const [modelError, setModelError] = useState<string>()
@@ -245,7 +248,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     }
   }
 
-  function submitPrompt() {
+  function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up') {
     const command = thinkingCommand(prompt)
     if (command) {
       if (isDraft || !selectedSessionId) { setDraftError('请先进入已有会话，再调整思考等级。'); return }
@@ -263,7 +266,28 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     if (!isActive) {
       if (sessionRuns.start({ historyAnchorId: history?.entries.filter((entry) => (entry.raw.message as { role?: string } | undefined)?.role === 'user').at(-1)?.id, historyTurnCount, prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
     }
-    else if (status === 'running') void sessionRuns.steer(selectedSessionId, prompt).then(() => setDraft(selectedSessionId, '')).catch((cause) => setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败', selectedSessionId))
+    else if (status === 'running') {
+      if (runningInputRequests.current.has(selectedSessionId)) return
+      const sessionId = selectedSessionId
+      const message = prompt
+      runningInputRequests.current.add(sessionId)
+      setRunningInputSessions([...runningInputRequests.current])
+      void (async () => {
+        try {
+          if (mode === 'steer') await sessionRuns.steer(sessionId, message)
+          else await sessionRuns.followUp(sessionId, message)
+          if (useWorkspaceStore.getState().drafts[sessionId] === message) setDraft(sessionId, '')
+        } catch (cause) {
+          const ended = cause instanceof Error && 'code' in cause && cause.code === 'SESSION_NOT_RUNNING' && !isRunActive(useWorkspaceStore.getState().runs[sessionId]?.status ?? 'idle')
+          if (ended && sessionRuns.start({ prompt: message, sessionId })) {
+            if (useWorkspaceStore.getState().drafts[sessionId] === message) setDraft(sessionId, '')
+          } else setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败', sessionId)
+        } finally {
+          runningInputRequests.current.delete(sessionId)
+          setRunningInputSessions([...runningInputRequests.current])
+        }
+      })()
+    }
   }
 
   const readHistoryPage = useCallback((cursor: string | undefined) => queryClient.fetchQuery({
@@ -447,7 +471,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,
     sessionsQuery, historyQuery, history, planTurnId, turnIndexQuery, navigationNotice, retryNavigation: () => { void turnIndexQuery.refetch() }, pendingJump, setPendingJump,
-    selectSession, startDraft, removeProject, submitPrompt, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    selectSession, startDraft, removeProject, submitPrompt, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel,
     loadEarlier: () => { void historyQuery.fetchPreviousPage() }, retryHistory: () => { void historyQuery.refetch() },
   }

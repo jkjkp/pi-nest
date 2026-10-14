@@ -154,12 +154,41 @@ it('ignores an older unloaded jump after a newer node was selected', async () =>
   queryClient.clear()
 })
 
-it('sends supplemental instructions as Steer without a hidden queue mode', async () => {
+it('queues supplemental instructions by default and only steers explicitly', async () => {
   const { workspace, controller, queryClient } = thinkingProbe('补充说明', true)
-  vi.mocked(controller.steer).mockResolvedValue(undefined)
+  vi.mocked(controller.followUp).mockResolvedValue(undefined)
   workspace.submitPrompt()
+  await vi.waitFor(() => expect(useWorkspaceStore.getState().drafts['session-1']).toBe(''))
+  expect(controller.followUp).toHaveBeenCalledWith('session-1', '补充说明')
+  expect(controller.steer).not.toHaveBeenCalled()
+  vi.mocked(controller.steer).mockResolvedValue(undefined)
+  workspace.submitPrompt('steer')
   await vi.waitFor(() => expect(controller.steer).toHaveBeenCalledWith('session-1', '补充说明'))
-  expect(controller.followUp).not.toHaveBeenCalled()
   expect(workspace).not.toHaveProperty('queueMode')
+  queryClient.clear()
+})
+
+it('prevents duplicate submissions and keeps a newly edited draft during acknowledgement', async () => {
+  const { workspace, controller, queryClient } = thinkingProbe('排队消息', true)
+  let acknowledge!: () => void
+  vi.mocked(controller.followUp).mockImplementation(() => new Promise<void>((resolve) => { acknowledge = resolve }))
+  workspace.submitPrompt()
+  workspace.submitPrompt()
+  workspace.submitPrompt('steer')
+  expect(controller.followUp).toHaveBeenCalledTimes(1)
+  expect(controller.steer).not.toHaveBeenCalled()
+  useWorkspaceStore.getState().setDraft('session-1', '下一条草稿')
+  acknowledge()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(useWorkspaceStore.getState().drafts['session-1']).toBe('下一条草稿')
+  queryClient.clear()
+})
+
+it('retains the draft if a running input fails', async () => {
+  const { workspace, controller, queryClient } = thinkingProbe('不能丢失', true)
+  vi.mocked(controller.followUp).mockRejectedValue(new Error('Failed'))
+  workspace.submitPrompt()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(useWorkspaceStore.getState().drafts['session-1']).toBe('不能丢失')
   queryClient.clear()
 })
