@@ -22,6 +22,7 @@ type StreamErrorListener = (error: PiRuntimeStreamError) => void
 type UnloadReason = 'capacityEvicted' | 'deleted' | 'failed' | 'idleExpired' | 'mutation' | 'settingsReload' | 'shutdown'
 type ActiveTurn = { firstSequence?: number; native?: true; prompt?: string; runId: string; startedAt: string; stopReason?: string; waitingForExtension?: true }
 type RuntimeState = {
+  inputQueue?: PiRuntimeSessionSnapshot['inputQueue']
   activeTurn?: ActiveTurn
   completedRun?: { runId: string; stopReason: string }
   error?: string
@@ -116,6 +117,10 @@ export class PiRuntimeRegistry {
     if (!this.isPromptActive(sessionId)) return undefined
     const entry = this.entries.get(sessionId)
     if (!entry) return undefined
+    if (command.type === 'follow_up') {
+      await entry.host.command({ type: 'set_follow_up_mode', mode: 'one-at-a-time' })
+      if (!this.isPromptActive(sessionId) || this.entries.get(sessionId) !== entry) return undefined
+    }
     return entry.host.command(command)
   }
 
@@ -441,6 +446,7 @@ export class PiRuntimeRegistry {
       entry.unsubscribe()
       entry.failureUnsubscribe()
       await entry.host.close()
+      this.stateFor(sessionId).inputQueue = { steering: [], followUp: [] }
     }
     if (reason === 'failed' || reason === 'deleted') await this.extensionState.clearProjection(sessionId)
     if (reason !== 'shutdown') this.transition(sessionId, 'notLoaded')
@@ -538,6 +544,7 @@ export class PiRuntimeRegistry {
       ...(state.activeTurn ? { activeTurn: { prompt: state.activeTurn.prompt, runId: state.activeTurn.runId, startedAt: state.activeTurn.startedAt, ...(state.activeTurn.waitingForExtension ? { waitingForExtension: true } : {}) } } : {}),
       ...(state.completedRun ? { completedRun: { ...state.completedRun } } : {}),
       atSequence,
+      inputQueue: state.inputQueue ?? { steering: [], followUp: [] },
       extensionUi: this.getExtensionUiSnapshot(sessionId),
       pendingExtensionDialogs: this.extensionState.pendingDialogs(sessionId),
       ...(replayAfter !== undefined && replayAfter < atSequence ? { replayAfter } : {}),
@@ -562,6 +569,9 @@ export class PiRuntimeRegistry {
   /** Pi Extensions may start an agent through pi.sendUserMessage, bypassing beginPrompt. */
   private beginNativeTurn(sessionId: string, event: PiRuntimeHostEvent) {
     const state = this.stateFor(sessionId)
+    if (event.event.type === 'queue_update' && Array.isArray(event.event.steering) && event.event.steering.every((message) => typeof message === 'string') && Array.isArray(event.event.followUp) && event.event.followUp.every((message) => typeof message === 'string')) {
+      state.inputQueue = { steering: [...event.event.steering], followUp: [...event.event.followUp] }
+    }
     const activeTurn = state.activeTurn
     if (activeTurn) {
       const message = event.event.message

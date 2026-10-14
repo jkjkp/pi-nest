@@ -38,6 +38,21 @@ function hostMock() {
 }
 
 describe('PiRuntimeRegistry', () => {
+  it('restores the real input queue in a reconnect snapshot and queues follow-ups one at a time', async () => {
+    const host = { ...hostMock(), command: vi.fn().mockResolvedValue({ success: true }) }
+    host.prompt.mockImplementation(() => new Promise(() => {}))
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      await registry.beginPrompt(session, 'first')!.accepted
+      await registry.commandWhileRunning(session.id, { type: 'follow_up', message: 'later' })
+      expect(host.command.mock.calls.slice(-2)).toEqual([[{ type: 'set_follow_up_mode', mode: 'one-at-a-time' }], [{ type: 'follow_up', message: 'later' }]])
+      host.emit({ type: 'queue_update', steering: ['change direction'], followUp: ['later', 'next'] })
+      const snapshots: any[] = []
+      const unwatch = await registry.watch(session.id, 'reconnected', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
+      expect(snapshots.at(-1).inputQueue).toEqual({ steering: ['change direction'], followUp: ['later', 'next'] })
+      unwatch()
+    } finally { await registry.close() }
+  })
   it('publishes completion for a handled prompt without inventing a native settlement event', async () => {
     const host = hostMock()
     const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
