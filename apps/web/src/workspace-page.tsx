@@ -4,11 +4,12 @@ import { ArrowDown, CircleX, Folder, LoaderCircle, Menu, PanelRight, Send, Setti
 import { Link } from 'react-router'
 
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
 
-import { useComposerTextarea } from './composer-textarea.js'
+import { resizeComposerTextarea, useComposerTextarea } from './composer-textarea.js'
 import { ThinkingSelector } from './thinking-selector.js'
 import { ModelSelector } from './model-selector.js'
 import { SessionInspector } from './session-inspector.js'
@@ -25,7 +26,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const session = useWorkspaceSession(sessionRuns)
   const {
     selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
-    extensionStatus, extensionWidget, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
+    extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
     sessionsQuery, historyQuery, history, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
@@ -231,13 +232,14 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             <div className="conversation-stage">
               <div className="conversation-stage-content">
                 <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) setPendingJump({ sessionId: selectedSessionId, turnId: planTurnId }) }} onRetryPlan={retryHistory} /></div>
-                <div className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-[#303030] sm:px-6">
+                <div data-slot="message-composer" className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-[#303030] sm:px-6">
               <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
               <Textarea
                 className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
                 disabled={(!selectedSession && !isDraft) || creatingDraft}
                 id="prompt"
                 maxLength={20_000}
+                onFocus={(event) => resizeComposerTextarea(event.currentTarget)}
                 onChange={(event) => isDraft ? setDraftPrompt(event.target.value) : selectedSessionId && setDraft(selectedSessionId, event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
@@ -252,6 +254,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 value={prompt}
               />
               <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-2">
+                {planStatus && <DropdownMenu><DropdownMenuTrigger asChild><Button aria-label="查看 Plan 模式详情" className="h-auto px-0 py-0 text-xs text-muted-foreground" size="sm" type="button" variant="ghost">{planStatus}</Button></DropdownMenuTrigger><DropdownMenuContent align="start" side="top" className="max-w-xs"><p className="px-2 py-1.5 text-sm font-medium">Plan mode</p><p className="px-2 pb-2 text-xs text-muted-foreground">{planPolicy ?? '当前阶段未提供工具列表。'}</p></DropdownMenuContent></DropdownMenu>}
                 {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
                 <div className="ml-auto flex max-w-full items-center gap-2">
                   {selectedSession && <SessionStatistics key={`statistics:${selectedSessionId}`} details={runtimeStatistics} onRetry={() => void sessionRuns.getSessionStatistics(selectedSessionId)} />}

@@ -65,3 +65,17 @@ it('keeps runtime loading feedback in the header instead of inserting a timeline
   expect(markup).not.toContain('>正在加载 Pi 运行时<')
   queryClient.clear()
 })
+
+it('keeps the English Plan status as a detail trigger without displaying its internal widget', () => {
+  useWorkspaceStore.setState({ hiddenProjectCwds: {}, runs: {}, watchStates: {}, runtimeStates: {}, extensionStatuses: { 'session-1': { 'plan-mode': 'plan active ●', ponytail: 'ponytail: FULL' } }, extensionWidgets: { 'session-1': { 'plan-mode-plan': ['Plan mode: planning', 'Finish with plan_mode_complete when decision-ready.'], todos: ['Other extension progress'] } } })
+  const queryClient = new QueryClient()
+  queryClient.setQueryData(['sessions'], [{ cwd: '/work/pi-nest', id: 'session-1', name: 'Plan session' }])
+  const markup = renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-1']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
+  expect(markup).toContain('plan active ●')
+  expect(markup).toContain('查看 Plan 模式详情')
+  expect(markup).toContain('Other extension progress')
+  expect(markup).toContain('ponytail: FULL')
+  expect(markup).not.toContain('Plan mode: planning')
+  expect(markup).not.toContain('Finish with plan_mode_complete')
+  queryClient.clear()
+})

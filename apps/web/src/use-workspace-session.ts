@@ -7,11 +7,12 @@ import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder }
 import type { PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
 import { thinkingCommand } from './thinking-command.js'
+import { stripAnsiLine } from './ansi-text.js'
 import { isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { createSession, deleteSession, fetchSessionHistory, fetchSessions, renameSession, revealProjectInFinder, RequestError } from './workspace-api.js'
 import { fetchSessionNavigation } from './session-navigation-query.js'
-import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
+import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, planModePolicy, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
 
 const emptySessions: Awaited<ReturnType<typeof fetchSessions>> = []
 type HistoryPageParam = { before?: string; revision?: string }
@@ -93,6 +94,8 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const isActive = isRunActive(status)
   const isStreaming = status === 'running' || status === 'aborting'
   const extensionStatus = extensionStatusLine(extensionStatuses[selectedSessionId])
+  const planStatus = stripAnsiLine(extensionStatuses[selectedSessionId]?.['plan-mode'] ?? '').trim()
+  const planPolicy = planModePolicy(extensionWidgets[selectedSessionId])
   const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
   const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
   const hasCachedHistory = Boolean(queryClient.getQueryData(sessionHistoryQueryKey(selectedSessionId)))
@@ -440,7 +443,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
 
   return {
     selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
-    extensionStatus, extensionWidget, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
+    extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,
     sessionsQuery, historyQuery, history, planTurnId, turnIndexQuery, navigationNotice, retryNavigation: () => { void turnIndexQuery.refetch() }, pendingJump, setPendingJump,

@@ -4,6 +4,7 @@ import {
   groupSessionsByProject,
   extensionStatusLine,
   extensionWidgetText,
+  planModePolicy,
   filterProjectsByQuery,
   projectName,
   projectSessionGroupKey,
@@ -246,4 +247,16 @@ it('starts a new native user turn after completion instead of attaching implemen
   expect(turns[0]).toMatchObject({ startedAt, completedAt, events: [] })
   expect(turns[1]).toMatchObject({ prompt: 'Implement the plan.' })
   expect(turns[1]!.events).toHaveLength(2)
+})
+
+it('hides only the Plan widget and moves its tool policy to status details', () => {
+  const widgets = {
+    'plan-mode-plan': ['Plan mode: planning', '\u001b[36mPlan policy allows: bash, read. Model-visible tools stay unchanged.\u001b[0m', 'Finish with plan_mode_complete when decision-ready.'],
+    todos: ['Important extension progress'],
+  }
+  expect(extensionWidgetText(widgets)).toBe('Important extension progress')
+  expect(planModePolicy(widgets)).toBe('Plan policy allows: bash, read.')
+  expect(extensionStatusLine({ 'plan-mode': 'plan active ●', ponytail: 'ponytail: FULL' })).toBe('ponytail: FULL')
+  expect(extensionWidgetText({ 'plan-mode-plan': widgets['plan-mode-plan'] })).toBe('')
+  expect(planModePolicy({ 'plan-mode-plan': ['Proposed plan ready'] })).toBeUndefined()
 })
