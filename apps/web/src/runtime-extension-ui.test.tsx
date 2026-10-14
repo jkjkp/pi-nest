@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { dialogFrom, isPlanModeLifecycleNotice, isQuestionnaireFailure, planImplementationPrompt, selectResponse } from './runtime-extension-ui.js'
+import { dialogFrom, isCustomAnswerEditor, isCustomAnswerSelection, isPlanModeLifecycleNotice, isQuestionnaireFailure, planImplementationPrompt, selectResponse } from './runtime-extension-ui.js'
 
 function selectEvent(options: string[]) {
   return {
@@ -59,4 +59,43 @@ describe('RuntimeExtensionUi select mapping', () => {
     expect(isPlanModeLifecycleNotice('Plan mode enabled. I will explore and plan, but not modify files.')).toBe(true)
     expect(isPlanModeLifecycleNotice('Plan mode is already active.')).toBe(false)
   })
+})
+
+it('recognizes the custom-answer entry without changing the exact RPC selection', () => {
+  const raw = '\u001b[36m5. Other (free-form)\u001b[0m'
+  const dialog = dialogFrom(selectEvent(['1. Research', raw]))!
+  expect(isCustomAnswerSelection(dialog)).toBe(false)
+  dialog.selectedValue = raw
+  dialog.value = '自定义方案'
+  expect(isCustomAnswerSelection(dialog)).toBe(true)
+  expect(selectResponse(dialog)).toEqual({ value: raw })
+  expect(isCustomAnswerSelection(dialogFrom(selectEvent(['Other project']))!)).toBe(false)
+})
+
+it('accepts the follow-up editor request and preserves its draft', () => {
+  const dialog = dialogFrom({ event: { id: 'editor', type: 'extension_ui_request', method: 'editor', title: 'Your answer', prefill: 'Existing draft' }, observedAt: 'now', sequence: 2, sessionId: 'session-1' })!
+  expect(dialog).toMatchObject({ method: 'editor', value: 'Existing draft', prefill: 'Existing draft' })
+})
+
+it('requires a nonblank custom answer while allowing an ordinary choice with a saved draft', () => {
+  const dialog = dialogFrom(selectEvent(['1. Research', '2. Other (free-form)']))!
+  dialog.selectedValue = '2. Other (free-form)'
+  expect(selectResponse(dialog)).toBeUndefined()
+  dialog.value = '   '
+  expect(selectResponse(dialog)).toBeUndefined()
+  dialog.value = 'My research plan'
+  expect(selectResponse(dialog)).toEqual({ value: '2. Other (free-form)' })
+  dialog.selectedValue = '1. Research'
+  expect(selectResponse(dialog)).toEqual({ value: '1. Research' })
+  expect(dialog.value).toBe('My research plan')
+})
+
+it('only bridges the matching questionnaire editor in the same session and run', () => {
+  const question = { sessionId: 'session-1', runId: 'run-1', title: '交付物: 最终要交付什么？' }
+  const editor = { sessionId: 'session-1', runId: 'run-1', title: '最终要交付什么？', method: 'editor' as const }
+  expect(isCustomAnswerEditor(question, editor)).toBe(true)
+  expect(isCustomAnswerEditor(question, { ...editor, sessionId: 'session-2' })).toBe(false)
+  expect(isCustomAnswerEditor(question, { ...editor, runId: 'run-2' })).toBe(false)
+  expect(isCustomAnswerEditor(question, { ...editor, title: '其他问题' })).toBe(false)
+  expect(isCustomAnswerEditor(question, { ...editor, method: 'input' })).toBe(false)
 })
