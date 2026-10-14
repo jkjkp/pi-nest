@@ -10,6 +10,8 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from 
 import { Textarea } from '@/components/ui/textarea'
 
 import { resizeComposerTextarea, useComposerTextarea } from './composer-textarea.js'
+import { useComposerHistory } from './composer-history.js'
+import { timelineItems } from './timeline-model.js'
 import { ThinkingSelector } from './thinking-selector.js'
 import { ModelSelector } from './model-selector.js'
 import { SessionInspector } from './session-inspector.js'
@@ -51,6 +53,13 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector,
   } = useTimelineViewport({ selectedSessionId, history, activeTurn, isActive, inspectorOpen, setInspectorOpen })
   const promptTextareaRef = useComposerTextarea(prompt)
+  const promptHistory = useComposerHistory(
+    selectedSessionId || (isDraft ? `draft:${draftProject?.key}` : ''),
+    isDraft ? [] : timelineItems(history?.entries, currentRun?.turns ?? [], currentRun?.systemEvents ?? []),
+    prompt,
+    (value) => isDraft ? setDraftPrompt(value) : selectedSessionId && setDraft(selectedSessionId, value),
+    promptTextareaRef,
+  )
 
   function selectSession(sessionId: string) {
     setFollowingLatest(true)
@@ -240,8 +249,13 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 id="prompt"
                 maxLength={20_000}
                 onFocus={(event) => resizeComposerTextarea(event.currentTarget)}
-                onChange={(event) => isDraft ? setDraftPrompt(event.target.value) : selectedSessionId && setDraft(selectedSessionId, event.target.value)}
+                onChange={(event) => {
+                  promptHistory.reset()
+                  if (isDraft) setDraftPrompt(event.target.value)
+                  else if (selectedSessionId) setDraft(selectedSessionId, event.target.value)
+                }}
                 onKeyDown={(event) => {
+                  if (promptHistory.onKeyDown(event)) return
                   if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
 
                   event.preventDefault()
