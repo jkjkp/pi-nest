@@ -19,9 +19,9 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
   const contentId = `turn-execution-${item.id}`
 
   useEffect(() => {
-    if (!isRunning) return
+    if (!executionActive) return
     return startElapsedClock(item.runtimeTiming?.startedAt ?? item.startedAt, setNow)
-  }, [isRunning, item.id, item.runtimeTiming?.startedAt, item.startedAt])
+  }, [executionActive, item.id, item.runtimeTiming?.startedAt, item.startedAt])
 
   useEffect(() => {
     setExpanded((current) => nextExecutionExpanded(current, previousRunning.current, executionActive, userToggled))
@@ -33,10 +33,10 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
     executionViewport.current.scrollTop = executionViewport.current.scrollHeight
   }, [expanded, executionFollowLatest, presentation.activities])
 
-  const elapsed = formatElapsedTime(turnElapsed(item, isRunning, now))
+  const elapsed = formatElapsedTime(turnElapsed(item, executionActive, now))
   const phase = executionPhase(item, presentation, runStatus, runMessage)
-  const statusText = isRunning ? `${phase} · ${elapsed}`
-    : runStatus === 'submitted' || runStatus === 'awaiting_agent' || runStatus === 'awaiting_input' || runStatus === 'aborting' || runStatus === 'aborted' || runStatus === 'error'
+  const statusText = executionActive ? `${phase} · ${elapsed}`
+    : runStatus === 'submitted' || runStatus === 'awaiting_agent' || runStatus === 'aborting' || runStatus === 'aborted' || runStatus === 'error'
       ? phase : elapsed === '—' ? '正在同步执行状态…' : `用时 ${elapsed}`
   if (expanded && !contentMounted) setContentMounted(true)
   const contentExpanded = expanded && presentation.hasExecution

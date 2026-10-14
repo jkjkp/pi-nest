@@ -168,6 +168,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       useWorkspaceStore.getState().updateRun(event.sessionId, { status: 'running', waitingMessage: undefined })
     }
     if (isExtensionDialog(event)) useWorkspaceStore.getState().updateRun(event.sessionId, { status: 'awaiting_input', waitingMessage: undefined })
+    if (raw.type === 'extension_ui_resolved' && store.runs[event.sessionId]?.status === 'awaiting_input') useWorkspaceStore.getState().updateRun(event.sessionId, { status: 'running', waitingMessage: undefined })
     const userInput = nativeUserMessage(event)
     if (userInput) useWorkspaceStore.getState().consumePendingInput(event.sessionId, userInput)
     useWorkspaceStore.getState().appendRunEvent(event.sessionId, event)

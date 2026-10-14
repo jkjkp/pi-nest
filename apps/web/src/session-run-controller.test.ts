@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
 import { createSessionRunController } from './session-run-controller.js'
 import { useWorkspaceStore } from './workspace-store.js'
+import { timelineItems } from './timeline-model.js'
+import { projectTurnPresentation, turnElapsed } from './turn-execution-model.js'
 
 function runtimeMock() {
   const errors = new Set<(error: { code?: string; message: string; sessionId?: string }) => void>()
@@ -43,6 +45,38 @@ async function tick() { for (let index = 0; index < 12; index++) await Promise.r
 describe('session run controller', () => {
   beforeEach(() => useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {}, extensionStatuses: {}, extensionWidgets: {}, drafts: {} }))
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+
+  it('keeps a plan run visible across questions, editor responses and resumed thought events', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-14T00:00:00.000Z'))
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    controller.start({ prompt: '/plan research', sessionId: 'session-a' })
+    await tick()
+    let sequence = 0
+    const emit = (event: Record<string, unknown>, seconds: number) => runtime.emit({ event, observedAt: new Date(Date.parse('2026-10-14T00:00:00.000Z') + seconds * 1000).toISOString(), sequence: ++sequence, runId: 'run-1', sessionId: 'session-a', turnId: 'turn-1' })
+    emit({ type: 'agent_start' }, 1)
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'Planning research' } }, 2)
+    vi.advanceTimersByTime(100)
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('running')
+    emit({ type: 'extension_ui_request', id: 'select', method: 'select', options: ['Other (free-form)'] }, 3)
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('awaiting_input')
+    emit({ type: 'extension_ui_resolved', dialogId: 'select' }, 4)
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('running')
+    emit({ type: 'extension_ui_request', id: 'editor', method: 'editor' }, 4)
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('awaiting_input')
+    emit({ type: 'extension_ui_resolved', dialogId: 'editor' }, 20)
+    emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'Continuing research' } }, 21)
+    vi.advanceTimersByTime(100)
+    const run = useWorkspaceStore.getState().runs['session-a']!
+    expect(run.status).toBe('running')
+    expect(run.turns).toHaveLength(1)
+    const item = timelineItems(undefined, run.turns, [])[0]!
+    expect(projectTurnPresentation(item, true).activities).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'thinking', text: expect.stringContaining('Continuing research') })]))
+    expect(turnElapsed(item, true, Date.parse('2026-10-14T00:00:21.000Z'))).toBe(20000)
+    emit({ type: 'agent_settled' }, 25)
+    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+  })
 
   it('buffers a burst of deltas without losing order and flushes before tool execution and settlement', async () => {
     vi.useFakeTimers()
