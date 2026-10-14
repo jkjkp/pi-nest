@@ -290,6 +290,20 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     }
   }
 
+  async function steerQueued(inputId: string) {
+    const sessionId = selectedSessionId
+    if (status !== 'running' || runningInputRequests.current.has(sessionId)) return
+    runningInputRequests.current.add(sessionId)
+    setRunningInputSessions([...runningInputRequests.current])
+    setControlError(undefined)
+    try { await sessionRuns.steerQueued(sessionId, inputId) }
+    catch (cause) { setControlError(cause instanceof Error ? cause.message : '引导发送失败', sessionId) }
+    finally {
+      runningInputRequests.current.delete(sessionId)
+      setRunningInputSessions([...runningInputRequests.current])
+    }
+  }
+
   const readHistoryPage = useCallback((cursor: string | undefined) => queryClient.fetchQuery({
     queryKey: ['session-history-page', selectedSessionId, historyCacheVersion, history?.revision, cursor],
     queryFn: ({ signal }) => fetchSessionHistory(selectedSessionId, cursor, history?.revision, signal),
@@ -471,7 +485,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,
     sessionsQuery, historyQuery, history, planTurnId, turnIndexQuery, navigationNotice, retryNavigation: () => { void turnIndexQuery.refetch() }, pendingJump, setPendingJump,
-    selectSession, startDraft, removeProject, submitPrompt, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    selectSession, startDraft, removeProject, submitPrompt, steerQueued, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel,
     loadEarlier: () => { void historyQuery.fetchPreviousPage() }, retryHistory: () => { void historyQuery.refetch() },
   }

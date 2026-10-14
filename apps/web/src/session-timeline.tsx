@@ -111,7 +111,8 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   if (isLoading && items.length === 0) return <LoadingTimeline />
   if (error && items.length === 0) return <HistoryError onRetry={onRetry} />
 
-  if (items.length === 0 && pendingInputs.length === 0) {
+  const pendingImplementation = pendingInputs.filter((input) => input.mode === 'plan_implementation')
+  if (items.length === 0 && pendingImplementation.length === 0) {
     return <section className="py-8 text-center"><p className="text-sm text-muted-foreground">{isRunning ? '正在等待 Pi 原生事件…' : '当前活动分支尚无可展示的原生条目。'}</p></section>
   }
 
@@ -128,7 +129,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     if (virtualItem.index === 0) return <div className="absolute left-0 top-0 w-full" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>
     const item = items[virtualItem.index - 1]!
     return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><TurnItem onSelectModel={onSelectModel} isRunning={isRunning && virtualItem.index === items.length} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} runMessage={virtualItem.index === items.length ? runMessage : undefined} runStatus={virtualItem.index === items.length ? runStatus : undefined} /></div>
-  })}</div>{pendingInputs.map((input) => <PendingUserInput input={input} key={input.id} />)}</div></section>
+  })}</div>{pendingImplementation.map((input) => <PendingUserInput input={input} key={input.id} />)}</div></section>
 }
 
 function HistoryLoadSentinel({ canLoad, hasEarlier, isLoading, onLoad, requested, scrollViewport }: { canLoad: boolean; hasEarlier: boolean; isLoading: boolean; onLoad: () => void; requested: { current: boolean }; scrollViewport: HTMLElement | null }) {
