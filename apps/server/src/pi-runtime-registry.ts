@@ -15,7 +15,7 @@ import { PiRuntimeResumeError, type PiRuntimeStreamError, SessionEventStream } f
 
 type HostFactory = (session: PiRuntimeSession) => PiRuntimeHost
 type Lock = 'mutation' | 'prompt'
-type RegistryEntry = { failureUnsubscribe: () => void; host: PiRuntimeHost; lastUsed: number; unsubscribe: () => void }
+type RegistryEntry = { failureUnsubscribe: () => void; host: PiRuntimeHost; lastUsed: number; session: PiRuntimeSession; unsubscribe: () => void }
 type StreamEntry = { stream: SessionEventStream }
 type StreamListener = (event: PiRuntimeEvent) => void
 type StreamErrorListener = (error: PiRuntimeStreamError) => void
@@ -23,6 +23,9 @@ type UnloadReason = 'capacityEvicted' | 'deleted' | 'failed' | 'idleExpired' | '
 type ActiveTurn = { firstSequence?: number; native?: true; prompt?: string; runId: string; startedAt: string; stopReason?: string; waitingForExtension?: true }
 type RuntimeState = {
   inputQueue?: PiRuntimeSessionSnapshot['inputQueue']
+  // shortcut: Follow-ups live in memory; persist them if server-restart recovery is required.
+  queuedFollowUps?: string[]
+  promotingInput?: boolean
   activeTurn?: ActiveTurn
   completedRun?: { runId: string; stopReason: string }
   error?: string
@@ -118,8 +121,28 @@ export class PiRuntimeRegistry {
     const entry = this.entries.get(sessionId)
     if (!entry) return undefined
     if (command.type === 'follow_up') {
-      await entry.host.command({ type: 'set_follow_up_mode', mode: 'one-at-a-time' })
-      if (!this.isPromptActive(sessionId) || this.entries.get(sessionId) !== entry) return undefined
+      if (typeof command.message !== 'string') throw new Error('Invalid follow-up')
+      const state = this.stateFor(sessionId)
+      state.queuedFollowUps ??= []
+      state.queuedFollowUps.push(command.message)
+      await this.publishInputQueue(sessionId)
+      return { success: true }
+    }
+    if (command.type === 'steer_queued') {
+      const state = this.stateFor(sessionId)
+      const index = Number(command.index) - (state.inputQueue?.followUp.length ?? 0)
+      const queue = state.queuedFollowUps
+      if (state.promotingInput || !queue || index < 0 || queue[index] !== command.message) throw new Error('Queued message has already changed')
+      state.promotingInput = true
+      try {
+        const response = await entry.host.command({ type: 'steer', message: command.message })
+        queue.splice(index, 1)
+        await this.publishInputQueue(sessionId)
+        return response
+      } finally {
+        state.promotingInput = false
+        this.drainFollowUp(sessionId)
+      }
     }
     return entry.host.command(command)
   }
@@ -323,6 +346,7 @@ export class PiRuntimeRegistry {
           this.locks.delete(session.id)
           this.scheduleUnload(session.id)
         }
+        this.drainFollowUp(session.id)
       })
     void settled.catch(rejectAccepted)
     return {
@@ -418,11 +442,13 @@ export class PiRuntimeRegistry {
       const entry: RegistryEntry = {
         failureUnsubscribe: () => undefined,
         host,
+        session,
         lastUsed: ++this.usageClock,
         unsubscribe: host.onEvent((event) => {
           // Tag at native-event receipt, before asynchronous stream persistence can interleave a later prompt.
           const runId = this.beginNativeTurn(session.id, event)
-          void this.streamFor(session.id).stream.publish({ ...event, ...(runId ? { runId } : {}) }, async (published) => {
+          const projectedEvent = event.event.type === 'queue_update' ? { ...event, event: { type: 'queue_update', ...this.inputQueueFor(session.id) } } : event
+          void this.streamFor(session.id).stream.publish({ ...projectedEvent, ...(runId ? { runId } : {}) }, async (published) => {
             this.trackActiveTurn(session.id, published)
             this.trackExtensionDialog(session.id, published)
             await this.extensionState.trackProjection(session.id, published.event)
@@ -544,7 +570,7 @@ export class PiRuntimeRegistry {
       ...(state.activeTurn ? { activeTurn: { prompt: state.activeTurn.prompt, runId: state.activeTurn.runId, startedAt: state.activeTurn.startedAt, ...(state.activeTurn.waitingForExtension ? { waitingForExtension: true } : {}) } } : {}),
       ...(state.completedRun ? { completedRun: { ...state.completedRun } } : {}),
       atSequence,
-      inputQueue: state.inputQueue ?? { steering: [], followUp: [] },
+      inputQueue: this.inputQueueFor(sessionId),
       extensionUi: this.getExtensionUiSnapshot(sessionId),
       pendingExtensionDialogs: this.extensionState.pendingDialogs(sessionId),
       ...(replayAfter !== undefined && replayAfter < atSequence ? { replayAfter } : {}),
@@ -607,6 +633,34 @@ export class PiRuntimeRegistry {
     this.locks.delete(sessionId)
     this.transition(sessionId, 'idle', undefined, undefined, false, notifyCompletion ? state.completedRun : undefined)
     this.scheduleUnload(sessionId)
+    if (activeTurn.native) queueMicrotask(() => this.drainFollowUp(sessionId))
+  }
+
+  private inputQueueFor(sessionId: string) {
+    const state = this.stateFor(sessionId)
+    return { steering: state.inputQueue?.steering ?? [], followUp: [...(state.inputQueue?.followUp ?? []), ...(state.queuedFollowUps ?? [])] }
+  }
+
+  private publishInputQueue(sessionId: string) {
+    return this.streamFor(sessionId).stream.publish({ sessionId, observedAt: new Date().toISOString(), event: { type: 'queue_update', ...this.inputQueueFor(sessionId) } })
+  }
+
+  private drainFollowUp(sessionId: string) {
+    const state = this.stateFor(sessionId)
+    const entry = this.entries.get(sessionId)
+    if (!entry || state.promotingInput || this.locks.has(sessionId) || state.lifecycle !== 'idle' || state.completedRun?.stopReason === 'aborted' || state.completedRun?.stopReason === 'error') return
+    const message = state.queuedFollowUps?.[0]
+    if (message === undefined) return
+    const prompt = this.beginPrompt(entry.session, message)
+    if (!prompt) return
+    state.queuedFollowUps!.shift()
+    void this.publishInputQueue(sessionId)
+    void prompt.accepted.catch(() => {
+      state.queuedFollowUps ??= []
+      state.queuedFollowUps.unshift(message)
+      void this.publishInputQueue(sessionId)
+    })
+    void prompt.settled.catch(() => undefined)
   }
 
   private trackActiveTurn(sessionId: string, event: PiRuntimeEvent) {

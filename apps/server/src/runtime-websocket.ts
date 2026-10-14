@@ -15,6 +15,7 @@ const commandSchema = z.discriminatedUnion('type', [
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('abort') }).strict(),
   z.object({ id: z.string().min(1).max(128), message: z.string().trim().min(1).max(20_000), sessionId: z.string().min(1), type: z.literal('steer') }).strict(),
   z.object({ id: z.string().min(1).max(128), message: z.string().trim().min(1).max(20_000), sessionId: z.string().min(1), type: z.literal('follow_up') }).strict(),
+  z.object({ id: z.string().min(1).max(128), message: z.string().min(1).max(20_000), index: z.number().int().nonnegative(), sessionId: z.string().min(1), type: z.literal('steer_queued') }).strict(),
   z.object({ id: z.string().min(1).max(128), provider: z.string().min(1).max(256), modelId: z.string().min(1).max(256), sessionId: z.string().min(1), type: z.literal('set_model') }).strict(),
   z.object({ id: z.string().min(1).max(128), level: z.string().min(1).max(64), sessionId: z.string().min(1), type: z.literal('set_thinking_level') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('compact') }).strict(),
@@ -90,9 +91,9 @@ export class RuntimeWebSocketBroker {
       return this.ack(socket, command.data.id, command.data.type, command.data.sessionId)
     }
 
-    if (command.data.type === 'steer' || command.data.type === 'follow_up') {
+    if (command.data.type === 'steer' || command.data.type === 'follow_up' || command.data.type === 'steer_queued') {
       try {
-        const result = await this.runtime.commandWhileRunning(command.data.sessionId, { type: command.data.type, message: command.data.message })
+        const result = await this.runtime.commandWhileRunning(command.data.sessionId, { type: command.data.type, message: command.data.message, ...(command.data.type === 'steer_queued' ? { index: command.data.index } : {}) })
         if (!result) return this.error(socket, command.data.id, 'SESSION_NOT_RUNNING', 'Pi session is not running', command.data.sessionId)
         return this.ack(socket, command.data.id, command.data.type, command.data.sessionId)
       } catch {

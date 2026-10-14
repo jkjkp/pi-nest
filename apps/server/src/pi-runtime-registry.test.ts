@@ -38,18 +38,62 @@ function hostMock() {
 }
 
 describe('PiRuntimeRegistry', () => {
-  it('restores the real input queue in a reconnect snapshot and queues follow-ups one at a time', async () => {
+  it('promotes only the chosen queued message and preserves the queue if steering fails', async () => {
     const host = { ...hostMock(), command: vi.fn().mockResolvedValue({ success: true }) }
     host.prompt.mockImplementation(() => new Promise(() => {}))
     const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
     try {
       await registry.beginPrompt(session, 'first')!.accepted
       await registry.commandWhileRunning(session.id, { type: 'follow_up', message: 'later' })
-      expect(host.command.mock.calls.slice(-2)).toEqual([[{ type: 'set_follow_up_mode', mode: 'one-at-a-time' }], [{ type: 'follow_up', message: 'later' }]])
+      await registry.commandWhileRunning(session.id, { type: 'follow_up', message: 'next' })
+      await registry.commandWhileRunning(session.id, { type: 'steer_queued', index: 1, message: 'next' })
+      expect(host.command).toHaveBeenCalledWith({ type: 'steer', message: 'next' })
+      const snapshots: any[] = []
+      const unwatch = await registry.watch(session.id, 'tab', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
+      expect(snapshots.at(-1).inputQueue.followUp).toEqual(['later'])
+      unwatch()
+      host.command.mockRejectedValueOnce(new Error('rejected'))
+      await expect(registry.commandWhileRunning(session.id, { type: 'steer_queued', index: 0, message: 'later' })).rejects.toThrow('rejected')
+      const unwatchAgain = await registry.watch(session.id, 'tab', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
+      expect(snapshots.at(-1).inputQueue.followUp).toEqual(['later'])
+      await expect(registry.commandWhileRunning(session.id, { type: 'steer_queued', index: 0, message: 'stale' })).rejects.toThrow('changed')
+      unwatchAgain()
+    } finally { await registry.close() }
+  })
+
+  it('starts queued prompts in order only after the preceding run settles', async () => {
+    const host = hostMock()
+    let finish!: (result: { model: undefined; stopReason: string }) => void
+    host.prompt.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve })).mockImplementation(() => new Promise(() => {}))
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      const prompt = registry.beginPrompt(session, 'first')!
+      await prompt.accepted
+      await registry.commandWhileRunning(session.id, { type: 'follow_up', message: 'second' })
+      await registry.commandWhileRunning(session.id, { type: 'follow_up', message: 'third' })
+      expect(host.prompt).toHaveBeenCalledTimes(1)
+      finish({ model: undefined, stopReason: 'stop' })
+      await prompt.settled
+      await vi.waitFor(() => expect(host.prompt).toHaveBeenCalledTimes(2))
+      expect(host.prompt.mock.calls.map(([message]) => message)).toEqual(['first', 'second'])
+      const snapshots: any[] = []
+      const unwatch = await registry.watch(session.id, 'tab', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
+      expect(snapshots.at(-1).inputQueue.followUp).toEqual(['third'])
+      unwatch()
+    } finally { await registry.close() }
+  })
+  it('restores the real input queue in a reconnect snapshot without sending queued prompts early', async () => {
+    const host = { ...hostMock(), command: vi.fn().mockResolvedValue({ success: true }) }
+    host.prompt.mockImplementation(() => new Promise(() => {}))
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      await registry.beginPrompt(session, 'first')!.accepted
+      await registry.commandWhileRunning(session.id, { type: 'follow_up', message: 'later' })
+      expect(host.command).not.toHaveBeenCalled()
       host.emit({ type: 'queue_update', steering: ['change direction'], followUp: ['later', 'next'] })
       const snapshots: any[] = []
       const unwatch = await registry.watch(session.id, 'reconnected', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
-      expect(snapshots.at(-1).inputQueue).toEqual({ steering: ['change direction'], followUp: ['later', 'next'] })
+      expect(snapshots.at(-1).inputQueue).toEqual({ steering: ['change direction'], followUp: ['later', 'next', 'later'] })
       unwatch()
     } finally { await registry.close() }
   })
