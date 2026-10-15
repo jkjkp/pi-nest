@@ -123,8 +123,8 @@ export type PiConfigurationSnapshot = {
   projectMcp?: PiConfigDocument
   projectTrusted: boolean
   errors?: Partial<Record<'custom-models' | 'mcp' | 'project-mcp', string>>
-  providers: { id: string; name: string; credentialType?: 'api_key' | 'oauth'; source?: string; apiKeyLogin: boolean }[]
-  models: (PiRuntimeModel & { thinkingLevels: string[] })[]
+  providers: { id: string; name: string; credentialType?: 'api_key' | 'oauth'; source?: string; apiKeyLogin: boolean; builtin?: boolean }[]
+  models: PiCatalogModel[]
 }
 export type PiConfigurationUpdate =
   | { category: 'models'; values: PiSettingsUpdate }
@@ -133,3 +133,7 @@ export type PiConfigurationUpdate =
   | { category: 'custom-models' | 'mcp'; scope: PiConfigScope; revision: string; name: string; value: Record<string, unknown> | null }
   | { category: 'credentials'; provider: string; apiKey: string | null }
 export type PiMcpDiagnostics = { servers: { name: string; state: string; tools: string[] }[]; hasErrors: boolean }
+
+export type PiCatalogModel = PiRuntimeModel & { thinkingLevels: string[]; definition?: Record<string, unknown> }
+export type PiModelDiscoveryRequest = { provider: string; connection: { baseUrl: string; api: 'openai-completions' | 'openai-responses' | 'anthropic-messages'; apiKey?: string; headers?: Record<string, string> } }
+export type PiDiscoveredModel = { id: string; name?: string }
