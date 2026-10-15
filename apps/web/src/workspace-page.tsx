@@ -86,31 +86,38 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   }, [])
 
   const navigation = (
-    <SessionNavigation
-      collapsedProjectKeys={collapsedProjectKeys}
-      error={sessionsQuery.error}
-      isLoading={sessionsQuery.isPending}
-      mutationSessionId={mutatingSessionId}
-      onDelete={handleDelete}
-      onNewConversation={startDraft}
-      onProjectOrderChange={(projectOrder) => setNavigationOrder({ ...navigationOrder, projectOrder })}
-      onRemoveProject={removeProject}
-      onRename={handleRename}
-      onRestoreProject={restoreProject}
-      onRevealProject={revealProjectInFinder}
-      onSelect={selectSession}
-      onSessionOrderChange={(projectKey, sessionOrder) =>
-        setNavigationOrder({
-          ...navigationOrder,
-          sessionOrderByProject: { ...navigationOrder.sessionOrderByProject, [projectKey]: sessionOrder },
-        })
-      }
-      onToggleProject={setProjectCollapsed}
-      projects={projects}
-      removedProjects={removedProjects}
-      runs={runs}
-      selectedSessionId={selectedSessionId}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="min-h-0 flex-1">
+        <SessionNavigation
+          collapsedProjectKeys={collapsedProjectKeys}
+          error={sessionsQuery.error}
+          isLoading={sessionsQuery.isPending}
+          mutationSessionId={mutatingSessionId}
+          onDelete={handleDelete}
+          onNewConversation={startDraft}
+          onProjectOrderChange={(projectOrder) => setNavigationOrder({ ...navigationOrder, projectOrder })}
+          onRemoveProject={removeProject}
+          onRename={handleRename}
+          onRestoreProject={restoreProject}
+          onRevealProject={revealProjectInFinder}
+          onSelect={selectSession}
+          onSessionOrderChange={(projectKey, sessionOrder) =>
+            setNavigationOrder({
+              ...navigationOrder,
+              sessionOrderByProject: { ...navigationOrder.sessionOrderByProject, [projectKey]: sessionOrder },
+            })
+          }
+          onToggleProject={setProjectCollapsed}
+          projects={projects}
+          removedProjects={removedProjects}
+          runs={runs}
+          selectedSessionId={selectedSessionId}
+        />
+      </div>
+      <footer className="shrink-0 border-t p-3">
+        <Button asChild className="w-full justify-start" size="sm" variant="ghost"><Link to={selectedSession ? `/settings?session=${encodeURIComponent(selectedSession.id)}` : '/settings'} onClick={() => setNavigationOpen(false)}><Settings aria-hidden="true" />设置</Link></Button>
+      </footer>
+    </div>
   )
   const inspector = <SessionInspector run={currentRun} session={selectedSession} />
 
@@ -132,7 +139,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           <h1 className="truncate text-sm font-semibold tracking-tight" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : 'Pi Nest'}</h1>
         </div>
         <div className="ml-auto flex items-center gap-1">
-          <Button asChild size="sm" variant="ghost"><Link to={selectedSession ? `/settings?session=${encodeURIComponent(selectedSession.id)}` : "/settings"}><Settings aria-hidden="true" />设置</Link></Button>
           <Sheet open={inspectorSheetOpen} onOpenChange={setInspectorSheetOpen}>
             <SheetTrigger asChild>
               <Button aria-label="打开会话检查器" className="xl:hidden" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
@@ -173,7 +179,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               <h1 className="min-w-0 truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : draftProject ? `新对话 · ${draftProject.name}` : '选择一个会话'}</h1>
               {selectedSession && <span className="inline-flex size-4 shrink-0" role={runtimeLoading ? 'status' : undefined} aria-label={runtimeLoading ? '正在加载 Pi 运行时' : undefined}>{runtimeLoading && <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />}</span>}
             </div>
-            <Button asChild className="shrink-0" size="sm" variant="ghost"><Link to={selectedSession ? `/settings?session=${encodeURIComponent(selectedSession.id)}` : "/settings"}><Settings aria-hidden="true" />设置</Link></Button>
           </header>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="timeline-scroll h-full">
