@@ -10,5 +10,25 @@ export const settingsCategories = [
 ] as const
 
 export function changedSettings<T extends object>(before: T, after: T): Partial<T> {
-  return Object.fromEntries(Object.entries(after).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(before[key as keyof T]))) as Partial<T>
+  return Object.fromEntries(Object.entries(after).filter(([key, value]) => !settingsEqual(value, before[key as keyof T]))) as Partial<T>
+}
+
+export function settingsEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (Array.isArray(left) || Array.isArray(right)) return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => settingsEqual(value, right[index]))
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false
+  const a = Object.entries(left).filter(([, value]) => value !== undefined)
+  const b = Object.entries(right).filter(([, value]) => value !== undefined)
+  return a.length === b.length && a.every(([key, value]) => Object.hasOwn(right, key) && settingsEqual(value, (right as Record<string, unknown>)[key]))
+}
+
+export function jsonDraftChanged(before: unknown, text: string): boolean {
+  try { return !settingsEqual(before, JSON.parse(text)) } catch { return true }
+}
+
+export function secondsToMilliseconds(text: string): number | undefined {
+  if (!/^\d+(?:\.\d{1,3})?$/.test(text.trim())) return undefined
+  const [seconds, fraction = ''] = text.trim().split('.')
+  const result = Number(seconds) * 1000 + Number(fraction.padEnd(3, '0'))
+  return Number.isSafeInteger(result) && result >= 0 && result <= 3_600_000 ? result : undefined
 }
