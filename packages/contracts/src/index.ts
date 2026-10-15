@@ -89,7 +89,7 @@ export type PiRuntimeSettings = {
   retryEnabled: boolean
   steeringMode: 'all' | 'one-at-a-time'
 }
-export type PiSettingsSnapshot = { effective: PiRuntimeSettings; global: PiRuntimeSettings; project: Partial<PiRuntimeSettings> }
+export type PiSettingsSnapshot = { effective: PiRuntimeSettings; global: Partial<PiRuntimeSettings>; project: Partial<PiRuntimeSettings> }
 
 export type PiSettingsUpdate = Partial<PiRuntimeSettings>
 export type PiSessionHistory = {
@@ -107,3 +107,29 @@ export type PiRuntimeStatistics = {
   autoCompactionEnabled?: boolean
   cacheHitRate?: number
 }
+
+export type PiSettingsCategory = 'models' | 'credentials' | 'custom-models' | 'mcp' | 'resources' | 'advanced'
+export type PiConfigScope = 'global' | 'project'
+export type PiConfigDocument = { revision: string; entries: Record<string, Record<string, unknown>>; autoEnableCodemode?: boolean }
+export type PiResourceSettings = { packages: (string | { source: string; autoload?: boolean; extensions?: string[]; skills?: string[]; prompts?: string[]; themes?: string[] })[]; extensions: string[]; skills: string[]; prompts: string[]; themes: string[] }
+export type PiAdvancedSettings = { transport: 'auto' | 'sse' | 'websocket' | 'websocket-cached'; httpIdleTimeoutMs: number; cacheWarming: 'off' | 'streaming' | 'idle'; enableSkillCommands: boolean; enabledModels?: string[] }
+export type PiConfigurationSnapshot = {
+  settings: PiSettingsSnapshot
+  resources: PiResourceSettings
+  projectResources?: Partial<PiResourceSettings>
+  advanced: PiAdvancedSettings
+  customModels: PiConfigDocument
+  mcp: PiConfigDocument
+  projectMcp?: PiConfigDocument
+  projectTrusted: boolean
+  errors?: Partial<Record<'custom-models' | 'mcp' | 'project-mcp', string>>
+  providers: { id: string; name: string; credentialType?: 'api_key' | 'oauth'; source?: string; apiKeyLogin: boolean }[]
+  models: (PiRuntimeModel & { thinkingLevels: string[] })[]
+}
+export type PiConfigurationUpdate =
+  | { category: 'models'; values: PiSettingsUpdate }
+  | { category: 'advanced'; values: Partial<PiAdvancedSettings> }
+  | { category: 'resources'; scope: PiConfigScope; values: Partial<PiResourceSettings> }
+  | { category: 'custom-models' | 'mcp'; scope: PiConfigScope; revision: string; name: string; value: Record<string, unknown> | null }
+  | { category: 'credentials'; provider: string; apiKey: string | null }
+export type PiMcpDiagnostics = { servers: { name: string; state: string; tools: string[] }[]; hasErrors: boolean }
