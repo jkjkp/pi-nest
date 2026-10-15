@@ -20,3 +20,5 @@ export type { PiRpcProcessOptions, PiRpcProcessState } from './pi-rpc-process.js
 export { PiRpcCommandError, PiRpcConnectionError } from './pi-rpc-connection.js'
 export type { PiRpcFailureKind } from './pi-rpc-connection.js'
 export { readPiConfiguration, updatePiConfiguration, diagnosePiMcp, PiConfigurationConflict, PiConfigurationInvalid } from './configuration.js'
+
+export { discoverPiModels } from './configuration.js'

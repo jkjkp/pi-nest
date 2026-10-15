@@ -74,6 +74,8 @@ it('uses Pi 1.2 native APIs against isolated configuration, including persistent
     await updatePiConfiguration(project, { category: 'custom-models', scope: 'global', revision: snapshot.customModels.revision, name: 'local', value: { baseUrl: 'http://localhost:11434/v1', api: 'openai-completions', apiKey: 'local', models: [{ id: 'fixture' }] } })
     snapshot = await readPiConfiguration(project)
     expect(snapshot.models.some((model) => model.id === 'fixture' && model.provider === 'local')).toBe(true)
+    expect(snapshot.providers.find((provider) => provider.id === 'local')?.builtin).toBe(false)
+    expect(snapshot.providers.find((provider) => provider.id === 'anthropic')?.builtin).toBe(true)
     await updatePiConfiguration(project, { category: 'resources', scope: 'project', values: { skills: ['skills'] } })
     await updatePiConfiguration(project, { category: 'advanced', values: { transport: 'sse', enableSkillCommands: false } })
     snapshot = await readPiConfiguration(project)

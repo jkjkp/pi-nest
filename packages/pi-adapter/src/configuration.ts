@@ -75,14 +75,15 @@ export async function readPiConfiguration(cwd: string): Promise<PiConfigurationS
   const globalManager = SettingsManager.inMemory(manager.getGlobalSettings())
   // Reading settings must not run credential commands, refresh OAuth, or connect to providers.
   const runtime = await ModelRuntime.create({ refreshOnCreate: false, allowModelNetwork: false })
+  const builtinRuntime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false, allowModelNetwork: false })
   const credentials = await runtime.listCredentials()
   const stored = new Map(credentials.map((credential) => [credential.providerId, credential.type]))
   const providers = runtime.getProviders().map((provider) => {
     const status = runtime.getProviderAuthStatus(provider.id)
-    return { id: provider.id, name: provider.name, credentialType: stored.get(provider.id), source: stored.has(provider.id) ? 'stored' : status.source, apiKeyLogin: Boolean(provider.auth?.apiKey?.login) }
+    return { id: provider.id, name: provider.name, builtin: Boolean(builtinRuntime.getProvider(provider.id)), credentialType: stored.get(provider.id), source: stored.has(provider.id) ? 'stored' : status.source, apiKeyLogin: Boolean(provider.auth?.apiKey?.login) }
   })
   for (const credential of credentials) {
-    if (!providers.some((provider) => provider.id === credential.providerId)) providers.push({ id: credential.providerId, name: credential.providerId, credentialType: credential.type, source: 'stored', apiKeyLogin: false })
+    if (!providers.some((provider) => provider.id === credential.providerId)) providers.push({ id: credential.providerId, name: credential.providerId, credentialType: credential.type, source: 'stored', apiKeyLogin: false, builtin: false })
   }
   const errors: NonNullable<PiConfigurationSnapshot['errors']> = {}
   async function documentOrError(path: string, key: string, category: keyof typeof errors) {
@@ -103,7 +104,7 @@ export async function readPiConfiguration(cwd: string): Promise<PiConfigurationS
     advanced: { transport: globalManager.getTransport(), httpIdleTimeoutMs: globalManager.getHttpIdleTimeoutMs(), cacheWarming: globalManager.getCacheWarmingMode(), enableSkillCommands: globalManager.getEnableSkillCommands(), enabledModels: globalManager.getEnabledModels() },
     customModels, mcp, projectMcp,
     projectTrusted, providers,
-    models: runtime.getModels().map((model) => ({ id: model.id, provider: model.provider, name: model.name, thinkingLevels: model.reasoning ? ['off', ...Object.keys(model.thinkingLevelMap ?? { minimal: '', low: '', medium: '', high: '' }).filter((level) => level !== 'off' && model.thinkingLevelMap?.[level as keyof typeof model.thinkingLevelMap] !== null)] : ['off'] })),
+    models: runtime.getModels().map((model) => ({ id: model.id, provider: model.provider, name: model.name, definition: { reasoning: model.reasoning, input: model.input, contextWindow: model.contextWindow, maxTokens: model.maxTokens, thinkingLevelMap: model.thinkingLevelMap }, thinkingLevels: model.reasoning ? ['off', ...Object.keys(model.thinkingLevelMap ?? { minimal: '', low: '', medium: '', high: '' }).filter((level) => level !== 'off' && model.thinkingLevelMap?.[level as keyof typeof model.thinkingLevelMap] !== null)] : ['off'] })),
   }
 }
 
@@ -238,4 +239,54 @@ export async function diagnosePiMcp(cwd: string): Promise<PiMcpDiagnostics> {
       } catch { reject(new Error('MCP 诊断失败或超时，请使用 pi mcp list 查看详情')) }
     })
   })
+}
+
+
+export async function discoverPiModels(request: import('@pi-nest/contracts').PiModelDiscoveryRequest): Promise<import('@pi-nest/contracts').PiDiscoveredModel[]> {
+  const saved = entries((await readDocument(join(getAgentDir(), 'models.json'))).data, 'providers')[request.provider]
+  const connection = restorePiSecrets(request.connection, saved) as typeof request.connection
+  function resolve(value: string) {
+    if (value.startsWith('!')) throw new PiConfigurationInvalid('自动获取不执行凭据命令，请使用手动添加或环境变量。')
+    return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_match, braced: string, plain: string) => {
+      const result = process.env[braced ?? plain]
+      if (result === undefined) throw new PiConfigurationInvalid('模型列表请求所需的环境变量未设置。')
+      return result
+    })
+  }
+  const url = new URL(connection.baseUrl)
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash) throw new PiConfigurationInvalid('请输入有效的 HTTP 或 HTTPS Base URL。')
+  const path = url.pathname.replace(/\/$/, '')
+  url.pathname = connection.api === 'anthropic-messages' && !path.endsWith('/v1') ? `${path}/v1/models` : `${path}/models`
+  const headers = new Headers(Object.fromEntries(Object.entries(connection.headers ?? {}).map(([key, value]) => [key, resolve(value)])))
+  const key = connection.apiKey ? resolve(connection.apiKey) : undefined
+  if (connection.api === 'anthropic-messages') {
+    if (key && !headers.has('x-api-key')) headers.set('x-api-key', key)
+    if (!headers.has('anthropic-version')) headers.set('anthropic-version', '2023-06-01')
+  } else if (key && !headers.has('authorization')) headers.set('authorization', `Bearer ${key}`)
+  const response = await fetch(url, { headers, redirect: 'error', signal: AbortSignal.timeout(15_000) })
+  if (!response.ok) throw new PiConfigurationInvalid(response.status === 401 || response.status === 403 ? '认证失败，请检查 API Key 和请求头；也可手动添加模型。' : '端点未返回模型列表，请检查 Base URL 或手动添加。')
+  if (Number(response.headers.get('content-length')) > 2_000_000) { await response.body?.cancel(); throw new PiConfigurationInvalid('模型列表响应过大，请手动添加。') }
+  const reader = response.body?.getReader()
+  if (!reader) throw new PiConfigurationInvalid('模型列表响应为空。')
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > 2_000_000) throw new PiConfigurationInvalid('模型列表响应过大，请手动添加。')
+      chunks.push(value)
+    }
+  } finally { await reader.cancel() }
+  const data: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  if (!isObject(data) || !Array.isArray(data.data)) throw new PiConfigurationInvalid('端点不支持标准模型列表，请手动添加。')
+  // shortcut: discovery handles one standard list response; add provider-specific pagination when needed.
+  if (data.has_more === true) throw new PiConfigurationInvalid('端点使用分页模型列表，请使用 Pi 目录或手动添加，避免遗漏模型。')
+  const result = new Map<string, import('@pi-nest/contracts').PiDiscoveredModel>()
+  for (const item of data.data) {
+    if (isObject(item) && typeof item.id === 'string' && item.id.trim() && item.id.length <= 4096) result.set(item.id, { id: item.id, ...(typeof item.display_name === 'string' && item.display_name.length <= 4096 ? { name: item.display_name } : {}) })
+    if (result.size > 1000) throw new PiConfigurationInvalid('模型数量超过 1000，请手动添加。')
+  }
+  return [...result.values()].sort((a, b) => a.id.localeCompare(b.id))
 }
