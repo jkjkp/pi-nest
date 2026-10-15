@@ -1,3 +1,4 @@
+import { runtimeSettingsSchema } from './configuration-schema.js'
 import type { PiSessionsResponse, PiSessionHistoryResponse } from '@pi-nest/contracts'
 import {
   createPiSession,
@@ -37,15 +38,7 @@ const historyQuerySchema = z.object({
 
 const turnIndexQuerySchema = z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict()
 
-const settingsSchema = z.object({
-  compactionEnabled: z.boolean().optional(),
-  defaultModel: z.string().min(1).max(256).optional(),
-  defaultProvider: z.string().min(1).max(256).optional(),
-  defaultThinkingLevel: z.string().min(1).max(64).optional(),
-  followUpMode: z.enum(['all', 'one-at-a-time']).optional(),
-  retryEnabled: z.boolean().optional(),
-  steeringMode: z.enum(['all', 'one-at-a-time']).optional(),
-}).strict()
+const settingsSchema = runtimeSettingsSchema
 
 type SessionResolution =
   | { kind: 'found'; session: PiSessionSummary }
@@ -220,11 +213,11 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
       if (!finish) return context.json({ error: 'Pi runtime is busy' }, 409)
       try {
         const settings = await updatePiSettings(resolved.session.cwd, parsed.data)
-        await finish(true)
         return context.json({ settings })
       } catch {
-        await finish(false)
         return context.json({ error: 'Failed to save Pi settings' }, 500)
+      } finally {
+        await finish(true)
       }
     })
     .patch('/sessions/:sessionId', async (context) => {

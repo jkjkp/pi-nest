@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { configurationSecurity, createConfigurationRoutes } from './configuration-routes.js'
 
 import { PiRuntimeRegistry } from './pi-runtime-registry.js'
 import { createRuntimeRoutes } from './runtime-routes.js'
@@ -8,6 +9,8 @@ import { createSessionRoutes } from './session-routes.js'
 export function createApp(runtime = new PiRuntimeRegistry(), security = new RuntimeSecurity()) {
   return new Hono()
     .get('/api/health', (context) => context.json({ status: 'ok' }))
+    .route('/api/configuration', createConfigurationRoutes(runtime, security))
+    .use('/api/sessions/:sessionId/settings', configurationSecurity(security))
     .route('/api', createSessionRoutes(runtime))
     .route('/api', createRuntimeRoutes(runtime, security))
 }
