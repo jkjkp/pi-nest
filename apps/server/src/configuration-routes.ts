@@ -1,7 +1,8 @@
 import { Hono, type MiddlewareHandler } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
+import { z } from 'zod'
 import { homedir } from 'node:os'
-import { diagnosePiMcp, listPiSessions, PiConfigurationConflict, PiConfigurationInvalid, readPiConfiguration, updatePiConfiguration } from '@pi-nest/pi-adapter'
+import { discoverPiModels, diagnosePiMcp, listPiSessions, PiConfigurationConflict, PiConfigurationInvalid, readPiConfiguration, updatePiConfiguration } from '@pi-nest/pi-adapter'
 import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
 import type { RuntimeSecurity } from './runtime-security.js'
 import { configurationUpdateSchema } from './configuration-schema.js'
@@ -52,6 +53,15 @@ export function createConfigurationRoutes(runtime: PiRuntimeRegistry, security: 
         // A native setter can commit before a later operation fails; reload idle hosts either way.
         await finish(true)
       }
+    })
+    .post('/models/discover', async (context) => {
+      const parsed = z.object({
+        provider: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/).refine((name) => !['__proto__', 'constructor', 'prototype'].includes(name)),
+        connection: z.object({ baseUrl: z.string().min(1).max(4096), api: z.enum(['openai-completions', 'openai-responses', 'anthropic-messages']), apiKey: z.string().max(16384).optional(), headers: z.record(z.string().max(256), z.string().max(16384)).optional() }).strict(),
+      }).strict().safeParse(await context.req.json().catch(() => undefined))
+      if (!parsed.success) return context.json({ error: '请填写提供商 ID、Base URL 和支持的 API 协议。' }, 400)
+      try { return context.json({ models: await discoverPiModels(parsed.data) }) }
+      catch (error) { return context.json({ error: error instanceof PiConfigurationInvalid ? error.message : '获取模型列表失败或超时，请检查连接或手动添加。' }, 400) }
     })
     .post('/mcp/test', async (context) => {
       let cwd: string | undefined

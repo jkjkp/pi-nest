@@ -3,7 +3,7 @@ import { createConfigurationRoutes } from './configuration-routes.js'
 import { RuntimeSecurity } from './runtime-security.js'
 import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
 import { configurationUpdateSchema } from './configuration-schema.js'
-const api = vi.hoisted(() => ({ readPiConfiguration: vi.fn(), updatePiConfiguration: vi.fn(), listPiSessions: vi.fn(), diagnosePiMcp: vi.fn() }))
+const api = vi.hoisted(() => ({ discoverPiModels: vi.fn(), readPiConfiguration: vi.fn(), updatePiConfiguration: vi.fn(), listPiSessions: vi.fn(), diagnosePiMcp: vi.fn() }))
 vi.mock('@pi-nest/pi-adapter', () => ({ ...api, PiConfigurationConflict: class extends Error {}, PiConfigurationInvalid: class extends Error {} }))
 const security = new RuntimeSecurity('http://localhost:5173')
 const finish = vi.fn()
@@ -41,4 +41,19 @@ it('validates MCP transport combinations and rejects provider auth from a projec
   for (const value of [{ type: 'sse', url: 'https://example.com' }, { command: 'node', url: 'https://example.com' }, { type: 'http' }, { url: 'file:///private' }, { command: 'node', timeout: -1 }]) expect(configurationUpdateSchema.safeParse({ ...base, value }).success).toBe(false)
   expect(configurationUpdateSchema.safeParse({ ...base, value: { command: 'node', args: ['server.js'], env: { KEY: '${TOKEN}' } } }).success).toBe(true)
   expect(configurationUpdateSchema.safeParse({ ...base, scope: 'project', value: { url: 'https://example.com', auth: { provider: 'openai' } } }).success).toBe(false)
+})
+
+it('validates discovery requests and never persists or reloads runtimes when listing models', async () => {
+  const request = { provider: 'custom', connection: { baseUrl: 'http://localhost:11434/v1', api: 'openai-completions' } }
+  api.discoverPiModels.mockResolvedValue([{ id: 'local' }])
+  const response = await routes().request('/models/discover', { method: 'POST', headers, body: JSON.stringify(request) })
+  expect(response.status).toBe(200)
+  expect(await response.json()).toEqual({ models: [{ id: 'local' }] })
+  expect(api.discoverPiModels).toHaveBeenCalledWith(request)
+  expect(api.updatePiConfiguration).not.toHaveBeenCalled()
+  expect(beginGlobalSettingsUpdate).not.toHaveBeenCalled()
+  expect((await routes().request('/models/discover', { method: 'POST', headers, body: JSON.stringify({ ...request, connection: { ...request.connection, api: 'unsupported' } }) })).status).toBe(400)
+  api.discoverPiModels.mockRejectedValueOnce(new Error('secret-key private-path'))
+  const failed = await routes().request('/models/discover', { method: 'POST', headers, body: JSON.stringify(request) })
+  expect(await failed.text()).not.toContain('secret-key')
 })
