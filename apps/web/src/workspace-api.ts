@@ -113,3 +113,8 @@ export function savePiConfiguration(update: import('@pi-nest/contracts').PiConfi
 export function testPiMcp(sessionId?: string) {
   return configurationRequest<import('@pi-nest/contracts').PiMcpDiagnostics>(`/api/configuration/mcp/test${sessionId ? `?${new URLSearchParams({ session: sessionId })}` : ''}`, { method: 'POST' })
 }
+
+
+export function discoverProviderModels(request: import('@pi-nest/contracts').PiModelDiscoveryRequest) {
+  return configurationRequest<{ models: import('@pi-nest/contracts').PiDiscoveredModel[] }>('/api/configuration/models/discover', { method: 'POST', body: JSON.stringify(request) })
+}
