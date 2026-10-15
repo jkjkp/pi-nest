@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const api = vi.hoisted(() => ({ getAgentDir: vi.fn(() => '/agent'), SettingsManager: { create: vi.fn() } }))
+const api = vi.hoisted(() => ({ getAgentDir: vi.fn(() => '/agent'), SettingsManager: { create: vi.fn() }, ProjectTrustStore: class { get() { return true } } }))
 vi.mock('@earendil-works/pi-coding-agent', () => api)
 
 function manager() {
   return {
+    drainErrors: vi.fn(() => [] as unknown[]),
+    getGlobalSettings: vi.fn(() => ({ defaultProvider: 'provider', defaultModel: 'global-model' })),
     flush: vi.fn().mockResolvedValue(undefined),
     getCompactionEnabled: vi.fn(() => true), getDefaultModel: vi.fn(() => 'model'), getDefaultProvider: vi.fn(() => 'provider'), getDefaultThinkingLevel: vi.fn(() => 'high'), getFollowUpMode: vi.fn(() => 'all'), getProjectSettings: vi.fn(() => ({ defaultModel: 'project-model' })), getRetryEnabled: vi.fn(() => false), getSteeringMode: vi.fn(() => 'one-at-a-time'),
     setCompactionEnabled: vi.fn(), setDefaultModel: vi.fn(), setDefaultModelAndProvider: vi.fn(), setDefaultProvider: vi.fn(), setDefaultThinkingLevel: vi.fn(), setFollowUpMode: vi.fn(), setRetryEnabled: vi.fn(), setSteeringMode: vi.fn(),
@@ -18,7 +20,9 @@ describe('Pi Settings adapter', () => {
     const instance = manager(); api.SettingsManager.create.mockReturnValue(instance)
     const { readPiSettings } = await import('./settings.js')
     expect(readPiSettings('/project')).toMatchObject({ effective: { defaultModel: 'model' }, global: { defaultProvider: 'provider' }, project: { defaultModel: 'project-model' } })
-    expect(api.SettingsManager.create).toHaveBeenCalledWith('/project', '/agent')
+    expect(api.SettingsManager.create).toHaveBeenCalledWith('/project', '/agent', { projectTrusted: true })
+    expect(readPiSettings('/project').global.defaultModel).toBe('global-model')
+    expect(readPiSettings('/project').global.compactionEnabled).toBeUndefined()
   })
 
   it('only applies allowlisted global setters and flushes before returning the refreshed snapshot', async () => {
@@ -30,4 +34,12 @@ describe('Pi Settings adapter', () => {
     expect(instance.setRetryEnabled).toHaveBeenCalledWith(true)
     expect(instance.flush).toHaveBeenCalledOnce()
   })
+})
+
+it('rejects native write errors even when flush resolves', async () => {
+  const instance = manager()
+  instance.drainErrors.mockReturnValueOnce([]).mockReturnValueOnce([new Error('disk full')])
+  api.SettingsManager.create.mockReturnValue(instance)
+  const { updatePiSettings } = await import('./settings.js')
+  await expect(updatePiSettings('/project', { retryEnabled: true })).rejects.toThrow()
 })
