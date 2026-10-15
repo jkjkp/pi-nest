@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter } from 'react-router'
+import { createBrowserRouter, RouterProvider } from 'react-router'
 import './index.css'
 import App from './App.tsx'
 import { sessionHistoryQueryKey } from './history.js'
@@ -16,12 +16,12 @@ const sessionRunController = createSessionRunController({
 })
 sessionRunController.resume()
 
+const router = createBrowserRouter([{ path: '*', element: <App runtime={runtime} sessionRuns={sessionRunController} /> }])
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <BrowserRouter>
-      <QueryClientProvider client={queryClient}>
-        <App runtime={runtime} sessionRuns={sessionRunController} />
-      </QueryClientProvider>
-    </BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
   </StrictMode>,
 )

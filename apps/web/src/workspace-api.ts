@@ -81,15 +81,35 @@ export async function renameSession(sessionId: string, name: string) {
 }
 
 export async function fetchSessionSettings(sessionId: string) {
-  const body = await fetchJson<{ settings?: PiSettingsSnapshot }>(`${sessionUrl(sessionId)}/settings`)
+  const body = await configurationRequest<{ settings?: PiSettingsSnapshot }>(`${sessionUrl(sessionId)}/settings`)
   if (!body.settings) throw new Error('Invalid Pi settings response')
   return body.settings
 }
 
 export async function saveSessionSettings(sessionId: string, settings: Partial<PiRuntimeSettings>) {
-  const response = await fetch(`${sessionUrl(sessionId)}/settings`, { body: JSON.stringify(settings), headers: { 'content-type': 'application/json' }, method: 'PATCH' })
-  if (!response.ok) throw new Error('Failed to save Pi settings')
-  const body = await response.json() as { settings?: PiSettingsSnapshot }
+  const body = await configurationRequest<{ settings?: PiSettingsSnapshot }>(`${sessionUrl(sessionId)}/settings`, { body: JSON.stringify(settings), method: 'PATCH' })
   if (!body.settings) throw new Error('Invalid Pi settings response')
   return body.settings
+}
+
+export async function configurationRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const bootstrap = await fetch('/api/runtime/bootstrap', { method: 'POST' })
+  if (!bootstrap.ok) throw new Error('无法验证设置访问权限')
+  const { token } = await bootstrap.json() as { token: string }
+  const response = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-pi-nest-token': token, ...init.headers }, cache: 'no-store' })
+  const body = await response.json()
+  if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : '配置请求失败')
+  return body as T
+}
+
+export function fetchPiConfiguration(sessionId?: string) {
+  return configurationRequest<import('@pi-nest/contracts').PiConfigurationSnapshot>(`/api/configuration${sessionId ? `?${new URLSearchParams({ session: sessionId })}` : ''}`)
+}
+
+export function savePiConfiguration(update: import('@pi-nest/contracts').PiConfigurationUpdate, sessionId?: string) {
+  return configurationRequest<{ saved: true }>(`/api/configuration${sessionId ? `?${new URLSearchParams({ session: sessionId })}` : ''}`, { method: 'PATCH', body: JSON.stringify(update) })
+}
+
+export function testPiMcp(sessionId?: string) {
+  return configurationRequest<import('@pi-nest/contracts').PiMcpDiagnostics>(`/api/configuration/mcp/test${sessionId ? `?${new URLSearchParams({ session: sessionId })}` : ''}`, { method: 'POST' })
 }

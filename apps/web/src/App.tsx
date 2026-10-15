@@ -14,7 +14,7 @@ function App({ runtime, sessionRuns }: { runtime: RuntimeWebSocketClient; sessio
       <RuntimeExtensionUi runtime={runtime}>
         <Routes>
           <Route path="/" element={<WorkspacePage sessionRuns={sessionRuns} />} />
-          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/settings/:category?" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </RuntimeExtensionUi>
