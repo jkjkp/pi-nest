@@ -25,9 +25,10 @@ export type PiRuntimeSessionSnapshot = {
 }
 export type RuntimeCommandPayload = { sessionId: string } & (
   | { type: 'watch'; resume?: { after: number } }
-  | { type: 'unwatch' | 'resume' | 'abort' | 'compact' | 'get_runtime_state' | 'get_session_stats' | 'get_available_models' | 'get_available_thinking_levels' }
+  | { type: 'unwatch' | 'resume' | 'abort' | 'get_runtime_state' | 'get_session_stats' | 'get_available_models' | 'get_available_thinking_levels' | 'get_commands' }
   | { type: 'prompt' | 'steer' | 'follow_up'; message: string }
   | { type: 'steer_queued'; message: string; index: number }
+  | { type: 'compact'; customInstructions?: string }
   | { type: 'set_model'; provider: string; modelId: string }
   | { type: 'set_thinking_level'; level: string }
   | { type: 'extension_ui_response'; dialogId: string; value?: unknown; confirmed?: boolean; cancelled?: boolean }
@@ -49,6 +50,7 @@ export type PiRuntimeState = {
   thinkingLevel?: string
 }
 export type PiRuntimeModel = { id: string; name?: string; provider: string }
+export type PiRuntimeCommand = { name: string; description?: string; source: 'extension' | 'prompt' | 'skill' }
 
 export type PiSessionSummary = {
   createdAt?: string
