@@ -9,17 +9,29 @@ import { sessionHistoryQueryKey } from './history.js'
 import { RuntimeWebSocketClient } from './runtime-websocket-client.js'
 import { createSessionRunController } from './session-run-controller.js'
 
-const queryClient = new QueryClient()
-const runtime = new RuntimeWebSocketClient()
-const sessionRunController = createSessionRunController({
-  invalidateHistory: (sessionId) => queryClient.invalidateQueries({ queryKey: sessionHistoryQueryKey(sessionId) }),
-  runtime,
-})
-sessionRunController.resume()
+function bootstrap() {
+  const queryClient = new QueryClient()
+  const runtime = new RuntimeWebSocketClient()
+  const sessionRunController = createSessionRunController({
+    invalidateHistory: (sessionId) => queryClient.invalidateQueries({ queryKey: sessionHistoryQueryKey(sessionId) }),
+    runtime,
+  })
+  sessionRunController.resume()
+  return { queryClient, runtime, sessionRunController, root: createRoot(document.getElementById('root')!) }
+}
+
+const previous = import.meta.hot?.data.bootstrap as ReturnType<typeof bootstrap> | undefined
+const { queryClient, runtime, sessionRunController, root } = previous ?? bootstrap()
+if (import.meta.hot) import.meta.hot.data.bootstrap = { queryClient, runtime, sessionRunController, root }
 
 const router = createBrowserRouter([{ path: '*', element: <App runtime={runtime} sessionRuns={sessionRunController} />, errorElement: <RouteErrorPage /> }])
+if (import.meta.hot) import.meta.hot.dispose(() => router.dispose())
+if (import.meta.hot) {
+  import.meta.hot.accept()
+  import.meta.hot.accept(['./runtime-websocket-client.js', './session-run-controller.js'], () => import.meta.hot?.invalidate())
+}
 
-createRoot(document.getElementById('root')!).render(
+root.render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
