@@ -4,13 +4,13 @@ import { useSearchParams } from 'react-router'
 import { historyCacheVersion, historyUserTurnCount, mergeSessionHistoryPage, mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse } from './history.js'
 import { timelineItems } from './timeline-model.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
-import type { PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
+import type { PiSessionBranchRequest, PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
 import { thinkingCommand } from './thinking-command.js'
 import { stripAnsiLine } from './ansi-text.js'
 import { activeRuntimeTurn, isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
-import { createSession, deleteSession, fetchSessionHistory, fetchSessions, renameSession, revealProjectInFinder, RequestError } from './workspace-api.js'
+import { branchSession, createSession, deleteSession, fetchSessionHistory, fetchSessions, renameSession, revealProjectInFinder, RequestError } from './workspace-api.js'
 import { fetchSessionNavigation } from './session-navigation-query.js'
 import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, planModePolicy, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
 
@@ -412,6 +412,18 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     } finally { if (modelOperation.current === operation) modelOperation.current = undefined }
   }
 
+  async function createBranch(request: PiSessionBranchRequest) {
+    const sessionId = selectedSessionId
+    if (!selectedSession || isActive || modelOperation.current?.sessionId === sessionId || mutatingSessionId === sessionId) throw new Error('请等待当前会话操作结束后再创建分支。')
+    setMutatingSessionId(sessionId)
+    try {
+      const result = await branchSession(sessionId, request)
+      queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => [result.session, ...(current ?? []).filter((session) => session.id !== result.session.id)])
+      useWorkspaceStore.getState().setDraft(result.session.id, result.draft)
+      return result
+    } finally { setMutatingSessionId(undefined) }
+  }
+
   async function handleRename(sessionId: string, name: string) {
     setMutatingSessionId(sessionId)
     try {
@@ -500,7 +512,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,
     sessionsQuery, historyQuery, history, planTurnId, turnIndexQuery, navigationNotice, retryNavigation: () => { void turnIndexQuery.refetch() }, pendingJump, setPendingJump,
-    selectSession, startDraft, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    selectSession, createBranch, startDraft, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel,
     loadEarlier: () => { void historyQuery.fetchPreviousPage() }, retryHistory: () => { void historyQuery.refetch() },
   }

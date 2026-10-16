@@ -8,13 +8,14 @@ import { commandToken, completeCommand, matchingCommands } from './composer-comm
 type Props = Omit<ComponentProps<typeof Textarea>, 'value' | 'onChange' | 'ref'> & {
   value: string
   onValueChange: (value: string) => void
+  onExecuteCommand: (value: string) => void
   textareaRef: RefObject<HTMLTextAreaElement | null>
   sessionId: string
   canQuery: boolean
   sessionRuns: SessionRunController
 }
 
-export function CommandComposer({ value, onValueChange, textareaRef, sessionId, canQuery, sessionRuns, onKeyDown, onFocus, ...props }: Props) {
+export function CommandComposer({ value, onValueChange, onExecuteCommand, textareaRef, sessionId, canQuery, sessionRuns, onKeyDown, onFocus, ...props }: Props) {
   const listId = useId()
   const list = useRef<HTMLDivElement>(null)
   const pendingCaret = useRef<number | undefined>(undefined)
@@ -51,13 +52,14 @@ export function CommandComposer({ value, onValueChange, textareaRef, sessionId, 
     setDismissed(false)
   }
 
-  function choose(name: string) {
+  function choose(name: string, enter = false) {
     if (!token) return
     const next = completeCommand(value, token, name)
     pendingCaret.current = next.caret
     setDismissed(true)
     onValueChange(next.value)
     textareaRef.current?.focus()
+    if (enter && name === 'clone' && next.value.trim() === '/clone') onExecuteCommand(next.value)
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -71,7 +73,7 @@ export function CommandComposer({ value, onValueChange, textareaRef, sessionId, 
       }
       if ((event.key === 'Enter' || event.key === 'Tab') && commands[index]) {
         event.preventDefault()
-        choose(commands[index]!.name)
+        choose(commands[index]!.name, event.key === 'Enter')
         return
       }
     }

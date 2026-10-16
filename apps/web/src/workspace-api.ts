@@ -1,4 +1,4 @@
-import type { PiRuntimeSettings, PiSettingsSnapshot, PiSessionsResponse } from '@pi-nest/contracts'
+import type { PiSessionBranchRequest, PiSessionBranchResponse, PiRuntimeSettings, PiSettingsSnapshot, PiSessionsResponse } from '@pi-nest/contracts'
 import { historyPageSize, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
 import type { PiSessionSummary } from './workspace.js'
 
@@ -35,8 +35,8 @@ export function fetchSessionHistory(sessionId: string, before?: string, revision
   return fetchJson<PiSessionHistoryResponse>(`${sessionUrl(sessionId)}/history?${query}`, signal)
 }
 
-export function fetchSessionTurnIndex(sessionId: string, revision: string, signal?: AbortSignal) {
-  return fetchJson<PiSessionTurnIndex>(`${sessionUrl(sessionId)}/turn-index?${new URLSearchParams({ revision })}`, signal)
+export function fetchSessionTurnIndex(sessionId: string, revision?: string, signal?: AbortSignal) {
+  return fetchJson<PiSessionTurnIndex>(`${sessionUrl(sessionId)}/turn-index${revision ? `?${new URLSearchParams({ revision })}` : ''}`, signal)
 }
 
 export async function fetchSessions() {
@@ -117,4 +117,15 @@ export function testPiMcp(sessionId?: string) {
 
 export function discoverProviderModels(request: import('@pi-nest/contracts').PiModelDiscoveryRequest) {
   return configurationRequest<{ models: import('@pi-nest/contracts').PiDiscoveredModel[] }>('/api/configuration/models/discover', { method: 'POST', body: JSON.stringify(request) })
+}
+
+export async function branchSession(sessionId: string, request: PiSessionBranchRequest) {
+  const response = await fetch(`${sessionUrl(sessionId)}/branch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) })
+  if (!response.ok) {
+    const body = await response.json().catch(() => undefined)
+    throw new Error(typeof body?.error === 'string' ? body.error : '创建分支会话失败，请重试。')
+  }
+  const body = await response.json() as PiSessionBranchResponse
+  if (!body.session?.id || body.session.id === sessionId || typeof body.draft !== 'string') throw new Error('分支会话返回数据无效，请刷新会话列表。')
+  return body
 }

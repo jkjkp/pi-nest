@@ -3,13 +3,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { expect, it, vi } from 'vitest'
 import type { SessionRunController } from './session-run-controller.js'
-import { fetchSessionHistory } from './workspace-api.js'
+import { branchSession, fetchSessionHistory } from './workspace-api.js'
 import { useWorkspaceSession } from './use-workspace-session.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
 vi.mock('./workspace-api.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('./workspace-api.js')>()
-  return { ...original, fetchSessionHistory: vi.fn() }
+  return { ...original, branchSession: vi.fn(), fetchSessionHistory: vi.fn() }
 })
 
 vi.mock('./workspace-store.js', async (importOriginal) => {
@@ -203,5 +203,26 @@ it('clears a steering draft immediately and preserves new typing while it is sen
   acknowledge()
   await new Promise((resolve) => setTimeout(resolve, 0))
   expect(useWorkspaceStore.getState().drafts['session-1']).toBe('新的草稿')
+  queryClient.clear()
+})
+
+it('adds a native branch to the session cache and restores the selected message only as a child draft', async () => {
+  const queryClient = new QueryClient()
+  queryClient.setQueryData(['sessions'], [{ id: 'source', cwd: '/fixture', name: 'Original' }])
+  useWorkspaceStore.setState({ drafts: { source: '/fork' }, runs: {}, runtimeStates: {}, watchStates: {} })
+  const result = { session: { id: 'child', cwd: '/fixture' }, draft: '完整问题\n继续编辑' }
+  vi.mocked(branchSession).mockResolvedValueOnce(result)
+  const probe: { workspace?: ReturnType<typeof useWorkspaceSession> } = {}
+  function Probe() {
+    // oxlint-disable-next-line react/immutability -- Capture the server-rendered hook for an async operation test.
+    probe.workspace = useWorkspaceSession({} as SessionRunController)
+    return null
+  }
+  renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=source']}><Probe /></MemoryRouter></QueryClientProvider>)
+  await expect(probe.workspace!.createBranch({ kind: 'fork', entryId: 'u', revision: 'a'.repeat(64) })).resolves.toEqual(result)
+  expect(branchSession).toHaveBeenCalledWith('source', { kind: 'fork', entryId: 'u', revision: 'a'.repeat(64) })
+  expect(queryClient.getQueryData(['sessions'])).toEqual([result.session, { id: 'source', cwd: '/fixture', name: 'Original' }])
+  expect(useWorkspaceStore.getState().drafts.child).toBe('完整问题\n继续编辑')
+  expect(useWorkspaceStore.getState().drafts.source).toBe('/fork')
   queryClient.clear()
 })

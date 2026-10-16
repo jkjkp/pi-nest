@@ -9,6 +9,8 @@ export const composerCommands = [
   { name: 'name', description: '重命名会话 · /name [名称]' },
   { name: 'session', description: '查看会话用量与上下文' },
   { name: 'copy', description: '复制最近已完成的助手消息' },
+  { name: 'fork', description: '从历史用户消息处分叉为新会话' },
+  { name: 'clone', description: '复制当前活动分支为新会话' },
   { name: 'settings', description: '打开当前会话设置' },
 ] as const
 

@@ -1,11 +1,11 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { lastCompletedAssistantText, parseComposerCommand } from './composer-commands.js'
 import type { SessionRunController } from './session-run-controller.js'
 import type { useWorkspaceSession } from './use-workspace-session.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
 type Workspace = ReturnType<typeof useWorkspaceSession>
-type CommandUi = { model: () => void; rename: (onSaved: () => void) => void; statistics: () => void; settings: () => void }
+type CommandUi = { fork: (onFork: (entryId: string, revision: string) => Promise<void>) => void; model: () => void; rename: (onSaved: () => void) => void; statistics: () => void; settings: () => void }
 
 export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionRunController, ui: CommandUi) {
   const currentSession = useRef(workspace.selectedSessionId)
@@ -13,6 +13,13 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
   const [busySessions, setBusySessions] = useState<string[]>([])
   const [notice, setNotice] = useState<{ sessionId: string; message: string; error?: boolean }>()
   useLayoutEffect(() => { currentSession.current = workspace.selectedSessionId }, [workspace.selectedSessionId])
+  useEffect(() => {
+    if (!notice?.error) return
+    // oxlint-disable-next-line react/set-state-in-effect -- Clear transient feedback when its session route is left.
+    if (notice.sessionId !== workspace.selectedSessionId) { setNotice(undefined); return }
+    const timer = setTimeout(() => setNotice((current) => current === notice ? undefined : current), 2000)
+    return () => clearTimeout(timer)
+  }, [notice, workspace.selectedSessionId])
 
   function submit(text: string) {
     const sessionId = workspace.selectedSessionId
@@ -23,17 +30,17 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
     function report(message: string, error = false) {
       if (currentSession.current === sessionId) setNotice({ sessionId, message, error })
     }
-    function complete(message: string) {
+    function complete(message?: string) {
       if (currentSession.current !== sessionId) return
       const store = useWorkspaceStore.getState()
       if (store.drafts[sessionId] === text) store.setDraft(sessionId, '')
-      report(message)
+      setNotice(message ? { sessionId, message } : undefined)
     }
     async function execute() {
       try {
         if (workspace.isDraft || !workspace.selectedSession) throw new Error('请先进入已有会话，再执行命令。')
-        if (['session', 'copy', 'settings'].includes(command.name) && command.argument) throw new Error(`用法：/${command.name}（无需参数）`)
-        if (['model', 'compact', 'name'].includes(command.name)) {
+        if (['session', 'copy', 'settings', 'fork', 'clone'].includes(command.name) && command.argument) throw new Error(`用法：/${command.name}（无需参数）`)
+        if (['model', 'compact', 'name', 'fork', 'clone'].includes(command.name)) {
           if (workspace.isActive || workspace.runtimeStates[sessionId]?.lifecycle === 'active') throw new Error('请等待当前任务结束后再执行此命令。')
           if (workspace.mutatingSessionId === sessionId || ['loading', 'switching'].includes(workspace.modelStatus) || ['loading', 'switching'].includes(workspace.thinkingStatus) || workspace.runtimeStates[sessionId]?.lifecycle === 'loading') throw new Error('正在处理会话操作，请稍后重试。')
         }
@@ -75,6 +82,22 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
             try { await navigator.clipboard.writeText(text) }
             catch { throw new Error('复制失败，请检查浏览器剪贴板权限后重试。') }
             complete('已复制助手消息')
+            break
+          }
+          case 'fork':
+            ui.fork(async (entryId, revision) => {
+              const result = await workspace.createBranch({ kind: 'fork', entryId, revision })
+              if (currentSession.current !== sessionId) return
+              complete('分支会话已创建')
+              workspace.selectSession(result.session.id)
+            })
+            report('请选择从哪条用户消息开始分叉')
+            break
+          case 'clone': {
+            const result = await workspace.createBranch({ kind: 'clone' })
+            if (currentSession.current !== sessionId) return
+            complete()
+            workspace.selectSession(result.session.id)
             break
           }
           case 'settings':

@@ -1,8 +1,11 @@
-import { beforeEach, expect, it, vi } from 'vitest'
+import { fetchSessionTurnIndex } from './workspace-api.js'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { useWorkspaceCommands } from './use-workspace-commands.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import type { useWorkspaceSession } from './use-workspace-session.js'
 import type { SessionRunController } from './session-run-controller.js'
+
+vi.mock('./workspace-api.js', () => ({ fetchSessionTurnIndex: vi.fn() }))
 
 const hooks = vi.hoisted(() => ({ slots: [] as any[], index: 0, layouts: [] as (() => void)[] }))
 vi.mock('react', async (importOriginal) => ({
@@ -14,19 +17,27 @@ vi.mock('react', async (importOriginal) => ({
     return [hooks.slots[index], (next: any) => { hooks.slots[index] = typeof next === 'function' ? next(hooks.slots[index]) : next }]
   },
   useLayoutEffect: (effect: () => void) => hooks.layouts.push(effect),
+  useEffect: (effect: () => (() => void) | undefined, deps: unknown[]) => {
+    const index = hooks.index++
+    const previous = hooks.slots[index]
+    if (previous && deps.every((dep, i) => Object.is(dep, previous.deps[i]))) return
+    hooks.layouts.push(() => { previous?.cleanup?.(); hooks.slots[index] = { deps, cleanup: effect() } })
+  },
 }))
-beforeEach(() => { hooks.slots = []; hooks.index = 0; hooks.layouts = []; useWorkspaceStore.setState({ drafts: {} }); vi.unstubAllGlobals() })
+afterEach(() => { for (const slot of hooks.slots) slot?.cleanup?.(); vi.useRealTimers() })
+beforeEach(() => { hooks.slots = []; hooks.index = 0; hooks.layouts = []; useWorkspaceStore.setState({ drafts: {} }); vi.unstubAllGlobals(); vi.mocked(fetchSessionTurnIndex).mockReset().mockResolvedValue({ revision: 'a'.repeat(64), entries: [] }) })
 async function tick() { for (let index = 0; index < 12; index++) await Promise.resolve() }
 function setup(text: string) {
   useWorkspaceStore.getState().setDraft('one', text)
   const workspace = {
     selectedSessionId: 'one', selectedSession: { id: 'one', name: 'Old' }, isDraft: false, isActive: false,
     runtimeStates: { one: { lifecycle: 'idle', revision: 1 } }, modelStatus: 'unloaded', thinkingStatus: 'unloaded', mutatingSessionId: undefined,
+    createBranch: vi.fn().mockResolvedValue({ session: { id: 'child', cwd: '/fixture' }, draft: 'selected' }), selectSession: vi.fn(),
     openModels: vi.fn().mockResolvedValue([{ provider: 'fixture', id: 'model/with/slash' }]), changeModel: vi.fn().mockResolvedValue(true), handleRename: vi.fn().mockResolvedValue(undefined),
     historyQuery: { isPending: false, isError: false }, history: { entries: [{ type: 'message', timestamp: '2026-10-16', raw: { message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'hidden' }, { type: 'text', text: '**Answer**' }] } } }] },
   } as unknown as ReturnType<typeof useWorkspaceSession>
   const sessionRuns = { compact: vi.fn().mockResolvedValue(undefined), getSessionStatistics: vi.fn().mockResolvedValue(undefined) } as unknown as SessionRunController
-  const ui = { model: vi.fn(), rename: vi.fn(), statistics: vi.fn(), settings: vi.fn() }
+  const ui = { fork: vi.fn(), model: vi.fn(), rename: vi.fn(), statistics: vi.fn(), settings: vi.fn() }
   function Render() { return useWorkspaceCommands(workspace, sessionRuns, ui) }
   function render() {
     hooks.index = 0; hooks.layouts = []
@@ -131,4 +142,77 @@ it('rejects extra parameters and draft commands, leaving ordinary prompts and th
   context.render().submit('/settings'); await tick()
   expect(context.ui.settings).not.toHaveBeenCalled()
   expect(context.render().notice?.message).toContain('已有会话')
+})
+
+it('clones without a preflight history request, then clears the command and selects the child', async () => {
+  const context = setup('/clone')
+  expect(context.submit()).toBe(true)
+  await tick()
+  expect(fetchSessionTurnIndex).not.toHaveBeenCalled()
+  expect(context.workspace.createBranch).toHaveBeenCalledWith({ kind: 'clone' })
+  expect(context.workspace.selectSession).toHaveBeenCalledWith('child')
+  expect(context.draft()).toBe('')
+  expect(context.render().notice).toBeUndefined()
+})
+it('dismisses command failures after two seconds and restarts the timer for repeated failures', async () => {
+  vi.useFakeTimers()
+  const context = setup('/clone')
+  vi.mocked(context.workspace.createBranch).mockRejectedValue(new Error('Clone failed'))
+  context.submit(); await tick()
+  expect(context.render().notice?.message).toBe('Clone failed')
+  vi.advanceTimersByTime(1500)
+  expect(context.render().notice?.error).toBe(true)
+  context.submit(); await tick()
+  context.render()
+  vi.advanceTimersByTime(500)
+  expect(context.render().notice?.error).toBe(true)
+  vi.advanceTimersByTime(1500)
+  expect(context.render().notice).toBeUndefined()
+  expect(context.draft()).toBe('/clone')
+})
+it('clears a command error when leaving its session', async () => {
+  const context = setup('/clone')
+  vi.mocked(context.workspace.createBranch).mockRejectedValueOnce(new Error('Clone failed'))
+  context.submit(); await tick(); context.render()
+  context.workspace.selectedSessionId = 'two'
+  context.render()
+  context.workspace.selectedSessionId = 'one'
+  expect(context.render().notice).toBeUndefined()
+})
+it('opens fork selection and only creates the new session after a position is chosen', async () => {
+  const context = setup('/fork')
+  context.submit(); await tick()
+  expect(context.workspace.createBranch).not.toHaveBeenCalled()
+  expect(context.draft()).toBe('/fork')
+  await context.ui.fork.mock.calls[0]![0]('entry', 'b'.repeat(64))
+  expect(context.workspace.createBranch).toHaveBeenCalledWith({ kind: 'fork', entryId: 'entry', revision: 'b'.repeat(64) })
+  expect(context.workspace.selectSession).toHaveBeenCalledWith('child')
+})
+it('ignores repeated clone submissions while creating the child', async () => {
+  const context = setup('/clone')
+  let release!: (value: any) => void
+  vi.mocked(context.workspace.createBranch).mockReturnValueOnce(new Promise((resolve) => { release = resolve }))
+  expect(context.submit()).toBe(true)
+  expect(context.submit()).toBe(true)
+  expect(context.workspace.createBranch).toHaveBeenCalledExactlyOnceWith({ kind: 'clone' })
+  release({ session: { id: 'child' }, draft: '' })
+  await tick()
+  expect(context.workspace.selectSession).toHaveBeenCalledExactlyOnceWith('child')
+  expect(context.draft()).toBe('')
+})
+it('does not navigate or clear input when branch creation fails or another session becomes selected', async () => {
+  const context = setup('/clone')
+  vi.mocked(context.workspace.createBranch).mockRejectedValueOnce(new Error('History changed'))
+  context.submit(); await tick()
+  expect(context.draft()).toBe('/clone')
+  expect(context.workspace.selectSession).not.toHaveBeenCalled()
+  expect(context.render().notice?.message).toBe('History changed')
+  let release!: (value: any) => void
+  vi.mocked(context.workspace.createBranch).mockReturnValueOnce(new Promise((resolve) => { release = resolve }))
+  context.submit(); await tick()
+  context.workspace.selectedSessionId = 'two'
+  context.render()
+  release({ session: { id: 'child' }, draft: '' }); await tick()
+  expect(context.workspace.selectSession).not.toHaveBeenCalled()
+  expect(context.draft()).toBe('/clone')
 })

@@ -1,3 +1,5 @@
+import { SessionForkDialog } from './session-fork-dialog.js'
+import { CommandNotice } from './command-notice.js'
 import { parseComposerCommand } from './composer-commands.js'
 import { useWorkspaceCommands } from './use-workspace-commands.js'
 import { SessionRenameDialog } from './session-rename-dialog.js'
@@ -67,9 +69,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     promptTextareaRef,
   )
 
-  const [commandPanels, setCommandPanels] = useState<{ sessionId: string; statistics: boolean; rename?: { session: NonNullable<typeof selectedSession>; onSaved: () => void } }>({ sessionId: selectedSessionId, statistics: false })
+  const [commandPanels, setCommandPanels] = useState<{ sessionId: string; statistics: boolean; fork?: (entryId: string, revision: string) => Promise<void>; rename?: { session: NonNullable<typeof selectedSession>; onSaved: () => void } }>({ sessionId: selectedSessionId, statistics: false })
   if (commandPanels.sessionId !== selectedSessionId) setCommandPanels({ sessionId: selectedSessionId, statistics: false })
   const commands = useWorkspaceCommands(session, sessionRuns, {
+    fork: (onFork) => setCommandPanels({ sessionId: selectedSessionId, statistics: false, fork: onFork }),
     model: () => { setModelSelectorOpen(true); void openModels() },
     rename: (onSaved) => { if (selectedSession) setCommandPanels({ sessionId: selectedSessionId, statistics: false, rename: { session: selectedSession, onSaved } }) },
     statistics: () => setCommandPanels({ sessionId: selectedSessionId, statistics: true }),
@@ -138,6 +141,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   return (
     <main className="relative flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      {commandPanels.sessionId === selectedSessionId && commandPanels.fork && <SessionForkDialog key={`fork:${selectedSessionId}`} sessionId={selectedSessionId} onClose={() => setCommandPanels({ sessionId: selectedSessionId, statistics: false })} onCloseAutoFocus={(event) => { event.preventDefault(); requestAnimationFrame(() => promptTextareaRef.current?.focus()) }} onFork={commandPanels.fork} />}
       {commandPanels.sessionId === selectedSessionId && commandPanels.rename && <SessionRenameDialog key={selectedSessionId} session={commandPanels.rename.session} onCloseAutoFocus={(event) => { event.preventDefault(); promptTextareaRef.current?.focus() }} onClose={() => setCommandPanels({ sessionId: selectedSessionId, statistics: false })} onRename={async (id, name) => {
         if (isActive || ['loading', 'switching'].includes(modelStatus) || ['loading', 'switching'].includes(thinkingStatus)) throw new Error('请等待当前会话操作结束。')
         await handleRename(id, name)
@@ -269,10 +273,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               <div className="conversation-stage-content">
                 <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) setPendingJump({ sessionId: selectedSessionId, turnId: planTurnId }) }} onRetryPlan={retryHistory} /></div>
                 <PendingInputs inputs={(currentRun?.pendingInputs ?? []).filter((input) => !currentRun?.turns.some((turn) => turn.steering?.queuedInputId === input.id && turn.steering.status !== 'failed'))} key={selectedSessionId} onSteer={steerQueued} disabled={submittingInput || status !== 'running'} />
-                {commands.notice && <p role={commands.notice.error ? 'alert' : 'status'} className={`pointer-events-auto mb-2 px-4 text-xs ${commands.notice.error ? 'text-destructive' : 'text-muted-foreground'}`}>{commands.notice.message}</p>}
+                <CommandNotice notice={commands.notice} />
                 <div data-slot="message-composer" className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-[#303030] sm:px-6">
               <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
               <CommandComposer
+                onExecuteCommand={(value) => { commands.submit(value) }}
                 key={selectedSessionId || `draft:${draftProject?.key}`}
                 sessionId={isDraft ? '' : selectedSessionId}
                 sessionRuns={sessionRuns}

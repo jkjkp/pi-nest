@@ -28,13 +28,14 @@ function setup(initial = '/pl', sessionId = 'one', canQuery = true) {
   let value = initial
   const input = { value, selectionStart: value.length, selectionEnd: value.length, focus: vi.fn(), setSelectionRange: vi.fn() }
   const downstream = vi.fn()
+  const execute = vi.fn()
   const sessionRuns = { getCommands: vi.fn(async () => query.data) } as unknown as SessionRunController
   let element: ReactElement<{ children: ReactElement[] }>
   function render() {
     hooks.index = 0
     hooks.layouts = []
     input.value = value
-    element = CommandComposer({ value, sessionId, canQuery, sessionRuns, textareaRef: { current: input as unknown as HTMLTextAreaElement }, onValueChange: (next) => { value = next }, onKeyDown: downstream }) as typeof element
+    element = CommandComposer({ value, sessionId, canQuery, sessionRuns, textareaRef: { current: input as unknown as HTMLTextAreaElement }, onValueChange: (next) => { value = next }, onExecuteCommand: execute, onKeyDown: downstream }) as typeof element
     hooks.layouts.forEach((effect) => effect())
     return element
   }
@@ -47,8 +48,37 @@ function setup(initial = '/pl', sessionId = 'one', canQuery = true) {
   render()
   textarea().onFocus!({ currentTarget: input } as never)
   render()
-  return { render, textarea, key, input, downstream, sessionRuns, value: () => value }
+  return { render, textarea, key, input, downstream, execute, sessionRuns, value: () => value }
 }
+
+it.each(['/cl', '/clo', '/clon', '/clone', ' /cl'])('executes the selected clone on one Enter for %s', (value) => {
+  const context = setup(value)
+  context.execute.mockImplementation((text) => { expect(context.value()).toBe(text) })
+  expect(context.key('Enter').preventDefault).toHaveBeenCalledOnce()
+  expect(context.execute).toHaveBeenCalledExactlyOnceWith(value.startsWith(' ') ? ' /clone ' : '/clone ')
+  expect(context.downstream).not.toHaveBeenCalled()
+})
+
+it.each([
+  ['/cl', 'Tab'], ['你好 /cl', 'Enter'], ['/clone 参数', 'Enter'], ['/model', 'Enter'],
+])('only completes %s with %s', (value, key) => {
+  const context = setup(value)
+  if (value === '/clone 参数') {
+    context.input.selectionStart = context.input.selectionEnd = 6
+    context.textarea().onSelect!({ currentTarget: context.input } as never)
+    context.render()
+  }
+  expect(context.key(key).preventDefault).toHaveBeenCalledOnce()
+  expect(context.execute).not.toHaveBeenCalled()
+  expect(context.downstream).not.toHaveBeenCalled()
+})
+
+it('does not execute clone while confirming IME input', () => {
+  const context = setup('/cl')
+  context.key('Enter', { nativeEvent: { isComposing: true } })
+  expect(context.execute).not.toHaveBeenCalled()
+  expect(context.value()).toBe('/cl')
+})
 
 it('completes with Enter or Tab, preserves surrounding text and never sends', () => {
   for (const key of ['Enter', 'Tab']) {

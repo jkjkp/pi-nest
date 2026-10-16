@@ -28,7 +28,7 @@ it('matches prefixes without case sensitivity and deduplicates the GUI command',
   expect(matchingCommands(commands, 'skill:')[0]?.name).toBe('skill:test')
   expect(matchingCommands(commands, 'unknown')).toEqual([])
   expect(matchingCommands(commands, '').filter((command) => command.name === 'thinking')).toHaveLength(1)
-  expect(matchingCommands(commands, 'fork')).toEqual([])
+  expect(matchingCommands(commands, 'fork').map((command) => command.name)).toEqual(['fork'])
 })
 
 it.each([
@@ -50,7 +50,7 @@ it('parses exact commands and preserves parameters without interpreting commands
   expect(parseComposerCommand('/compact 保留接口\n保留约束')).toEqual({ name: 'compact', argument: '保留接口\n保留约束' })
   expect(parseComposerCommand('/name 名称 含空格')).toEqual({ name: 'name', argument: '名称 含空格' })
   for (const value of ['/modelx', '/p', '你好 /model', '*****/model', '/model/path']) expect(parseComposerCommand(value)).toBeUndefined()
-  expect(matchingCommands([], '').map((command) => command.name)).toEqual(['thinking', 'model', 'compact', 'name', 'session', 'copy', 'settings'])
+  expect(matchingCommands([], '').map((command) => command.name)).toEqual(['thinking', 'model', 'compact', 'name', 'session', 'copy', 'fork', 'clone', 'settings'])
 })
 
 it('copies only the latest completed assistant text across history and runtime without thinking or unfinished output', () => {
