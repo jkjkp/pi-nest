@@ -15,7 +15,7 @@ import { ChevronRight, Ellipsis, Folder, FolderOpen, Pencil, Search, SquarePen, 
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { SessionRenameDialog } from './session-rename-dialog.js'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -71,7 +71,6 @@ export function SessionNavigation({
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
   const [renaming, setRenaming] = useState<PiSessionSummary>()
-  const [renameValue, setRenameValue] = useState('')
   const [deleting, setDeleting] = useState<PiSessionSummary>()
   const [removingProject, setRemovingProject] = useState<ProjectSessionGroup>()
   const [actionError, setActionError] = useState<string>()
@@ -81,18 +80,7 @@ export function SessionNavigation({
 
   function requestRename(session: PiSessionSummary) {
     setActionError(undefined)
-    setRenameValue(session.name ?? '')
     setRenaming(session)
-  }
-
-  async function confirmRename() {
-    if (!renaming || renameValue.trim().length === 0) return
-    try {
-      await onRename(renaming.id, renameValue)
-      setRenaming(undefined)
-    } catch {
-      setActionError('重命名失败，请刷新后重试。')
-    }
   }
 
   async function confirmDelete() {
@@ -198,30 +186,7 @@ export function SessionNavigation({
           )}
         </div>
       </ScrollArea>
-      <Dialog onOpenChange={(open) => !open && setRenaming(undefined)} open={Boolean(renaming)}>
-        <DialogContent>
-          <DialogTitle>重命名会话</DialogTitle>
-          <DialogDescription>名称会作为 Pi 原生会话元数据保存，Pi CLI 也可读取。</DialogDescription>
-          <label className="mt-4 grid gap-2 text-sm font-medium" htmlFor="session-name">
-            会话名称
-            <input
-              className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-              id="session-name"
-              maxLength={120}
-              onChange={(event) => setRenameValue(event.target.value)}
-              placeholder={renaming && !renaming.name ? sessionDisplayName(renaming) : '输入会话名称'}
-              value={renameValue}
-            />
-          </label>
-          {actionError && <p className="mt-3 text-sm text-destructive" role="alert">{actionError}</p>}
-          <div className="mt-5 flex justify-end gap-2">
-            <DialogClose asChild><Button type="button" variant="secondary">取消</Button></DialogClose>
-            <Button disabled={renameValue.trim().length === 0 || mutationSessionId === renaming?.id} onClick={() => void confirmRename()} type="button">
-              保存名称
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {renaming && <SessionRenameDialog key={renaming.id} session={renaming} onClose={() => setRenaming(undefined)} onRename={onRename} />}
       <AlertDialog onOpenChange={(open) => !open && setDeleting(undefined)} open={Boolean(deleting)}>
         <AlertDialogContent>
           <AlertDialogTitle>删除原生 Pi 会话？</AlertDialogTitle>
