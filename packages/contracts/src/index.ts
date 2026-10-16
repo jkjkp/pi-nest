@@ -139,3 +139,6 @@ export type PiMcpDiagnostics = { servers: { name: string; state: string; tools: 
 export type PiCatalogModel = PiRuntimeModel & { thinkingLevels: string[]; definition?: Record<string, unknown> }
 export type PiModelDiscoveryRequest = { provider: string; connection: { baseUrl: string; api: 'openai-completions' | 'openai-responses' | 'anthropic-messages'; apiKey?: string; headers?: Record<string, string> } }
 export type PiDiscoveredModel = { id: string; name?: string }
+
+export type PiSessionBranchRequest = { kind: 'clone' } | { kind: 'fork'; entryId: string; revision: string }
+export type PiSessionBranchResponse = { session: PiSessionSummary; draft: string }
