@@ -1,13 +1,16 @@
+import { parseComposerCommand } from './composer-commands.js'
+import { useWorkspaceCommands } from './use-workspace-commands.js'
+import { SessionRenameDialog } from './session-rename-dialog.js'
 import { SessionStatistics } from './session-statistics.js'
 import { type CSSProperties, useEffect, useState } from 'react'
 import { ArrowDown, CircleX, Folder, LoaderCircle, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
-import { Textarea } from '@/components/ui/textarea'
+import { CommandComposer } from './command-composer.js'
 
 import { resizeComposerTextarea, useComposerTextarea } from './composer-textarea.js'
 import { useComposerHistory } from './composer-history.js'
@@ -27,6 +30,7 @@ import type { PendingInput } from './session-run-model.js'
 
 export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunController }) {
   const session = useWorkspaceSession(sessionRuns)
+  const navigate = useNavigate()
   const {
     selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
@@ -38,6 +42,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   } = session
   const runtimeStatistics = useWorkspaceStore((state) => state.runtimeStatistics[selectedSessionId])
   const runtimeLoading = runtimeStates[selectedSessionId]?.lifecycle === 'loading'
+  const watchReady = useWorkspaceStore((state) => state.watchStates[selectedSessionId] === 'ready')
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
   const inspectorWidth = useWorkspaceStore((state) => state.inspectorWidth)
   const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
@@ -62,6 +67,15 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     promptTextareaRef,
   )
 
+  const [commandPanels, setCommandPanels] = useState<{ sessionId: string; statistics: boolean; rename?: { session: NonNullable<typeof selectedSession>; onSaved: () => void } }>({ sessionId: selectedSessionId, statistics: false })
+  if (commandPanels.sessionId !== selectedSessionId) setCommandPanels({ sessionId: selectedSessionId, statistics: false })
+  const commands = useWorkspaceCommands(session, sessionRuns, {
+    model: () => { setModelSelectorOpen(true); void openModels() },
+    rename: (onSaved) => { if (selectedSession) setCommandPanels({ sessionId: selectedSessionId, statistics: false, rename: { session: selectedSession, onSaved } }) },
+    statistics: () => setCommandPanels({ sessionId: selectedSessionId, statistics: true }),
+    settings: () => { void navigate(`/settings?session=${encodeURIComponent(selectedSessionId)}`) },
+  })
+
   function selectSession(sessionId: string) {
     setFollowingLatest(true)
     session.selectSession(sessionId)
@@ -69,6 +83,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up') {
     if ((!selectedSessionId && !isDraft) || !prompt.trim()) return
+    if (commands.submit(prompt)) return
     if (mode !== 'steer') setFollowingLatest(true)
     session.submitPrompt(mode)
   }
@@ -123,6 +138,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   return (
     <main className="relative flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      {commandPanels.sessionId === selectedSessionId && commandPanels.rename && <SessionRenameDialog key={selectedSessionId} session={commandPanels.rename.session} onCloseAutoFocus={(event) => { event.preventDefault(); promptTextareaRef.current?.focus() }} onClose={() => setCommandPanels({ sessionId: selectedSessionId, statistics: false })} onRename={async (id, name) => {
+        if (isActive || ['loading', 'switching'].includes(modelStatus) || ['loading', 'switching'].includes(thinkingStatus)) throw new Error('请等待当前会话操作结束。')
+        await handleRename(id, name)
+        commandPanels.rename?.onSaved()
+      }} />}
       <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-card px-3 sm:px-4 md:hidden">
         <div className="flex min-w-0 items-center gap-2">
           <Sheet open={navigationOpen} onOpenChange={setNavigationOpen}>
@@ -249,18 +269,23 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               <div className="conversation-stage-content">
                 <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) setPendingJump({ sessionId: selectedSessionId, turnId: planTurnId }) }} onRetryPlan={retryHistory} /></div>
                 <PendingInputs inputs={(currentRun?.pendingInputs ?? []).filter((input) => !currentRun?.turns.some((turn) => turn.steering?.queuedInputId === input.id && turn.steering.status !== 'failed'))} key={selectedSessionId} onSteer={steerQueued} disabled={submittingInput || status !== 'running'} />
+                {commands.notice && <p role={commands.notice.error ? 'alert' : 'status'} className={`pointer-events-auto mb-2 px-4 text-xs ${commands.notice.error ? 'text-destructive' : 'text-muted-foreground'}`}>{commands.notice.message}</p>}
                 <div data-slot="message-composer" className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-[#303030] sm:px-6">
               <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
-              <Textarea
+              <CommandComposer
+                key={selectedSessionId || `draft:${draftProject?.key}`}
+                sessionId={isDraft ? '' : selectedSessionId}
+                sessionRuns={sessionRuns}
+                canQuery={!commands.busy && watchReady && !isActive && runtimeStates[selectedSessionId]?.lifecycle === 'idle' && modelStatus !== 'loading' && modelStatus !== 'switching' && thinkingStatus !== 'loading' && thinkingStatus !== 'switching'}
                 className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
                 disabled={(!selectedSession && !isDraft) || creatingDraft}
                 id="prompt"
                 maxLength={20_000}
                 onFocus={(event) => resizeComposerTextarea(event.currentTarget)}
-                onChange={(event) => {
+                onValueChange={(value) => {
                   promptHistory.reset()
-                  if (isDraft) setDraftPrompt(event.target.value)
-                  else if (selectedSessionId) setDraft(selectedSessionId, event.target.value)
+                  if (isDraft) setDraftPrompt(value)
+                  else if (selectedSessionId) setDraft(selectedSessionId, value)
                 }}
                 onKeyDown={(event) => {
                   if (promptHistory.onKeyDown(event)) return
@@ -270,7 +295,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   submitPrompt(event.ctrlKey ? 'steer' : 'follow_up')
                 }}
                 placeholder={isDraft ? '随心输入…' : status === 'running' ? 'Enter 排队，Ctrl + Enter 引导，Shift + Enter 换行' : 'Enter 发送，Shift + Enter 换行'}
-                ref={promptTextareaRef}
+                textareaRef={promptTextareaRef}
                 rows={1}
                 style={{ lineHeight: '1.75rem' }}
                 value={prompt}
@@ -279,15 +304,15 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 {planStatus && <DropdownMenu><DropdownMenuTrigger asChild><Button aria-label="查看 Plan 模式详情" className="h-auto px-0 py-0 text-xs text-muted-foreground" size="sm" type="button" variant="ghost">{planStatus}</Button></DropdownMenuTrigger><DropdownMenuContent align="start" side="top" className="max-w-xs"><p className="px-2 py-1.5 text-sm font-medium">Plan mode</p><p className="px-2 pb-2 text-xs text-muted-foreground">{planPolicy ?? '当前阶段未提供工具列表。'}</p></DropdownMenuContent></DropdownMenu>}
                 {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
                 <div className="ml-auto flex max-w-full items-center gap-2">
-                  {selectedSession && <SessionStatistics key={`statistics:${selectedSessionId}`} details={runtimeStatistics} onRetry={() => void sessionRuns.getSessionStatistics(selectedSessionId)} />}
+                  {selectedSession && <SessionStatistics key={`statistics:${selectedSessionId}`} open={commandPanels.sessionId === selectedSessionId && commandPanels.statistics} onOpenChange={(statistics) => setCommandPanels((panels) => ({ ...panels, sessionId: selectedSessionId, statistics }))} details={runtimeStatistics} onRetry={() => void sessionRuns.getSessionStatistics(selectedSessionId)} />}
 
                   <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen} key={`model:${selectedSessionId}`} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={!selectedSession} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />
                   <ThinkingSelector key={`thinking:${selectedSessionId}`} open={thinkingOpen} onOpenChange={setThinkingOpen} current={currentThinkingLevel} levels={thinkingLevels} status={thinkingStatus} error={thinkingError} failure={thinkingFailure} disabled={!selectedSession || modelStatus === 'loading' || modelStatus === 'switching'} isActive={isActive} onLoad={() => void openThinking()} onRetry={() => void openThinking(true)} onSelect={changeThinkingLevel} />
                   {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
-                  {status === 'running' && prompt.trim().length > 0 && <Button className="rounded-full" disabled={submittingInput} onClick={() => submitPrompt()} title="当前任务完成后执行" type="button">{submittingInput ? '提交中…' : '排队'}</Button>}
+                  {status === 'running' && prompt.trim().length > 0 && <Button className="rounded-full" disabled={submittingInput || commands.busy} onClick={() => submitPrompt()} title={parseComposerCommand(prompt) ? '执行输入的命令' : '当前任务完成后执行'} type="button">{submittingInput ? '提交中…' : parseComposerCommand(prompt) ? '执行命令' : '排队'}</Button>}
                   {!isActive && (
-                    <Button aria-label="发送提示词" className="rounded-full" disabled={(!selectedSession && !isDraft) || creatingDraft || modelStatus === 'loading' || modelStatus === 'switching' || thinkingStatus === 'loading' || thinkingStatus === 'switching' || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
+                    <Button aria-label="发送提示词" className="rounded-full" disabled={commands.busy || (!selectedSession && !isDraft) || creatingDraft || modelStatus === 'loading' || modelStatus === 'switching' || thinkingStatus === 'loading' || thinkingStatus === 'switching' || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
                   )}
                 </div>
                 </div>

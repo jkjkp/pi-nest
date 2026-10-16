@@ -1,3 +1,4 @@
+import type { ComponentProps } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
@@ -5,6 +6,15 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { PendingInputs, WorkspacePage } from './workspace-page.js'
 import { useWorkspaceStore } from './workspace-store.js'
+
+const composer = vi.hoisted(() => ({ canQuery: false }))
+vi.mock('./command-composer.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./command-composer.js')>()
+  return { CommandComposer: (props: ComponentProps<typeof original.CommandComposer>) => {
+    composer.canQuery = props.canQuery
+    return <original.CommandComposer {...props} />
+  } }
+})
 
 vi.mock('./workspace-store.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('./workspace-store.js')>()
@@ -16,6 +26,7 @@ const sessionRuns = {
   adopt: () => undefined,
   compact: async () => undefined,
   followUp: async () => undefined,
+  getCommands: async () => [],
   getAvailableModels: async () => [],
   getAvailableThinkingLevels: async () => [],
   getSessionStatistics: async () => undefined,
@@ -104,5 +115,19 @@ it('keeps the English Plan status as a detail trigger without displaying its int
   expect(markup).toContain('ponytail: FULL')
   expect(markup).not.toContain('Plan mode: planning')
   expect(markup).not.toContain('Finish with plan_mode_complete')
+  queryClient.clear()
+})
+
+it('allows command discovery when an idle watched session already has a model from its snapshot', () => {
+  useWorkspaceStore.setState({
+    drafts: { 'session-1': '/p' }, runs: {}, hiddenProjectCwds: {},
+    runtimeStates: { 'session-1': { lifecycle: 'idle', revision: 1 } },
+    runtimeDetails: { 'session-1': { isCompacting: false, isStreaming: false, model: { provider: 'fixture', id: 'model' } } },
+    watchStates: { 'session-1': 'ready' },
+  })
+  const queryClient = new QueryClient()
+  queryClient.setQueryData(['sessions'], [{ id: 'session-1', cwd: '/fixture' }])
+  renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-1']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
+  expect(composer.canQuery).toBe(true)
   queryClient.clear()
 })

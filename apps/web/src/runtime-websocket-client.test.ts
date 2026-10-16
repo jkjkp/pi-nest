@@ -68,6 +68,10 @@ describe('RuntimeWebSocketClient', () => {
     await prompt
     socket.receive({ event: { type: 'future_pi_event' }, observedAt: 'now', sequence: 1, sessionId: 'session-b', type: 'pi_event' })
     expect(events).toEqual([{ event: { type: 'future_pi_event' }, observedAt: 'now', sequence: 1, sessionId: 'session-b' }])
+    const commands = client.getCommands('session-b')
+    await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-4', type: 'get_commands', sessionId: 'session-b' }))
+    socket.receive({ command: 'get_commands', id: 'web-4', sessionId: 'session-b', type: 'ack', data: { commands: [{ name: 'plan', source: 'extension' }] } })
+    await expect(commands).resolves.toEqual({ commands: [{ name: 'plan', source: 'extension' }] })
     vi.unstubAllGlobals()
   })
 

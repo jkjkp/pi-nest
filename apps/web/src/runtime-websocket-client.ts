@@ -1,4 +1,4 @@
-import type { PiRuntimeStatistics, PiRuntimeEvent, RuntimeError, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel, RuntimeMessage, RuntimeCommandPayload } from '@pi-nest/contracts'
+import type { PiRuntimeCommand, PiRuntimeStatistics, PiRuntimeEvent, RuntimeError, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel, RuntimeMessage, RuntimeCommandPayload } from '@pi-nest/contracts'
 export type { PiRuntimeEvent, RuntimeError, RuntimeLifecycle, RuntimeFailureKind, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel } from '@pi-nest/contracts'
 
 type RuntimeSocket = Pick<WebSocket, 'close' | 'readyState' | 'send'> & { addEventListener: WebSocket['addEventListener'] }
@@ -160,9 +160,10 @@ export class RuntimeWebSocketClient {
   steerQueued(sessionId: string, message: string, index: number) { return this.command({ type: 'steer_queued', sessionId, message, index }) }
   setModel(sessionId: string, provider: string, modelId: string) { return this.command({ type: 'set_model', sessionId, modelId, provider }) }
   setThinkingLevel(sessionId: string, level: string) { return this.command({ type: 'set_thinking_level', sessionId, level }) }
-  compact(sessionId: string) { return this.command({ type: 'compact', sessionId }) }
+  compact(sessionId: string, customInstructions?: string) { return this.command({ type: 'compact', sessionId, ...(customInstructions ? { customInstructions } : {}) }) }
   getSessionStatistics(sessionId: string) { return this.command<PiRuntimeStatistics>({ type: 'get_session_stats', sessionId }) }
   getRuntimeState(sessionId: string) { return this.command<PiRuntimeState>({ type: 'get_runtime_state', sessionId }) }
+  getCommands(sessionId: string) { return this.command<{ commands: PiRuntimeCommand[] }>({ type: 'get_commands', sessionId }) }
   getAvailableModels(sessionId: string) { return this.command<{ models: PiRuntimeModel[] }>({ type: 'get_available_models', sessionId }) }
   getAvailableThinkingLevels(sessionId: string) { return this.command<{ levels: string[] }>({ type: 'get_available_thinking_levels', sessionId }) }
   extensionUiResponse(sessionId: string, dialogId: string, response: { cancelled?: boolean; confirmed?: boolean; value?: unknown }) {

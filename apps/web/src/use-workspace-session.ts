@@ -360,7 +360,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
       setModels(cached.models)
       setModelStatus('ready')
       setModelError(undefined)
-      return
+      return cached.models
     }
     if (isActive) return
     const operation = { sessionId: selectedSessionId }
@@ -376,6 +376,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
       if (details) modelCache.current.set(selectedSessionId, { details, models: availableModels })
       setModels(availableModels)
       setModelStatus('ready')
+      return availableModels
     } catch (cause) {
       if (selectedSessionId !== selectedSessionIdRef.current || modelOperation.current !== operation) return
       setModelError(cause instanceof Error ? cause.message : '无法读取模型，请重试。')

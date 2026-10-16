@@ -16,6 +16,7 @@ function runtimeMock() {
   const watches = new Map<string, { after: number; role: 'background' | 'foreground' }>()
   return {
     abort: vi.fn().mockResolvedValue(undefined),
+    compact: vi.fn().mockResolvedValue(undefined),
     watch: vi.fn().mockImplementation(async (sessionId: string, role: 'background' | 'foreground' = 'foreground', after = watches.get(sessionId)?.after ?? 0) => { watches.set(sessionId, { after, role }) }),
     unwatch: vi.fn().mockImplementation(async (sessionId: string) => { watches.delete(sessionId) }),
     shouldApplyExtensionUi: vi.fn(() => true),
@@ -729,4 +730,14 @@ it('refreshes statistics on restoration, compaction and model changes instead of
   expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(2)
   await controller.setModel('session-a', 'test', 'model')
   expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(3)
+})
+
+it('forwards compaction instructions and refreshes history and statistics after success', async () => {
+  const runtime = runtimeMock()
+  const invalidateHistory = vi.fn()
+  const controller = createSessionRunController({ invalidateHistory, runtime: runtime as never })
+  await controller.compact('session-a', 'Keep API details')
+  expect(runtime.compact).toHaveBeenCalledWith('session-a', 'Keep API details')
+  expect(invalidateHistory).toHaveBeenCalledWith('session-a')
+  expect(runtime.getSessionStatistics).toHaveBeenCalledWith('session-a')
 })

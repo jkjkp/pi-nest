@@ -9,8 +9,10 @@ function formatStatisticsTokens(value: number) {
   return `${value < 10000000 ? (value / 1000000).toFixed(1) : Math.round(value / 1000000)}M`
 }
 
-export function SessionStatistics({ details, onRetry }: { details?: RuntimeStatisticsState; onRetry: () => void }) {
-  const [open, setOpen] = useState(false)
+export function SessionStatistics({ details, onRetry, open: controlledOpen, onOpenChange }: { details?: RuntimeStatisticsState; onRetry: () => void; open?: boolean; onOpenChange?: (open: boolean) => void }) {
+  const [localOpen, setLocalOpen] = useState(false)
+  const open = controlledOpen ?? localOpen
+  function setOpen(next: boolean) { setLocalOpen(next); onOpenChange?.(next) }
   const trigger = useRef<HTMLButtonElement>(null)
   const content = useRef<HTMLDivElement>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)

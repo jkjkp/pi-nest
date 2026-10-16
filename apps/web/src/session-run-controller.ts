@@ -1,3 +1,4 @@
+import type { PiRuntimeCommand } from '@pi-nest/contracts'
 import { unstable_batchedUpdates } from 'react-dom'
 import { stripAnsiText } from './ansi-text.js'
 import { isRuntimeConnectionError, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
@@ -14,8 +15,9 @@ type ActiveRun = { awaitingRunId: boolean; runId: string | undefined; stopReason
 
 export type SessionRunController = {
   adopt: (options: StartSessionRunOptions) => void
-  compact: (sessionId: string) => Promise<void>
+  compact: (sessionId: string, customInstructions?: string) => Promise<void>
   followUp: (sessionId: string, message: string) => Promise<void>
+  getCommands: (sessionId: string) => Promise<PiRuntimeCommand[]>
   getAvailableModels: (sessionId: string) => Promise<PiRuntimeModel[]>
   getAvailableThinkingLevels: (sessionId: string) => Promise<string[]>
   getSessionStatistics: (sessionId: string) => Promise<void>
@@ -368,8 +370,9 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
         checkAwaitingAgent(options.sessionId, undefined)
       }
     },
-    compact: async (sessionId) => { await resumeRuntime(sessionId); await runtime.compact(sessionId); await getSessionStatistics(sessionId) },
+    compact: async (sessionId, customInstructions) => { await resumeRuntime(sessionId); await runtime.compact(sessionId, customInstructions); await invalidateHistory(sessionId); await getSessionStatistics(sessionId) },
     followUp: (sessionId, message) => submitRunningInput(sessionId, message, 'follow_up'),
+    getCommands: async (sessionId) => (await runtime.getCommands(sessionId)).commands,
     getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,
     getAvailableThinkingLevels: async (sessionId) => (await runtime.getAvailableThinkingLevels(sessionId)).levels,
     getSessionStatistics,
