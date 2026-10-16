@@ -8,6 +8,7 @@ import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry, type PiR
 import { PiRuntimeResumeError } from './session-event-stream.js'
 
 const commandSchema = z.discriminatedUnion('type', [
+  z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_commands') }).strict(),
   z.object({ id: z.string().min(1).max(128), resume: z.object({ after: z.number().int().nonnegative() }).strict().optional(), sessionId: z.string().min(1), type: z.literal('watch') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('unwatch') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('resume') }).strict(),
@@ -18,7 +19,7 @@ const commandSchema = z.discriminatedUnion('type', [
   z.object({ id: z.string().min(1).max(128), message: z.string().min(1).max(20_000), index: z.number().int().nonnegative(), sessionId: z.string().min(1), type: z.literal('steer_queued') }).strict(),
   z.object({ id: z.string().min(1).max(128), provider: z.string().min(1).max(256), modelId: z.string().min(1).max(256), sessionId: z.string().min(1), type: z.literal('set_model') }).strict(),
   z.object({ id: z.string().min(1).max(128), level: z.string().min(1).max(64), sessionId: z.string().min(1), type: z.literal('set_thinking_level') }).strict(),
-  z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('compact') }).strict(),
+  z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), customInstructions: z.string().trim().min(1).max(20_000).optional(), type: z.literal('compact') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_runtime_state') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_session_stats') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_available_models') }).strict(),
@@ -125,11 +126,13 @@ export class RuntimeWebSocketBroker {
         return this.ack(socket, command.data.id, command.data.type, command.data.sessionId, runtimeStatisticsSchema.parse(response.data))
       } catch { return this.error(socket, command.data.id, 'COMMAND_FAILED', '无法读取会话统计，请重试。', command.data.sessionId) }
     }
-    if (command.data.type === 'get_runtime_state' || command.data.type === 'get_available_models' || command.data.type === 'get_available_thinking_levels' || command.data.type === 'set_model' || command.data.type === 'set_thinking_level' || command.data.type === 'compact') {
+    if (command.data.type === 'get_commands' || command.data.type === 'get_runtime_state' || command.data.type === 'get_available_models' || command.data.type === 'get_available_thinking_levels' || command.data.type === 'set_model' || command.data.type === 'set_thinking_level' || command.data.type === 'compact') {
       const rpc = command.data.type === 'set_model'
         ? { type: 'set_model', provider: command.data.provider, modelId: command.data.modelId }
         : command.data.type === 'set_thinking_level'
           ? { type: 'set_thinking_level', level: command.data.level }
+          : command.data.type === 'compact'
+            ? { type: 'compact', ...(command.data.customInstructions ? { customInstructions: command.data.customInstructions } : {}) }
           : { type: command.data.type === 'get_runtime_state' ? 'get_state' : command.data.type }
       try {
         const result = this.runtime.commandWhenIdle(watched.session, rpc)
@@ -261,6 +264,10 @@ export class RuntimeWebSocketBroker {
       return { models: models.flatMap((model) => model && typeof model === 'object' && !Array.isArray(model) && typeof (model as Record<string, unknown>).id === 'string' && typeof (model as Record<string, unknown>).provider === 'string' ? [{ id: (model as Record<string, unknown>).id, name: typeof (model as Record<string, unknown>).name === 'string' ? (model as Record<string, unknown>).name : undefined, provider: (model as Record<string, unknown>).provider }] : []) }
     }
     if (command === 'get_available_thinking_levels') return { levels: Array.isArray(value.levels) ? value.levels.filter((level): level is string => typeof level === 'string') : [] }
+    if (command === 'get_commands') {
+      const result = z.object({ commands: z.array(z.object({ name: z.string().min(1).max(256).regex(/^[^\s/]+$/), description: z.string().optional(), source: z.enum(['extension', 'prompt', 'skill']) })) }).parse(value)
+      return result
+    }
     return undefined
   }
 }

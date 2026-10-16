@@ -247,3 +247,44 @@ it('reads safe statistics without an idle mutation and reports invalid data', as
   await broker.message(client, JSON.stringify({ id: 'invalid-stats', sessionId: 'session-1', type: 'get_session_stats' }))
   expect(client.sent).toContainEqual(expect.objectContaining({ id: 'invalid-stats', type: 'error', code: 'COMMAND_FAILED' }))
 })
+
+it('reads native commands only after watch and strips paths and extra metadata', async () => {
+  adapter.listPiSessions.mockResolvedValue([nativeSession])
+  const registry = runtime()
+  registry.commandWhenIdle.mockResolvedValue({ data: { commands: [
+    { name: 'plan', description: 'Plan work', source: 'extension', sourceInfo: { path: '/private/extension.ts' } },
+    { name: 'skill:test', source: 'skill', filePath: '/private/SKILL.md' },
+  ], privateField: 'secret' } })
+  const broker = new RuntimeWebSocketBroker(registry as never)
+  const client = socket()
+  broker.open(client)
+  await broker.message(client, JSON.stringify({ id: 'c0', sessionId: 'session-1', type: 'get_commands' }))
+  expect(registry.commandWhenIdle).not.toHaveBeenCalled()
+  await broker.message(client, JSON.stringify({ id: 'w', sessionId: 'session-1', type: 'watch' }))
+  await broker.message(client, JSON.stringify({ id: 'c1', sessionId: 'session-1', type: 'get_commands' }))
+  expect(registry.commandWhenIdle).toHaveBeenCalledWith(nativeSession, { type: 'get_commands' })
+  expect(client.sent).toContainEqual({ type: 'ack', command: 'get_commands', id: 'c1', sessionId: 'session-1', data: { commands: [
+    { name: 'plan', description: 'Plan work', source: 'extension' }, { name: 'skill:test', source: 'skill' },
+  ] } })
+  registry.commandWhenIdle.mockResolvedValue({ data: { commands: [{ name: 'bad name', source: 'unknown' }] } })
+  await broker.message(client, JSON.stringify({ id: 'c2', sessionId: 'session-1', type: 'get_commands' }))
+  expect(client.sent).toContainEqual(expect.objectContaining({ type: 'error', code: 'COMMAND_FAILED', id: 'c2' }))
+})
+
+it('validates and forwards optional compaction instructions without exposing native data', async () => {
+  adapter.listPiSessions.mockResolvedValue([nativeSession])
+  const registry = runtime()
+  const broker = new RuntimeWebSocketBroker(registry as never)
+  const client = socket()
+  broker.open(client)
+  await broker.message(client, JSON.stringify({ id: 'w', sessionId: 'session-1', type: 'watch' }))
+  await broker.message(client, JSON.stringify({ id: 'c', sessionId: 'session-1', type: 'compact', customInstructions: ' 保留接口设计 ' }))
+  expect(registry.commandWhenIdle).toHaveBeenCalledWith(nativeSession, { type: 'compact', customInstructions: '保留接口设计' })
+  expect(client.sent).toContainEqual({ type: 'ack', command: 'compact', id: 'c', sessionId: 'session-1' })
+  registry.commandWhenIdle.mockClear()
+  for (const customInstructions of ['', 'x'.repeat(20001), 42]) {
+    await broker.message(client, JSON.stringify({ id: 'bad', sessionId: 'session-1', type: 'compact', customInstructions }))
+    expect(client.sent.at(-1)).toMatchObject({ type: 'error', code: 'INVALID_COMMAND' })
+  }
+  expect(registry.commandWhenIdle).not.toHaveBeenCalled()
+})

@@ -151,7 +151,7 @@ export class PiRuntimeRegistry {
   commandWhenIdle(session: PiRuntimeSession, command: Record<string, unknown>): Promise<Record<string, unknown> | undefined> | undefined {
     if (this.settingsUpdating || this.locks.has(session.id)) throw new PiRuntimeBusyError()
     if (!this.entries.has(session.id)) return undefined
-    const readOnly = typeof command.type === 'string' && ['get_state', 'get_runtime_state', 'get_available_models', 'get_available_thinking_levels'].includes(command.type)
+    const readOnly = typeof command.type === 'string' && ['get_state', 'get_runtime_state', 'get_available_models', 'get_available_thinking_levels', 'get_commands'].includes(command.type)
     const previousModel = this.entries.get(session.id)?.host.currentModel
     const previousThinking = this.entries.get(session.id)?.host.currentThinkingLevel
     this.cancelUnload(session.id)

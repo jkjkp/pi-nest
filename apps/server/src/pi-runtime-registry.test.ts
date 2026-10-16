@@ -744,6 +744,7 @@ it('keeps warm resume and control reads silent while preserving admission locks'
     await state
     await registry.commandWhenIdle(session, { type: 'get_available_models' })
     await registry.commandWhenIdle(session, { type: 'get_available_thinking_levels' })
+    await registry.commandWhenIdle(session, { type: 'get_commands' })
     host.command.mockRejectedValueOnce(new PiRpcCommandError('read denied'))
     await expect(registry.commandWhenIdle(session, { type: 'get_state' })).rejects.toThrow('read denied')
     expect(statuses).toHaveLength(count)
