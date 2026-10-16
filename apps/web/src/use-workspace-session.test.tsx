@@ -59,7 +59,7 @@ it('finishes each runtime control read before starting the next one', async () =
 })
 
 function thinkingProbe(prompt = '', active = false) {
-  useWorkspaceStore.setState({ runs: active ? { 'session-1': { status: 'running', turns: [], pendingInputs: [], systemEvents: [] } } : {}, drafts: { 'session-1': prompt }, runtimeDetails: { 'session-1': { isCompacting: false, isStreaming: false, model: { provider: 'test', id: 'model' }, thinkingLevel: 'medium' } }, runtimeStates: {}, watchStates: {} })
+  useWorkspaceStore.setState({ runs: active ? { 'session-1': { status: 'running', turns: [], pendingInputs: [], systemEvents: [] } } : {}, drafts: { 'session-1': prompt }, runtimeDetails: { 'session-1': { isCompacting: false, isStreaming: false, model: { provider: 'test', id: 'model' }, thinkingLevel: 'medium' } }, runtimeStates: { 'session-1': { lifecycle: 'idle', revision: 1 } }, watchStates: { 'session-1': 'ready' } })
   const controller = {
     resumeRuntime: vi.fn(async () => undefined),
     getAvailableThinkingLevels: vi.fn(async () => ['off', 'medium', 'high']),

@@ -101,8 +101,8 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const planPolicy = planModePolicy(extensionWidgets[selectedSessionId])
   const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
   const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
-  const hasCachedHistory = Boolean(queryClient.getQueryData(sessionHistoryQueryKey(selectedSessionId)))
-  const historyEnabled = Boolean(selectedSession) && watchStates[selectedSessionId] === 'ready' && (!isActive || !hasCachedHistory) && runtimeStates[selectedSessionId]?.lifecycle !== 'loading' && (runtimeStates[selectedSessionId]?.lifecycle !== 'active' || !hasCachedHistory || status === 'awaiting_input')
+  const historyPaused = status !== 'awaiting_input' && (isActive || runtimeStates[selectedSessionId]?.lifecycle === 'active')
+  const historyEnabled = Boolean(selectedSession) && watchStates[selectedSessionId] === 'ready' && Boolean(runtimeStates[selectedSessionId]) && !historyPaused && runtimeStates[selectedSessionId]?.lifecycle !== 'loading'
   const historyQuery = useInfiniteQuery<PiSessionHistoryResponse, Error, InfiniteData<PiSessionHistoryResponse>, ReturnType<typeof sessionHistoryQueryKey>, HistoryPageParam>({
     enabled: historyEnabled,
     getNextPageParam: () => undefined,
@@ -111,9 +111,20 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     queryKey: sessionHistoryQueryKey(selectedSessionId),
     queryFn: ({ pageParam, signal }) => fetchSessionHistory(selectedSessionId, pageParam.before, pageParam.revision, signal),
     retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
   const completedRunId = useWorkspaceStore((state) => state.sessionNotifications[selectedSessionId]?.completedRunId)
   const history = useMemo(() => mergeSessionHistoryPages(historyQuery.data?.pages), [historyQuery.data?.pages])
+  const historyBusy = historyQuery.error instanceof RequestError && historyQuery.error.status === 409 && historyQuery.error.code === 'SESSION_RUNNING'
+  const historyError = historyQuery.isError && !historyBusy
+  const historyNotice = historyBusy || (historyPaused && !history) ? '任务进行中，结束后同步历史' : undefined
+  useEffect(() => {
+    if (!historyPaused) return
+    void queryClient.cancelQueries({ queryKey: sessionHistoryQueryKey(selectedSessionId) })
+    void queryClient.cancelQueries({ queryKey: ['session-history-page', selectedSessionId] })
+    void queryClient.cancelQueries({ queryKey: sessionTurnIndexQueryKey(selectedSessionId) })
+  }, [historyPaused, queryClient, selectedSessionId])
   const planTurnId = timelineItems(history?.entries, currentRun?.turns ?? [], currentRun?.systemEvents ?? []).findLast((item) => item.plan)?.id
   const turnIndexQuery = useQuery({
     enabled: historyEnabled && !isActive && historyQuery.isSuccess && !historyQuery.isFetching && Boolean(history?.revision),
@@ -318,11 +329,14 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     }
   }
 
-  const readHistoryPage = useCallback((cursor: string | undefined) => queryClient.fetchQuery({
+  const readHistoryPage = useCallback((cursor: string | undefined) => {
+    if (!historyEnabled) return Promise.reject(new Error('请等待当前任务结束后再读取历史。'))
+    return queryClient.fetchQuery({
     queryKey: ['session-history-page', selectedSessionId, historyCacheVersion, history?.revision, cursor],
     queryFn: ({ signal }) => fetchSessionHistory(selectedSessionId, cursor, history?.revision, signal),
     staleTime: Infinity,
-  }), [history?.revision, queryClient, selectedSessionId])
+    })
+  }, [history?.revision, historyEnabled, queryClient, selectedSessionId])
 
   const readTurnPrompt = useCallback(async (turnId: string, cursor: string | undefined) => {
     const sessionId = selectedSessionId
@@ -511,9 +525,9 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,
-    sessionsQuery, historyQuery, history, planTurnId, turnIndexQuery, navigationNotice, retryNavigation: () => { void turnIndexQuery.refetch() }, pendingJump, setPendingJump,
+    sessionsQuery, historyQuery, history, historyError, historyNotice, historyPaused, planTurnId, turnIndexQuery, navigationNotice, retryNavigation: () => { if (historyEnabled) void turnIndexQuery.refetch() }, pendingJump, setPendingJump,
     selectSession, createBranch, startDraft, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel,
-    loadEarlier: () => { void historyQuery.fetchPreviousPage() }, retryHistory: () => { void historyQuery.refetch() },
+    loadEarlier: () => { if (historyEnabled) void historyQuery.fetchPreviousPage() }, retryHistory: () => { if (historyEnabled) void historyQuery.refetch() },
   }
 }

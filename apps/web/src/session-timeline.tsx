@@ -19,10 +19,11 @@ import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 import type { PendingInput, PromptStatus } from './session-run-model.js'
 
-export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onSelectModel, onRetrySteering, onJumpToTurn, onJumpToUnloadedTurn, onReadTurnPrompt, onLoadEarlier, onPendingJumpHandled, onRetry, onRetryNavigation, navigationNotice, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, scrollViewport, systemEvents = [], turnIndex, turns = [] }: {
+export function SessionTimeline({ error, hasEarlier = false, history, historyNotice, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onSelectModel, onRetrySteering, onJumpToTurn, onJumpToUnloadedTurn, onReadTurnPrompt, onLoadEarlier, onPendingJumpHandled, onRetry, onRetryNavigation, navigationNotice, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, scrollViewport, systemEvents = [], turnIndex, turns = [] }: {
   error: boolean
   hasEarlier?: boolean
   history: PiSessionHistoryResponse | undefined
+  historyNotice?: string
   isLoading: boolean
   isLoadingEarlier?: boolean
   isRunning?: boolean
@@ -116,7 +117,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
 
   const pendingImplementation = pendingInputs.filter((input) => input.mode === 'plan_implementation')
   if (items.length === 0 && pendingImplementation.length === 0) {
-    return <section className="py-8 text-center"><p className="text-sm text-muted-foreground">{isRunning ? '正在等待 Pi 原生事件…' : '当前活动分支尚无可展示的原生条目。'}</p></section>
+    return <section className="py-8 text-center"><p role={historyNotice ? 'status' : undefined} className="text-sm text-muted-foreground">{historyNotice ?? (isRunning ? '正在等待 Pi 原生事件…' : '当前活动分支尚无可展示的原生条目。')}</p></section>
   }
 
 
@@ -128,7 +129,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     if (onJumpToTurn) onJumpToTurn(turnId, scrollTo, alignment)
     else scrollTo('auto')
   }
-  return <section className="conversation-stage pb-6">{navigationNotice && <div className="conversation-stage-content mb-2 flex items-center justify-end gap-2 text-xs text-muted-foreground" role="status"><span>{navigationNotice}</span><Button onClick={onRetryNavigation} size="sm" variant="ghost" type="button">重试</Button></div>}{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail key={history?.session.id} onReadPrompt={readPrompt} activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>{virtualItems.map((virtualItem) => {
+  return <section className="conversation-stage pb-6">{historyNotice && <p role="status" className="conversation-stage-content mb-3 text-xs text-muted-foreground">{historyNotice}</p>}{navigationNotice && <div className="conversation-stage-content mb-2 flex items-center justify-end gap-2 text-xs text-muted-foreground" role="status"><span>{navigationNotice}</span><Button onClick={onRetryNavigation} size="sm" variant="ghost" type="button">重试</Button></div>}{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail key={history?.session.id} onReadPrompt={readPrompt} activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>{virtualItems.map((virtualItem) => {
     if (virtualItem.index === 0) return <div className="absolute left-0 top-0 w-full" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>
     const item = items[virtualItem.index - 1]!
     return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><RenderErrorBoundary scope="turn" sessionId={history?.session.id} turnId={item.id}><TurnItem onSelectModel={onSelectModel} onRetrySteering={onRetrySteering} canRetrySteering={isRunning} isRunning={isRunning && item === activeExecutionItem} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} runMessage={item === activeExecutionItem ? runMessage : undefined} runStatus={item === activeExecutionItem ? runStatus : undefined} /></RenderErrorBoundary></div>
