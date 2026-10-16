@@ -5,10 +5,13 @@ import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
 import { RuntimeSecurity } from './runtime-security.js'
 
 const adapter = vi.hoisted(() => {
+  class PiSessionBranchTargetError extends Error {}
   class PiSessionHistoryCursorError extends Error {}
-  class PiSessionHistoryRevisionError extends Error {}
+  class PiSessionHistoryRevisionError extends Error { constructor() { super(); this.name = 'PiSessionHistoryRevisionError' } }
   class PiSessionHistorySourceChangedError extends Error {}
   return {
+    PiSessionBranchTargetError,
+    branchPiSession: vi.fn(),
     PiSessionHistoryCursorError,
     PiSessionHistoryRevisionError,
     PiSessionHistorySourceChangedError,
@@ -204,4 +207,40 @@ describe('Pi Nest API', () => {
     expect(revealPiWorkspace).toHaveBeenCalledTimes(1)
   })
 
+})
+
+describe('branch creation', () => {
+  it('creates a native branch under the source mutation lock and returns only safe fields', async () => {
+    adapter.listPiSessions.mockResolvedValue([nativeSession])
+    adapter.branchPiSession.mockReturnValue({ session: { id: 'child', cwd: '/working', createdAt: 'now', sessionFile: '/private/child.jsonl' }, draft: 'selected text' })
+    const registry = runtimeMock()
+    const finish = vi.fn()
+    registry.beginMutation.mockResolvedValue(finish)
+    const response = await createApp(registry as unknown as PiRuntimeRegistry).request('/api/sessions/session-1/branch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) }) })
+    expect(response.status).toBe(201)
+    const body = await response.json()
+    expect(body).toEqual({ session: { id: 'child', cwd: '/working', createdAt: 'now', updatedAt: 'now' }, draft: 'selected text' })
+    expect(adapter.branchPiSession).toHaveBeenCalledWith({ expectedSessionId: nativeSession.id, expectedCwd: nativeSession.cwd, sessionFile: nativeSession.sessionFile, kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) })
+    expect(finish).toHaveBeenCalledOnce()
+  })
+  it('rejects malformed, busy, missing and stale branch operations', async () => {
+    adapter.listPiSessions.mockResolvedValue([nativeSession])
+    adapter.branchPiSession.mockClear()
+    const registry = runtimeMock()
+    const app = createApp(registry as unknown as PiRuntimeRegistry)
+    const send = (body: unknown, id = 'session-1') => app.request(`/api/sessions/${id}/branch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    expect((await send({ kind: 'fork', revision: 'a'.repeat(64) })).status).toBe(400)
+    expect((await send({ kind: 'clone', revision: 'bad' })).status).toBe(400)
+    expect((await send({ kind: 'clone' }, 'missing')).status).toBe(404)
+    registry.beginMutation.mockReturnValueOnce(undefined as never)
+    expect((await send({ kind: 'clone' })).status).toBe(409)
+    expect(adapter.branchPiSession).not.toHaveBeenCalled()
+    const finish = vi.fn()
+    registry.beginMutation.mockResolvedValue(finish)
+    adapter.branchPiSession.mockImplementationOnce(() => { throw new adapter.PiSessionHistoryRevisionError() })
+    const stale = await send({ kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) })
+    expect(stale.status).toBe(409)
+    expect(await stale.json()).toMatchObject({ code: 'HISTORY_REVISION_CHANGED' })
+    expect(finish).toHaveBeenCalledOnce()
+  })
 })

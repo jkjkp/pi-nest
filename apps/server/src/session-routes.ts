@@ -1,6 +1,8 @@
 import { runtimeSettingsSchema } from './configuration-schema.js'
 import type { PiSessionsResponse, PiSessionHistoryResponse } from '@pi-nest/contracts'
 import {
+  branchPiSession,
+  PiSessionBranchTargetError,
   createPiSession,
   deletePiSession,
   listPiSessions,
@@ -27,6 +29,11 @@ const createSessionSchema = z.object({
   cwd: z.string().trim().min(1).max(4_096),
   prompt: z.string().trim().min(1).max(20_000),
 }).strict()
+
+const branchSessionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('clone') }).strict(),
+  z.object({ kind: z.literal('fork'), entryId: z.string().min(1).max(512), revision: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
+])
 
 const projectCwdSchema = z.object({ cwd: z.string().trim().min(1).max(4_096) }).strict()
 
@@ -119,6 +126,28 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
           busy ? 409 : 500,
         )
       }
+    })
+    .post('/sessions/:sessionId/branch', async (context) => {
+      const parsed = branchSessionSchema.safeParse(await context.req.json().catch(() => undefined))
+      if (!parsed.success) return context.json({ error: 'Invalid branch request' }, 400)
+      const resolved = await resolveSession(context.req.param('sessionId'))
+      if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
+      if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
+      if (!resolved.session.cwd) return context.json({ error: 'Pi session cwd is unavailable' }, 409)
+      const mutation = runtime.beginMutation(resolved.session.id)
+      if (!mutation) return context.json({ error: 'Pi session is busy', code: 'SESSION_RUNNING' }, 409)
+      let finish: (() => void) | undefined
+      try {
+        finish = await mutation
+        const { session, draft } = branchPiSession({ ...parsed.data, expectedSessionId: resolved.session.id, expectedCwd: resolved.session.cwd, sessionFile: resolved.session.sessionFile })
+        const { id, cwd, createdAt, name, firstMessage } = session
+        return context.json({ session: { id, cwd, createdAt, updatedAt: createdAt, name, firstMessage }, draft }, 201)
+      } catch (cause) {
+        if (historyRevisionChanged(cause)) return context.json({ error: '会话历史已变化，请刷新后重试。', code: 'HISTORY_REVISION_CHANGED' }, 409)
+        if (cause instanceof PiSessionBranchTargetError) return context.json({ error: cause.message, code: 'INVALID_BRANCH_TARGET' }, 400)
+        console.error('Failed to branch Pi session', { cause })
+        return context.json({ error: '创建分支会话失败，请重试。' }, 500)
+      } finally { finish?.() }
     })
     .post('/projects/reveal', async (context) => {
       const parsed = projectCwdSchema.safeParse(await context.req.json().catch(() => undefined))
