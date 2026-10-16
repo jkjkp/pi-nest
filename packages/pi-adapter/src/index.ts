@@ -22,3 +22,5 @@ export type { PiRpcFailureKind } from './pi-rpc-connection.js'
 export { readPiConfiguration, updatePiConfiguration, diagnosePiMcp, PiConfigurationConflict, PiConfigurationInvalid } from './configuration.js'
 
 export { discoverPiModels } from './configuration.js'
+export { branchPiSession, PiSessionBranchTargetError } from './branch-session.js'
+export type { PiSessionBranchOptions, PiSessionBranchResult } from './branch-session.js'
