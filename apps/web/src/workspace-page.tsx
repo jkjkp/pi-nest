@@ -1,5 +1,6 @@
 import { SessionForkDialog } from './session-fork-dialog.js'
 import { CommandNotice } from './command-notice.js'
+import { RenderErrorBoundary } from './render-error-boundary.js'
 import { parseComposerCommand } from './composer-commands.js'
 import { useWorkspaceCommands } from './use-workspace-commands.js'
 import { SessionRenameDialog } from './session-rename-dialog.js'
@@ -213,7 +214,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                       <div className="space-y-2"><h2 className="text-lg font-semibold">在 {draftProject?.name} 开始新对话</h2><p className="text-sm text-muted-foreground">发送第一条消息后才会创建 Pi 会话。</p></div>
                     </section>
                   </div>
-                ) : selectedSession ? <SessionTimeline
+                ) : selectedSession ? <RenderErrorBoundary key={selectedSessionId} scope="timeline" sessionId={selectedSessionId}><SessionTimeline
                   onSelectModel={() => { setModelSelectorOpen(true); void openModels() }}
                   error={historyQuery.isError && !history}
                   hasEarlier={historyQuery.hasPreviousPage}
@@ -241,7 +242,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   navigationNotice={navigationNotice}
                   onRetryNavigation={retryNavigation}
                   turns={currentRun?.turns}
-                /> : <div className="conversation-stage py-16"><p className="conversation-stage-content text-center text-sm text-muted-foreground">从左侧选择一个会话，或在项目中创建新对话。</p></div>}
+                /></RenderErrorBoundary> : <div className="conversation-stage py-16"><p className="conversation-stage-content text-center text-sm text-muted-foreground">从左侧选择一个会话，或在项目中创建新对话。</p></div>}
                 <div className="conversation-stage">
                   <section className="conversation-stage-content space-y-3">
                     {!isDraft && extensionWidget ? <pre className="rounded border bg-muted p-2 text-xs">{extensionWidget}</pre> : null}
