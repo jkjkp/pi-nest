@@ -64,6 +64,8 @@ export type PiSessionSummary = {
 export type PiSessionsResponse = { sessions: PiSessionSummary[] }
 
 export type PiSessionHistoryEntry = {
+  runId?: string
+  runIndex?: number
   id: string
   parentId: string | null
   raw: Record<string, unknown>
