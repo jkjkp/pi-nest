@@ -1,3 +1,4 @@
+import { serveWebRelease } from './web-release.js'
 import { Hono } from 'hono'
 import { configurationSecurity, createConfigurationRoutes } from './configuration-routes.js'
 
@@ -7,12 +8,14 @@ import { RuntimeSecurity } from './runtime-security.js'
 import { createSessionRoutes } from './session-routes.js'
 
 export function createApp(runtime = new PiRuntimeRegistry(), security = new RuntimeSecurity()) {
-  return new Hono()
+  const app = new Hono()
     .get('/api/health', (context) => context.json({ status: 'ok' }))
     .route('/api/configuration', createConfigurationRoutes(runtime, security))
     .use('/api/sessions/:sessionId/settings', configurationSecurity(security))
     .route('/api', createSessionRoutes(runtime))
     .route('/api', createRuntimeRoutes(runtime, security))
+  if (process.env.PI_NEST_WEB_RELEASE) serveWebRelease(app, process.env.PI_NEST_WEB_RELEASE)
+  return app
 }
 
 export const runtime = new PiRuntimeRegistry()

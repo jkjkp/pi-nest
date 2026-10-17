@@ -11,7 +11,8 @@
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "pnpm -r --if-present lint",
-    "test": "pnpm -r --if-present test"
+    "test": "pnpm -r --if-present test && node --test scripts/web-release.test.mjs",
+    "start:local": "pnpm build && node scripts/start-local.mjs"
   },
   "devDependencies": {
     "vitest": "5.0.1"
