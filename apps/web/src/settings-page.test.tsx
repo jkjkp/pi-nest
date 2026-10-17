@@ -3,7 +3,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router'
 import { expect, it } from 'vitest'
 import { SettingsPage } from './settings-page.js'
 import { changedSettings, settingsCategories } from './settings-model.js'
-it('renders all six categories in the settings layout without requiring a session', () => {
+it('renders all settings categories in the settings layout without requiring a session', () => {
   const router = createMemoryRouter([{ path: '/settings/:category?', element: <SettingsPage /> }], { initialEntries: ['/settings/mcp'] })
   const html = renderToStaticMarkup(<RouterProvider router={router} />)
   for (const category of settingsCategories) expect(html).toContain(category.label)

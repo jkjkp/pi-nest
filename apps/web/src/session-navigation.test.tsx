@@ -20,16 +20,15 @@ describe('SessionNavigation project actions', () => {
         mutationSessionId={undefined}
         onDelete={async () => undefined}
         onNewConversation={vi.fn()}
+        onAddProject={vi.fn()}
         onProjectOrderChange={vi.fn()}
         onRemoveProject={vi.fn()}
         onRename={async () => undefined}
-        onRestoreProject={vi.fn()}
         onRevealProject={async () => undefined}
         onSelect={vi.fn()}
         onSessionOrderChange={vi.fn()}
         onToggleProject={vi.fn()}
         projects={[project]}
-        removedProjects={[{ ...project, key: 'cwd:/removed', name: 'removed' }]}
         runs={{}}
         selectedSessionId="session-1"
       />,
@@ -38,7 +37,8 @@ describe('SessionNavigation project actions', () => {
     expect(markup).toContain('w-[4.5rem]')
     expect(markup).toContain('pi-nest 更多操作')
     expect(markup).toContain('在 pi-nest 新建对话')
-    expect(markup).toContain('已移除项目（1）')
+    expect(markup).toContain('创建项目')
+    expect(markup).not.toContain('已移除项目')
     expect(markup).not.toContain('font-mono text-xs font-normal tabular-nums')
   })
 })

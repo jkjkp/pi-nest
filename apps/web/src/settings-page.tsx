@@ -1,3 +1,4 @@
+import { ProjectSettings } from './project-settings.js'
 import { useEffect, useState } from 'react'
 import { Link, useBeforeUnload, useBlocker, useNavigate, useParams, useSearchParams } from 'react-router'
 import { ArrowLeft } from 'lucide-react'
@@ -19,6 +20,7 @@ export function SettingsPage() {
   const [params] = useSearchParams()
   const sessionId = params.get('session') ?? undefined
   const category = settingsCategories.find((item) => item.id === routeCategory) ?? settingsCategories[0]
+  const projectManagement = category.id === 'projects'
   const navigate = useNavigate()
   const [snapshot, setSnapshot] = useState<PiConfigurationSnapshot>()
   const [error, setError] = useState<string>()
@@ -31,10 +33,11 @@ export function SettingsPage() {
   const blocker = useBlocker(dirty)
   useBeforeUnload((event) => { if (dirty) { event.preventDefault(); event.returnValue = '' } })
   useEffect(() => {
+    if (projectManagement) return
     let cancelled = false
     void fetchPiConfiguration(sessionId).then((value) => { if (!cancelled) setSnapshot(value) }).catch((cause) => { if (!cancelled) setError(messageOf(cause)) })
     return () => { cancelled = true }
-  }, [sessionId, generation])
+  }, [sessionId, generation, projectManagement])
   function guard(action: () => void) {
     if (busy) return
     if (dirty) setPending(() => action)
@@ -58,15 +61,15 @@ export function SettingsPage() {
   const scoped = category.id === 'mcp' || category.id === 'resources'
   const activeScope = scoped ? scope : 'global'
   return <main className="min-h-screen bg-background text-foreground">
-    <header className="flex h-16 items-center justify-between gap-4 border-b px-4 sm:px-8"><div className="flex items-center gap-4"><Button asChild variant="ghost" size="sm"><Link to={sessionId ? `/?${new URLSearchParams({ session: sessionId })}` : '/'} onClick={(event) => { if (busy) event.preventDefault() }}><ArrowLeft aria-hidden="true" />返回会话</Link></Button><h1 className="text-lg font-semibold">设置</h1></div><span className="hidden text-xs text-muted-foreground sm:block">Pi 原生配置</span></header>
+    <header className="flex h-16 items-center justify-between gap-4 border-b px-4 sm:px-8"><div className="flex items-center gap-4"><Button asChild variant="ghost" size="sm"><Link to={sessionId ? `/?${new URLSearchParams({ session: sessionId })}` : '/'} onClick={(event) => { if (busy) event.preventDefault() }}><ArrowLeft aria-hidden="true" />返回会话</Link></Button><h1 className="text-lg font-semibold">设置</h1></div><span className="hidden text-xs text-muted-foreground sm:block">{projectManagement ? 'Pi Nest 项目' : 'Pi 原生配置'}</span></header>
     <div className="mx-auto grid min-h-[calc(100vh-4rem)] max-w-7xl md:grid-cols-[220px_minmax(0,1fr)]">
       <aside className="border-b bg-muted/20 p-4 md:border-r md:border-b-0 md:p-6"><p className="mb-4 hidden text-xs font-medium tracking-wider text-muted-foreground md:block">配置分类</p><nav aria-label="设置分类" className="hidden space-y-1 md:block">{settingsCategories.map(({ id, label, icon: Icon }) => <Link key={id} to={`/settings/${id}${sessionId ? `?${new URLSearchParams({ session: sessionId })}` : ''}`} aria-current={category.id === id ? 'page' : undefined} onClick={(event) => { event.preventDefault(); go(id) }} className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${category.id === id ? 'bg-accent font-medium text-accent-foreground' : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'}`}><Icon size={17} aria-hidden="true" />{label}</Link>)}</nav><label className="grid gap-2 text-sm md:hidden"><span>设置分类</span><Select label="设置分类" value={category.id} options={settingsCategories.map(({ id, label }) => ({ value: id, label }))} onValueChange={go} /></label></aside>
       <section className="min-w-0 px-4 py-6 sm:px-8 md:p-10"><div className="max-w-3xl space-y-6">
-        <div className="flex flex-wrap items-start justify-between gap-4"><div><h2 className="text-2xl font-semibold tracking-tight">{category.label}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{category.description}</p></div><Button variant="outline" size="sm" disabled={busy} onClick={() => guard(() => { setDirty(false); setSnapshot(undefined); setGeneration((value) => value + 1) })}>重新加载</Button></div>
+        <div className="flex flex-wrap items-start justify-between gap-4"><div><h2 className="text-2xl font-semibold tracking-tight">{category.label}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{category.description}</p></div>{!projectManagement && <Button variant="outline" size="sm" disabled={busy} onClick={() => guard(() => { setDirty(false); setSnapshot(undefined); setGeneration((value) => value + 1) })}>重新加载</Button>}</div>
         {scoped && <div className="flex flex-wrap items-center gap-3 rounded-lg border p-3"><label className="flex items-center gap-3 text-sm"><span className="shrink-0 whitespace-nowrap">配置范围</span><Select label="配置范围" className="sm:w-36" value={scope} disabled={busy} options={[{ value: 'global', label: '全局' }, ...(sessionId ? [{ value: 'project', label: '当前项目' }] : [])]} onValueChange={(value) => guard(() => { setDirty(false); setScope(value as PiConfigScope) })} /></label><span className="text-xs text-muted-foreground">{scope === 'global' ? '对所有 Pi 会话生效' : snapshot?.projectTrusted ? '已在 Pi 中信任的项目' : '请先在 Pi CLI 中信任项目'}</span></div>}
-        {error && <p className="rounded-lg border border-destructive/30 p-3 text-sm text-destructive" role="alert">{error}</p>}
-        {notice && <p className="rounded-lg border p-3 text-sm" role="status">{notice}</p>}
-        {!snapshot ? !error && <p role="status" className="text-sm text-muted-foreground">正在读取 Pi 配置…</p> : activeScope === 'project' && !snapshot.projectTrusted ? <p className="rounded-lg border p-5 text-sm text-muted-foreground">该项目尚未被 Pi 信任，项目配置未加载。请在 Pi CLI 中完成信任操作后重新加载。</p> : <SettingsPanel key={`${category.id}:${activeScope}:${sessionId}:${generation}`} category={category.id} snapshot={snapshot} scope={activeScope} sessionId={sessionId} busy={busy} onDirty={setDirty} onSave={save} guard={guard} />}
+        {!projectManagement && error && <p className="rounded-lg border border-destructive/30 p-3 text-sm text-destructive" role="alert">{error}</p>}
+        {!projectManagement && notice && <p className="rounded-lg border p-3 text-sm" role="status">{notice}</p>}
+        {category.id === 'projects' ? <ProjectSettings /> : !snapshot ? !error && <p role="status" className="text-sm text-muted-foreground">正在读取 Pi 配置…</p> : activeScope === 'project' && !snapshot.projectTrusted ? <p className="rounded-lg border p-5 text-sm text-muted-foreground">该项目尚未被 Pi 信任，项目配置未加载。请在 Pi CLI 中完成信任操作后重新加载。</p> : <SettingsPanel key={`${category.id}:${activeScope}:${sessionId}:${generation}`} category={category.id} snapshot={snapshot} scope={activeScope} sessionId={sessionId} busy={busy} onDirty={setDirty} onSave={save} guard={guard} />}
       </div></section>
     </div>
     <AlertDialog open={Boolean(pending) || blocker.state === 'blocked'} onOpenChange={(open) => { if (!open) { setPending(undefined); if (blocker.state === 'blocked') blocker.reset() } }}><AlertDialogContent><AlertDialogTitle>放弃未保存的修改？</AlertDialogTitle><AlertDialogDescription>当前分类的修改尚未保存，继续操作会丢失这些修改。</AlertDialogDescription><div className="mt-5 flex justify-end gap-2"><Button variant="outline" onClick={() => { setPending(undefined); if (blocker.state === 'blocked') blocker.reset() }}>继续编辑</Button><Button onClick={() => { const action = pending; setPending(undefined); setDirty(false); if (blocker.state === 'blocked') blocker.proceed(); else action?.() }}>放弃修改</Button></div></AlertDialogContent></AlertDialog>

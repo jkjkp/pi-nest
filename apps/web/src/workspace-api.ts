@@ -129,3 +129,9 @@ export async function addProject(request: { kind: 'open'; cwd: string } | { kind
   const body = await configurationRequest<{ project: PiProject }>('/api/projects', { method: 'POST', body: JSON.stringify(request) })
   return body.project
 }
+
+
+export async function selectProjectFolder(cwd?: string) {
+  const body = await configurationRequest<{ cwd: string | null }>('/api/projects/select-folder', { method: 'POST', body: JSON.stringify(cwd ? { cwd } : {}) })
+  return body.cwd
+}

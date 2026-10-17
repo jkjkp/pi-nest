@@ -10,7 +10,7 @@ import {
   useSensors,
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { ChevronRight, Ellipsis, Folder, FolderOpen, Pencil, Search, SquarePen, Trash2 } from 'lucide-react'
+import { ChevronRight, Ellipsis, Folder, FolderOpen, Pencil, Plus, Search, SquarePen, Trash2 } from 'lucide-react'
 
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
@@ -36,13 +36,12 @@ export function SessionNavigation({
   onRename,
   onProjectOrderChange,
   onNewConversation,
+  onAddProject,
   onRemoveProject,
-  onRestoreProject,
   onRevealProject,
   onSessionOrderChange,
   onToggleProject,
   projects,
-  removedProjects,
   runs,
   selectedSessionId,
 }: {
@@ -55,13 +54,12 @@ export function SessionNavigation({
   onRename: (sessionId: string, name: string) => Promise<void>
   onProjectOrderChange: (projectOrder: string[]) => void
   onNewConversation: (project: ProjectSessionGroup) => void
+  onAddProject: () => void
   onRemoveProject: (project: ProjectSessionGroup) => void
-  onRestoreProject: (cwd: string) => void
   onRevealProject: (cwd: string) => Promise<void>
   onSessionOrderChange: (projectKey: string, sessionOrder: string[]) => void
   onToggleProject: (projectKey: string, collapsed: boolean) => void
   projects: ProjectSessionGroup[]
-  removedProjects: ProjectSessionGroup[]
   runs: Record<string, SessionRunSummary>
   selectedSessionId: string
 }) {
@@ -134,6 +132,10 @@ export function SessionNavigation({
           />
         </label>
       </div>
+      <div className="flex shrink-0 items-center justify-between px-4 pt-3 pb-1">
+        <h3 className="text-xs font-medium text-muted-foreground">项目</h3>
+        <Button aria-label="创建项目" size="icon-sm" variant="ghost" onClick={onAddProject}><Plus aria-hidden="true" className="size-4" /></Button>
+      </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-1 p-2">
           {isLoading && Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-16" />)}
@@ -176,14 +178,7 @@ export function SessionNavigation({
               ))}
             </SortableContext>
           </DndContext>
-          {removedProjects.length > 0 && !isFiltering && (
-            <details className="mt-3 border-t pt-3">
-              <summary className="cursor-pointer px-2 text-xs text-muted-foreground">已移除项目（{removedProjects.length}）</summary>
-              <div className="mt-1 space-y-1">
-                {removedProjects.map((project) => <Button className="h-8 w-full justify-between px-2 text-xs" key={project.key} onClick={() => project.cwd && onRestoreProject(project.cwd)} type="button" variant="ghost"><span className="truncate">{project.name}</span><span>恢复</span></Button>)}
-              </div>
-            </details>
-          )}
+
         </div>
       </ScrollArea>
       {renaming && <SessionRenameDialog key={renaming.id} session={renaming} onClose={() => setRenaming(undefined)} onRename={onRename} />}

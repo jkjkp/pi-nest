@@ -1,4 +1,4 @@
-import { Boxes, Cable, Cpu, KeyRound, Settings2, SlidersHorizontal } from 'lucide-react'
+import { Boxes, Cable, Cpu, Folder, KeyRound, Settings2, SlidersHorizontal } from 'lucide-react'
 
 export const settingsCategories = [
   { id: 'models', label: '模型与运行', icon: Cpu, description: '设置新会话的默认模型与运行方式。' },
@@ -6,6 +6,7 @@ export const settingsCategories = [
   { id: 'custom-models', label: '自定义模型', icon: Boxes, description: '连接兼容端点、本地模型，或覆盖内置模型参数。' },
   { id: 'mcp', label: 'MCP 服务', icon: Cable, description: '配置本地和远程 MCP 服务，使用 Pi 原生工具接入。' },
   { id: 'resources', label: '扩展与资源', icon: Settings2, description: '配置 Pi packages、扩展、Skills、提示词模板与主题。' },
+  { id: 'projects', label: '项目管理', icon: Folder, description: '恢复从侧栏移除的项目。' },
   { id: 'advanced', label: '高级设置', icon: SlidersHorizontal, description: '调整模型传输、模型轮换范围和资源行为。' },
 ] as const
 

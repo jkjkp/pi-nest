@@ -1,3 +1,4 @@
+import { ProjectDialog } from './project-dialog.js'
 import { ProjectHome } from './project-home.js'
 import { SessionForkDialog } from './session-fork-dialog.js'
 import { CommandNotice } from './command-notice.js'
@@ -37,8 +38,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const navigate = useNavigate()
   const {
     selectedSessionId, selectedSession, sessionResolution, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
-    extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
-    navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
+    extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, collapsedProjectKeys,
+    navigationOrder, setNavigationOrder, setProjectCollapsed, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
     sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
     startDraft, openProject, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
@@ -56,6 +57,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
+  const [creatingProject, setCreatingProject] = useState(false)
   const [modelSelector, setModelSelector] = useState<{ sessionId?: string; open: boolean }>({ open: false })
   const modelSelectorOpen = modelSelector.sessionId === selectedSessionId && modelSelector.open
   const setModelSelectorOpen = (open: boolean) => setModelSelector({ sessionId: selectedSessionId, open })
@@ -118,11 +120,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           isLoading={sessionsQuery.isPending}
           mutationSessionId={mutatingSessionId}
           onDelete={handleDelete}
+          onAddProject={() => setCreatingProject(true)}
           onNewConversation={startDraft}
           onProjectOrderChange={(projectOrder) => setNavigationOrder({ ...navigationOrder, projectOrder })}
           onRemoveProject={removeProject}
           onRename={handleRename}
-          onRestoreProject={restoreProject}
           onRevealProject={revealProjectInFinder}
           onSelect={selectSession}
           onSessionOrderChange={(projectKey, sessionOrder) =>
@@ -133,13 +135,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           }
           onToggleProject={setProjectCollapsed}
           projects={projects}
-          removedProjects={removedProjects}
           runs={runs}
           selectedSessionId={selectedSessionId}
         />
       </div>
       <footer className="shrink-0 space-y-1 border-t p-3">
-        <Button asChild className="w-full justify-start" size="sm" variant="ghost"><Link to="/" onClick={() => { rememberReadingPosition(); setNavigationOpen(false) }}><Folder aria-hidden="true" />项目首页</Link></Button>
         <Button asChild className="w-full justify-start" size="sm" variant="ghost"><Link to={selectedSession ? `/settings?session=${encodeURIComponent(selectedSession.id)}` : '/settings'} onClick={() => setNavigationOpen(false)}><Settings aria-hidden="true" />设置</Link></Button>
       </footer>
     </div>
@@ -148,6 +148,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   return (
     <main className="relative flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      {creatingProject && <ProjectDialog mode="register" onClose={() => setCreatingProject(false)} onAdded={openProject} />}
       {commandPanels.sessionId === selectedSessionId && commandPanels.fork && <SessionForkDialog key={`fork:${selectedSessionId}`} sessionId={selectedSessionId} onClose={() => setCommandPanels({ sessionId: selectedSessionId, statistics: false })} onCloseAutoFocus={(event) => { event.preventDefault(); requestAnimationFrame(() => promptTextareaRef.current?.focus()) }} onFork={commandPanels.fork} />}
       {commandPanels.sessionId === selectedSessionId && commandPanels.rename && <SessionRenameDialog key={selectedSessionId} session={commandPanels.rename.session} onCloseAutoFocus={(event) => { event.preventDefault(); promptTextareaRef.current?.focus() }} onClose={() => setCommandPanels({ sessionId: selectedSessionId, statistics: false })} onRename={async (id, name) => {
         if (isActive || ['loading', 'switching'].includes(modelStatus) || ['loading', 'switching'].includes(thinkingStatus)) throw new Error('请等待当前会话操作结束。')
