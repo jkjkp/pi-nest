@@ -81,10 +81,10 @@ it('shows recovery rather than an unselected workspace before any data arrives',
   expect(container.querySelector('[data-testid="route"]')?.textContent).toBe('?session=one')
 })
 
-it('changes selection after an explicit confirmed deletion, without treating list failures as deletion', async () => {
+it.each([true, false])('changes selection after confirmed deletion (another session exists: %s)', async (hasOther) => {
   const other = { id: 'other', cwd: '/fixture', name: 'Next' }
-  client.setQueryData(['sessions'], [one, other])
-  vi.mocked(fetchSessions).mockResolvedValue([other])
+  client.setQueryData(['sessions'], hasOther ? [one, other] : [one])
+  vi.mocked(fetchSessions).mockResolvedValue(hasOther ? [other] : [])
   vi.mocked(deleteSession).mockResolvedValue(undefined)
   let workspace!: ReturnType<typeof useWorkspaceSession>
   function Probe() {
@@ -94,6 +94,7 @@ it('changes selection after an explicit confirmed deletion, without treating lis
   }
   await act(() => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/?session=one']}><Probe /></MemoryRouter></QueryClientProvider>))
   await act(async () => { await workspace.handleDelete('one') }); await settle()
-  expect(container.querySelector('[data-testid="route"]')?.textContent).toBe('?session=other')
-  expect(client.getQueryData<typeof one[]>(['sessions'])).toEqual([other])
+  expect(container.querySelector('[data-testid="route"]')?.textContent).toBe(hasOther ? '?session=other' : '')
+  expect(client.getQueryData<typeof one[]>(['sessions'])).toEqual(hasOther ? [other] : [])
+  if (!hasOther) expect(controller.releaseForeground).toHaveBeenCalled()
 })

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   DndContext,
   type DragEndEvent,
@@ -70,6 +70,13 @@ export function SessionNavigation({
   )
   const [renaming, setRenaming] = useState<PiSessionSummary>()
   const [deleting, setDeleting] = useState<PiSessionSummary>()
+  const [deletePending, setDeletePending] = useState(false)
+  const deleteInFlight = useRef(false)
+  const deleteButton = useRef<HTMLButtonElement>(null)
+  const deleteTrigger = useRef<HTMLElement | null>(null)
+  const deletingNotification = useWorkspaceStore((state) => deleting ? state.sessionNotifications[deleting.id] : undefined)
+  const deleteBusy = deletePending || Boolean(deleting && mutationSessionId === deleting.id)
+  const deleteBlocked = deleteBusy || isRunActive(runs[deleting?.id ?? '']?.status ?? (deletingNotification?.pendingRunId ? 'running' : 'idle'))
   const [removingProject, setRemovingProject] = useState<ProjectSessionGroup>()
   const [actionError, setActionError] = useState<string>()
   const [searchValue, setSearchValue] = useState('')
@@ -82,13 +89,16 @@ export function SessionNavigation({
   }
 
   async function confirmDelete() {
-    if (!deleting) return
+    if (!deleting || deleteBlocked || deleteInFlight.current) return
+    deleteInFlight.current = true
+    setDeletePending(true)
+    setActionError(undefined)
     try {
       await onDelete(deleting.id)
       setDeleting(undefined)
     } catch {
       setActionError('删除失败，请刷新后重试。')
-    }
+    } finally { deleteInFlight.current = false; setDeletePending(false) }
   }
 
   function reorder(event: DragEndEvent) {
@@ -153,6 +163,7 @@ export function SessionNavigation({
                   key={project.key}
                   mutationSessionId={mutationSessionId}
                   onDelete={(session) => {
+                    deleteTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
                     setActionError(undefined)
                     setDeleting(session)
                   }}
@@ -182,17 +193,17 @@ export function SessionNavigation({
         </div>
       </ScrollArea>
       {renaming && <SessionRenameDialog key={renaming.id} session={renaming} onClose={() => setRenaming(undefined)} onRename={onRename} />}
-      <AlertDialog onOpenChange={(open) => !open && setDeleting(undefined)} open={Boolean(deleting)}>
-        <AlertDialogContent>
+      <AlertDialog onOpenChange={(open) => { if (!open && !deleteInFlight.current) setDeleting(undefined) }} open={Boolean(deleting)}>
+        <AlertDialogContent onOpenAutoFocus={(event) => { event.preventDefault(); deleteButton.current?.focus() }} onCloseAutoFocus={(event) => { event.preventDefault(); deleteTrigger.current?.focus() }}>
           <AlertDialogTitle>删除原生 Pi 会话？</AlertDialogTitle>
           <AlertDialogDescription>
-            将先移入系统废纸篓；若废纸篓不可用，会永久删除原生会话文件且无法恢复。
+            将删除“{deleting ? sessionDisplayName(deleting) : ''}”。优先移入系统废纸篓；若废纸篓不可用，会永久删除原生会话文件且无法恢复。
           </AlertDialogDescription>
           {actionError && <p className="mt-3 text-sm text-destructive" role="alert">{actionError}</p>}
           <div className="mt-5 flex justify-end gap-2">
-            <AlertDialogCancel asChild><Button type="button" variant="secondary">取消</Button></AlertDialogCancel>
-            <Button disabled={mutationSessionId === deleting?.id} onClick={() => void confirmDelete()} type="button" variant="destructive">
-              删除会话
+            <AlertDialogCancel asChild><Button disabled={deleteBusy} type="button" variant="secondary">取消</Button></AlertDialogCancel>
+            <Button ref={deleteButton} disabled={deleteBlocked} onClick={() => void confirmDelete()} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); if (!event.repeat && !event.nativeEvent.isComposing) void confirmDelete() } }} type="button" variant="destructive">
+              {deletePending ? '删除中…' : '删除会话'}
             </Button>
           </div>
         </AlertDialogContent>
@@ -200,7 +211,7 @@ export function SessionNavigation({
       <AlertDialog onOpenChange={(open) => !open && setRemovingProject(undefined)} open={Boolean(removingProject)}>
         <AlertDialogContent>
           <AlertDialogTitle>从 Pi Nest 移除项目？</AlertDialogTitle>
-          <AlertDialogDescription>仅从此浏览器的项目列表隐藏“{removingProject?.name}”。不会删除目录、Pi 原生会话或正在运行的任务，之后可在“已移除项目”中恢复。</AlertDialogDescription>
+          <AlertDialogDescription>仅从此浏览器的项目列表隐藏“{removingProject?.name}”。不会删除目录、Pi 原生会话或正在运行的任务，之后可在“设置 → 项目管理”中恢复。</AlertDialogDescription>
           {actionError && <p className="mt-3 text-sm text-destructive" role="alert">{actionError}</p>}
           <div className="mt-5 flex justify-end gap-2">
             <AlertDialogCancel asChild><Button type="button" variant="secondary">取消</Button></AlertDialogCancel>
@@ -344,15 +355,15 @@ function SortableSession({
   const notification = useWorkspaceStore((state) => state.sessionNotifications[session.id])
   const unread = Boolean(notification?.completedRunId && notification.completedRunId !== notification.readRunId)
   const status = run?.status ?? (notification?.pendingRunId ? 'running' : 'idle')
-  const cannotDelete = selected || isRunActive(status) || mutationSessionId === session.id
+  const cannotDelete = isRunActive(status) || mutationSessionId === session.id
 
   return (
     <ContextMenu onOpenChange={setMenuOpen}>
       <ContextMenuTrigger asChild>
-        <div className="flex items-center gap-1" ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
+        <div className={`group/session flex items-center gap-1 rounded-lg ${selected ? 'bg-primary/10' : 'hover:bg-muted/50'}`} ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
           <Button
             aria-current={selected ? 'page' : undefined}
-            className={`h-9 min-w-0 flex-1 justify-start border-0 px-2 text-left ${selected ? 'bg-primary/10 hover:bg-primary/10' : 'bg-transparent hover:bg-muted/50'}`}
+            className="h-9 min-w-0 flex-1 justify-start border-0 bg-transparent px-2 text-left hover:bg-transparent"
             onClick={() => onSelect(session.id)}
             ref={setActivatorNodeRef}
             variant="ghost"
@@ -362,6 +373,7 @@ function SortableSession({
             <NavigationTitle className="text-sm font-medium" stopped={isDragging || menuOpen}>{sessionDisplayName(session)}</NavigationTitle>
             <SessionStatusIndicator status={status} unread={unread} />
           </Button>
+          <Button aria-label={`删除 ${sessionDisplayName(session)}`} title={isRunActive(status) ? '运行中的会话无法删除' : '删除会话'} className="pointer-events-none mr-1 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/session:pointer-events-auto group-hover/session:opacity-100 group-focus-within/session:pointer-events-auto group-focus-within/session:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100" disabled={cannotDelete} onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onDelete(session) }} size="icon-sm" type="button" variant="ghost"><Trash2 aria-hidden="true" className="size-3.5" /></Button>
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>

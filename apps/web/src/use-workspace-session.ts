@@ -380,6 +380,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
       queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => current?.filter((session) => session.id !== sessionId))
       if (selectedSessionIdRef.current === sessionId) {
         const next = projects.flatMap((project) => project.sessions).find((session) => session.id !== sessionId)
+        if (!next) sessionRuns.releaseForeground()
         setSearchParams(next ? { session: next.id } : {})
       }
       queryClient.removeQueries({ queryKey: sessionHistoryQueryKey(sessionId) })
