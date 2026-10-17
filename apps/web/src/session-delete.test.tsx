@@ -35,7 +35,9 @@ it('shows a separate hover/focus delete action, including on the selected idle s
   const button = await open()
   expect(button.disabled).toBe(false)
   expect(button.className).toContain('group-hover/session:opacity-100')
-  expect(button.className).toContain('group-focus-within/session:opacity-100')
+  expect(button.className).not.toContain('group-focus-within/session:opacity-100')
+  expect(button.className).toContain('focus-visible:opacity-100')
+  expect(button.className).not.toContain('[@media(hover:none)]:opacity-100')
   expect(button.parentElement?.querySelectorAll('button')).toHaveLength(2)
   expect(dialog()?.textContent).toContain('当前对话')
   expect(props.onSelect).not.toHaveBeenCalled()
@@ -93,7 +95,11 @@ it('keeps the confirmation open after failure and permits a retry', async () => 
 
 it('disables deletion during a run, including a run starting after the confirmation opens', async () => {
   await render()
-  expect(container.querySelector<HTMLButtonElement>('[aria-label="删除 运行中的会话"]')?.disabled).toBe(true)
+  const runningDelete = container.querySelector<HTMLButtonElement>('[aria-label="删除 运行中的会话"]')!
+  expect(runningDelete.disabled).toBe(true)
+  expect(runningDelete.className.split(' ')).toContain('disabled:opacity-0')
+  expect(runningDelete.className.split(' ')).not.toContain('disabled:opacity-50')
+  expect(runningDelete.className).toContain('group-hover/session:disabled:opacity-50')
   await open()
   props = { ...props, runs: { ...props.runs, one: { status: 'running', turns: [], systemEvents: [], pendingInputs: [] } } }
   await render()
