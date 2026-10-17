@@ -23,6 +23,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
   const messageScrollAreaRef = useRef<HTMLDivElement>(null)
   const navigationInProgress = useRef(false)
   const returningToBottom = useRef(false)
+  const initialPositioning = useRef(true)
   const navigationFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const followLatestRef = useRef(followLatest)
   const showScrollToBottomRef = useRef(showScrollToBottom)
@@ -52,6 +53,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
     pendingFinalAnswer.current = undefined
   }, [selectedSessionId, scrollViewport])
   const setFollowingLatest = useCallback((value: boolean) => {
+    if (!value) initialPositioning.current = false
     if (followLatestRef.current === value) return
     followLatestRef.current = value
     setFollowLatest(value)
@@ -119,7 +121,9 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       previousViewportHeight = scrollViewport.clientHeight
       if (executionIsTransitioning()) return
       // Measure here; defer writes so scroll and resize callbacks cannot feed each other.
-      if (resized && followLatestRef.current && !navigationInProgress.current) {
+      // Layout scrolls during initial measurement must not count as the reader scrolling up.
+      const initialLayoutScroll = initialPositioning.current && !shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, false)
+      if ((resized || initialLayoutScroll) && followLatestRef.current && !navigationInProgress.current) {
         followFinalAnswer()
         return
       }
@@ -145,8 +149,9 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       navigationFallback.current = setTimeout(completeNavigation, 150)
     }
     const interruptNavigation = (event: Event) => {
+      if (event.type === 'keydown' && event instanceof KeyboardEvent && !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) return
+      if (initialPositioning.current) setFollowingLatest(false)
       if (!returningToBottom.current) return
-      if (event instanceof KeyboardEvent && !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) return
       clearTimeout(navigationFallback.current)
       navigationInProgress.current = false
       returningToBottom.current = false
@@ -215,13 +220,17 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       navigationInProgress.current = false
       returningToBottom.current = false
       inspectorToggleScrollTop.current = undefined
+      initialPositioning.current = true
+      setFollowingLatest(true)
+      // Position before scroll events can mistake the new session's height for a user scroll.
+      scrollViewport?.scrollTo({ top: scrollViewport.scrollHeight })
     }
-    if (navigationInProgress.current || (!followLatest && !selectedSessionChanged)) return
+    if (navigationInProgress.current || (!followLatest && !selectedSessionChanged) || (initialPositioning.current && !history)) return
     scheduleScroll(() => {
-      if (!navigationInProgress.current && scrollViewport) scrollViewport.scrollTop = scrollViewport.scrollHeight
+      if (followLatestRef.current && !navigationInProgress.current && scrollViewport) scrollViewport.scrollTop = scrollViewport.scrollHeight
     })
 
-  }, [followLatest, history, scrollViewport, selectedSessionId, scheduleScroll])
+  }, [followLatest, history, scrollViewport, selectedSessionId, scheduleScroll, setFollowingLatest])
 
   useLayoutEffect(() => {
     const key = activeTurn ? `${selectedSessionId}:${activeTurn.startedAt}` : undefined

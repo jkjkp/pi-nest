@@ -32,7 +32,7 @@ function setup(latestSteeringId?: string) {
   // oxlint-disable-next-line react-hooks/rules-of-hooks -- Exercise the hook with mocked React effects and scroll geometry.
   const hook = useTimelineViewport({ selectedSessionId: 'A', history: undefined, activeTurn: undefined, latestSteeringId, isActive: false, inspectorOpen: false, setInspectorOpen: vi.fn() })
   const cleanups = hooks.effects.map((effect) => effect())
-  return { hook, viewport, frames, panel, transition: (type: string) => listeners.get(type)?.({ type, target: panel, propertyName: 'grid-template-rows' }), click: () => listeners.get('click')?.({ target: panel }), resize: () => resize(), scroll: () => listeners.get('scroll')?.(), cleanup: () => { for (const cleanup of cleanups) cleanup?.() }, flush: () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback(0)) } }
+  return { hook, viewport, frames, panel, transition: (type: string) => listeners.get(type)?.({ type, target: panel, propertyName: 'grid-template-rows' }), click: () => listeners.get('click')?.({ target: panel }), resize: () => resize(), wheel: () => listeners.get('wheel')?.({ type: 'wheel' }), scroll: () => listeners.get('scroll')?.(), cleanup: () => { for (const cleanup of cleanups) cleanup?.() }, flush: () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback(0)) } }
 }
 
 it('defers resize-driven scroll writes and coalesces streaming follow requests', () => {
@@ -54,6 +54,7 @@ it('defers resize-driven scroll writes and coalesces streaming follow requests',
 it('does not force the user back to the bottom after scrolling up', () => {
   const test = setup()
   try {
+    test.wheel()
     test.viewport.scrollTop = 100
     test.scroll()
     test.viewport.scrollHeight = 1400
@@ -71,6 +72,7 @@ it('follows a steering bubble only while the user is following the latest messag
     steeringLayout()
     test.flush()
     expect(test.viewport.scrollTop).toBe(test.viewport.scrollHeight)
+    test.wheel()
     test.viewport.scrollTop = 100
     test.scroll()
     steeringLayout()
@@ -98,6 +100,7 @@ it('does not enqueue React state updates for unchanged scroll-follow flags', () 
     test.hook.setFollowingLatest(true)
     expect(hooks.setters[0]).not.toHaveBeenCalled()
     expect(hooks.setters[1]).not.toHaveBeenCalled()
+    test.wheel()
     test.viewport.scrollTop = 100
     test.scroll()
     test.scroll()
