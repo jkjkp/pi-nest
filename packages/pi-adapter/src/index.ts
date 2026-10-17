@@ -24,3 +24,6 @@ export { readPiConfiguration, updatePiConfiguration, diagnosePiMcp, PiConfigurat
 export { discoverPiModels } from './configuration.js'
 export { branchPiSession, PiSessionBranchTargetError } from './branch-session.js'
 export type { PiSessionBranchOptions, PiSessionBranchResult } from './branch-session.js'
+
+export { capturePiSessionHistory, historyFromSnapshot, turnIndexFromSnapshot } from './read-session-history.js'
+export type { PiSessionHistorySnapshot } from './read-session-history.js'

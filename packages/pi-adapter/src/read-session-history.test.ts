@@ -257,17 +257,14 @@ describe('readPiSessionHistory', () => {
     expect(existsSync(dirname(copiedSessionFile))).toBe(false)
   })
 
-  it('reports source changes without returning a history', async () => {
+  it('returns the captured version when the source changes after the private snapshot was made', async () => {
     open.mockImplementation(() => {
       writeFileSync(sourceSessionFile, '{"type":"session","changed":true}\n')
       return session([])
     })
-    const { PiSessionHistorySourceChangedError, readPiSessionHistory } = await import('./read-session-history.js')
+    const { readPiSessionHistory } = await import('./read-session-history.js')
 
-    expect(() => readPiSessionHistory({
-      expectedSessionId: 'session-1',
-      sessionFile: sourceSessionFile,
-    })).toThrow(PiSessionHistorySourceChangedError)
+    expect(readPiSessionHistory({ expectedSessionId: 'session-1', sessionFile: sourceSessionFile })).toMatchObject({ entries: [], revision: expect.any(String) })
   })
 
   it('preserves the SDK cause', async () => {

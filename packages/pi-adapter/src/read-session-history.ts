@@ -1,7 +1,7 @@
 import type { PiSessionHistoryEntry, PiSessionHistory, PiSessionTurnIndexEntry, PiSessionTurnIndex } from '@pi-nest/contracts'
 export type { PiSessionHistoryEntry, PiSessionHistory, PiSessionTurnIndexEntry, PiSessionTurnIndex } from '@pi-nest/contracts'
 
-import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { chmodSync, closeSync, fstatSync, openSync, readSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -41,8 +41,31 @@ export class PiSessionHistoryRevisionError extends Error {
   }
 }
 
-function fingerprint(file: string) {
-  return createHash('sha256').update(readFileSync(file)).digest('hex')
+export type PiSessionHistorySnapshot = { revision: string; bytes: number; entries: SessionEntry[] }
+
+function sourceBytes(file: string) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const fd = openSync(file, 'r')
+    try {
+      const size = fstatSync(fd).size
+      const bytes = Buffer.alloc(size)
+      let offset = 0
+      while (offset < size) {
+        const count = readSync(fd, bytes, offset, size - offset, offset)
+        if (!count) break
+        offset += count
+      }
+      const end = bytes.lastIndexOf(10, offset - 1) + 1
+      if (!end) continue
+      const complete = bytes.subarray(0, end)
+      const verify = Buffer.alloc(end)
+      if (readSync(fd, verify, 0, end, 0) !== end || !complete.equals(verify)) continue
+      // Ignore only an unfinished final JSONL frame; malformed complete records are an error.
+      for (const line of complete.toString('utf8').split('\n')) if (line.trim()) JSON.parse(line)
+      return complete
+    } finally { closeSync(fd) }
+  }
+  throw new PiSessionHistorySourceChangedError()
 }
 
 function mapEntry(entry: SessionEntry): PiSessionHistoryEntry {
@@ -96,17 +119,16 @@ function promptPreview(entry: SessionEntry) {
   return text.replace(/\s+/g, ' ').trim().slice(0, 160) || '无用户正文'
 }
 
-function withBranchEntries<T>({ expectedCwd, expectedSessionId, revision, sessionFile }: PiSessionTurnIndexOptions, read: (entries: SessionEntry[], revision: string) => T): T {
+export function capturePiSessionHistory({ expectedCwd, expectedSessionId, sessionFile }: PiSessionTurnIndexOptions): PiSessionHistorySnapshot {
   let temporaryDirectory: string | undefined
 
   try {
-    const hashBefore = fingerprint(sessionFile)
-    if (revision !== undefined && revision !== hashBefore) throw new PiSessionHistoryRevisionError()
+    const bytes = sourceBytes(sessionFile)
+    const revision = createHash('sha256').update(bytes).digest('hex')
     temporaryDirectory = mkdtempSync(join(tmpdir(), 'pi-nest-history-'))
     chmodSync(temporaryDirectory, 0o700)
     const temporarySessionFile = join(temporaryDirectory, 'session.jsonl')
-    copyFileSync(sessionFile, temporarySessionFile)
-    chmodSync(temporarySessionFile, 0o600)
+    writeFileSync(temporarySessionFile, bytes, { flag: 'wx', mode: 0o600 })
 
     const session = SessionManager.open(temporarySessionFile)
     const header = session.getHeader()
@@ -120,8 +142,7 @@ function withBranchEntries<T>({ expectedCwd, expectedSessionId, revision, sessio
     }
 
     const branchEntries = session.getBranch()
-    if (hashBefore !== fingerprint(sessionFile)) throw new PiSessionHistorySourceChangedError()
-    return read(branchEntries, hashBefore)
+    return { entries: branchEntries, revision, bytes: bytes.length }
   } catch (cause) {
     if (cause instanceof PiSessionHistoryRevisionError || cause instanceof PiSessionHistorySourceChangedError || cause instanceof PiSessionHistoryCursorError) throw cause
     throw new Error('Failed to read Pi session history', { cause })
@@ -130,38 +151,34 @@ function withBranchEntries<T>({ expectedCwd, expectedSessionId, revision, sessio
   }
 }
 
-export function readPiSessionHistory({
-  before,
-  expectedCwd,
-  expectedSessionId,
-  limit = defaultPiSessionHistoryTurnLimit,
-  revision,
-  sessionFile,
-}: PiSessionHistoryOptions): PiSessionHistory {
-  return withBranchEntries({ expectedCwd, expectedSessionId, revision, sessionFile }, (branchEntries, snapshotRevision) => {
-    const branchTurns = turns(branchEntries)
-    const end = before === undefined ? branchTurns.length : branchTurns.findIndex((turn) => turnStartId(turn[0]!) === before)
-    if (end < 0) throw new PiSessionHistoryCursorError()
-    const start = Math.max(0, end - limit)
-    const page = branchTurns.slice(start, end)
+function withBranchEntries<T>(options: PiSessionTurnIndexOptions, read: (entries: SessionEntry[], revision: string) => T): T {
+  const snapshot = capturePiSessionHistory(options)
+  if (options.revision !== undefined && options.revision !== snapshot.revision) throw new PiSessionHistoryRevisionError()
+  return read(snapshot.entries, snapshot.revision)
+}
 
-    return {
-      ...(start > 0 ? { beforeCursor: turnStartId(page[0]![0]!) } : {}),
-      entries: page.flat().map(mapEntry),
-      hasEarlier: start > 0,
-      revision: snapshotRevision,
-    }
-  })
+export function historyFromSnapshot(snapshot: PiSessionHistorySnapshot, { before, limit = defaultPiSessionHistoryTurnLimit }: Pick<PiSessionHistoryOptions, 'before' | 'limit'> = {}): PiSessionHistory {
+  const branchTurns = turns(snapshot.entries)
+  const end = before === undefined ? branchTurns.length : branchTurns.findIndex((turn) => turnStartId(turn[0]!) === before)
+  if (end < 0) throw new PiSessionHistoryCursorError()
+  const start = Math.max(0, end - limit)
+  const page = branchTurns.slice(start, end)
+  return { ...(start > 0 ? { beforeCursor: turnStartId(page[0]![0]!) } : {}), entries: page.flat().map(mapEntry), hasEarlier: start > 0, revision: snapshot.revision }
+}
+
+export function turnIndexFromSnapshot(snapshot: PiSessionHistorySnapshot): PiSessionTurnIndex {
+  return { revision: snapshot.revision, entries: turns(snapshot.entries).map((turn, index) => {
+    const entry = turn[0]!
+    const startedAt = (entry as unknown as Record<string, unknown>).timestamp
+    if (typeof startedAt !== 'string') throw new Error('Pi SDK returned an invalid native session entry')
+    return { id: turnStartId(entry), index: index + 1, promptPreview: promptPreview(entry), startedAt }
+  }) }
+}
+
+export function readPiSessionHistory(options: PiSessionHistoryOptions): PiSessionHistory {
+  return withBranchEntries(options, (entries, revision) => historyFromSnapshot({ entries, revision, bytes: 0 }, options))
 }
 
 export function readPiSessionTurnIndex(options: PiSessionTurnIndexOptions): PiSessionTurnIndex {
-  return withBranchEntries(options, (entries, revision) => ({
-    entries: turns(entries).map((turn, index) => {
-      const entry = turn[0]!
-      const startedAt = (entry as unknown as Record<string, unknown>).timestamp
-      if (typeof startedAt !== 'string') throw new Error('Pi SDK returned an invalid native session entry')
-      return { id: turnStartId(entry), index: index + 1, promptPreview: promptPreview(entry), startedAt }
-    }),
-    revision,
-  }))
+  return withBranchEntries(options, (entries, revision) => turnIndexFromSnapshot({ entries, revision, bytes: 0 }))
 }
