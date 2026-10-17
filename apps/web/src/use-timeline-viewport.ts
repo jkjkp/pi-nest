@@ -23,6 +23,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
   const messageScrollAreaRef = useRef<HTMLDivElement>(null)
   const navigationInProgress = useRef(false)
   const returningToBottom = useRef(false)
+  const returnToBottomDeadline = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const initialPositioning = useRef(true)
   const navigationFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const followLatestRef = useRef(followLatest)
@@ -36,6 +37,12 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
   const readingPositions = useRef(new Map<string, TimelineReadingPosition>())
   const timelineScrollController = useRef<TimelineScrollController | null>(null)
   const restoringPosition = useRef<TimelineReadingPosition | undefined>(undefined)
+  const cancelReturnToBottom = useCallback(() => {
+    clearTimeout(returnToBottomDeadline.current)
+    returnToBottomDeadline.current = undefined
+    if (returningToBottom.current) navigationInProgress.current = false
+    returningToBottom.current = false
+  }, [])
   const executionIsTransitioning = useCallback(() => {
     for (const element of executionTransitions.current) {
       if (!element.isConnected) executionTransitions.current.delete(element)
@@ -50,11 +57,12 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
     })
   }, [])
   useLayoutEffect(() => () => {
+    cancelReturnToBottom()
     if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current)
     scrollFrame.current = undefined
     executionTransitions.current.clear()
     pendingFinalAnswer.current = undefined
-  }, [selectedSessionId, scrollViewport])
+  }, [selectedSessionId, scrollViewport, cancelReturnToBottom])
   const setFollowingLatest = useCallback((value: boolean) => {
     restoringPosition.current = undefined
     if (!value) initialPositioning.current = false
@@ -115,6 +123,19 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
     })
   }, [scrollViewport, scheduleScroll, executionIsTransitioning])
 
+  const finishReturnToBottom = useCallback(() => {
+    if (!scrollViewport || !returningToBottom.current) return
+    cancelReturnToBottom()
+    clearTimeout(navigationFallback.current)
+    setFollowingLatest(true)
+    initialPositioning.current = true
+    scrollViewport.scrollTo({ top: scrollViewport.scrollHeight, behavior: 'instant' })
+    if (showScrollToBottomRef.current) {
+      showScrollToBottomRef.current = false
+      setShowScrollToBottom(false)
+    }
+  }, [scrollViewport, cancelReturnToBottom, setFollowingLatest])
+
   const rememberReadingPosition = useCallback(() => {
     const controller = timelineScrollController.current
     if (!scrollViewport || !controller || controller.sessionId !== previouslyScrolledSessionId.current || restoringPosition.current) return
@@ -145,6 +166,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
     let previousScrollHeight = scrollViewport.scrollHeight
     let previousViewportHeight = scrollViewport.clientHeight
     const updateFollowLatest = () => {
+      if (returningToBottom.current) return
       if (restoringPosition.current) { restoreReadingPosition(); return }
       const resized = previousScrollHeight !== scrollViewport.scrollHeight || previousViewportHeight !== scrollViewport.clientHeight
       previousScrollHeight = scrollViewport.scrollHeight
@@ -166,6 +188,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       setFollowingLatest(next)
     }
     const completeNavigation = () => {
+      if (returningToBottom.current) { finishReturnToBottom(); return }
       clearTimeout(navigationFallback.current)
       navigationFallback.current = undefined
       navigationInProgress.current = false
@@ -175,7 +198,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
     const handleScroll = () => {
       updateFollowLatest()
       rememberReadingPosition()
-      if (!navigationInProgress.current) return
+      if (!navigationInProgress.current || returningToBottom.current) return
       clearTimeout(navigationFallback.current)
       navigationFallback.current = setTimeout(completeNavigation, 150)
     }
@@ -185,13 +208,13 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       restoringPosition.current = undefined
       if (!returningToBottom.current) return
       clearTimeout(navigationFallback.current)
-      navigationInProgress.current = false
-      returningToBottom.current = false
+      cancelReturnToBottom()
       setFollowingLatest(false)
       scrollViewport.scrollTo({ top: scrollViewport.scrollTop, behavior: 'instant' })
     }
     const pauseExecutionFollow = (event: Event) => {
       if (!(event.target instanceof Element) || !event.target.closest('[data-execution-toggle]')) return
+      interruptNavigation(event)
       setFollowingLatest(false)
       pendingFinalAnswer.current = undefined
       if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current)
@@ -213,7 +236,6 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       })
     }
     const observer = new ResizeObserver(() => {
-      if (returningToBottom.current) scheduleScroll(() => scrollViewport.scrollTo({ top: scrollViewport.scrollHeight, behavior: 'smooth' }))
       updateFollowLatest()
       rememberReadingPosition()
     })
@@ -243,12 +265,13 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       scrollViewport.removeEventListener('transitionend', handleExecutionTransition)
       scrollViewport.removeEventListener('transitioncancel', handleExecutionTransition)
     }
-  }, [scrollViewport, setFollowingLatest, followFinalAnswer, scrollToFinalAnswer, scheduleScroll, executionIsTransitioning, rememberReadingPosition, restoreReadingPosition])
+  }, [scrollViewport, setFollowingLatest, followFinalAnswer, scrollToFinalAnswer, scheduleScroll, executionIsTransitioning, rememberReadingPosition, restoreReadingPosition, cancelReturnToBottom, finishReturnToBottom])
 
   useLayoutEffect(() => {
     const selectedSessionChanged = previouslyScrolledSessionId.current !== selectedSessionId
     previouslyScrolledSessionId.current = selectedSessionId
     if (selectedSessionChanged) {
+      cancelReturnToBottom()
       clearTimeout(navigationFallback.current)
       navigationInProgress.current = false
       returningToBottom.current = false
@@ -269,7 +292,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       if (followLatestRef.current && !navigationInProgress.current && scrollViewport) scrollViewport.scrollTop = scrollViewport.scrollHeight
     })
 
-  }, [followLatest, history, scrollViewport, selectedSessionId, scheduleScroll, setFollowingLatest, restoreReadingPosition])
+  }, [followLatest, history, scrollViewport, selectedSessionId, scheduleScroll, setFollowingLatest, restoreReadingPosition, cancelReturnToBottom])
 
   useLayoutEffect(() => {
     const key = activeTurn ? `${selectedSessionId}:${activeTurn.startedAt}` : undefined
@@ -296,26 +319,32 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
 
   const scrollToBottom = useCallback(() => {
     if (!scrollViewport) return
+    cancelReturnToBottom()
     clearTimeout(navigationFallback.current)
     inspectorToggleScrollTop.current = undefined
+    pendingFinalAnswer.current = undefined
     setFollowingLatest(false)
-    const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
-    navigationInProgress.current = behavior === 'smooth'
-    returningToBottom.current = behavior === 'smooth'
-    scrollViewport.scrollTo({ top: scrollViewport.scrollHeight, behavior })
-    if (behavior === 'auto') setFollowingLatest(true)
-  }, [scrollViewport, setFollowingLatest])
+    const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'
+    navigationInProgress.current = true
+    returningToBottom.current = true
+    if (behavior === 'instant') finishReturnToBottom()
+    else {
+      // Virtual-list measurements must not extend the return beyond this deadline.
+      returnToBottomDeadline.current = setTimeout(finishReturnToBottom, 1500)
+      scrollViewport.scrollTo({ top: scrollViewport.scrollHeight, behavior })
+    }
+  }, [scrollViewport, setFollowingLatest, cancelReturnToBottom, finishReturnToBottom])
 
   const jumpToTurn = useCallback((_turnId: string, scrollTo: (behavior: ScrollBehavior) => void, alignment: TurnJumpAlignment) => {
     if (!scrollViewport) return
-    returningToBottom.current = false
+    cancelReturnToBottom()
     clearTimeout(navigationFallback.current)
     setFollowingLatest(false)
     const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
     navigationInProgress.current = behavior === 'smooth'
     scrollTo(behavior)
     if (alignment === 'end') requestAnimationFrame(() => scrollViewport.scrollTo({ behavior, top: scrollViewport.scrollHeight }))
-  }, [scrollViewport, setFollowingLatest])
+  }, [scrollViewport, setFollowingLatest, cancelReturnToBottom])
 
   return { setComposer, showScrollToBottom, scrollToBottom, followLatest, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot, scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector, rememberReadingPosition, registerTimelineScroll }
 }

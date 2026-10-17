@@ -10,11 +10,12 @@ vi.mock('react', async (original) => ({
   useEffect: (effect: () => void | (() => void)) => hooks.effects.push(effect),
   useLayoutEffect: (effect: () => void | (() => void)) => hooks.layouts.push(effect),
 }))
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
 function setup(latestSteeringId?: string) {
   const listeners = new Map<string, (event?: unknown) => void>()
-  const viewport = { scrollHeight: 1000, clientHeight: 500, scrollTop: 500, firstElementChild: null, addEventListener: (type: string, listener: (event?: unknown) => void) => listeners.set(type, listener), removeEventListener: (type: string) => listeners.delete(type) }
+  vi.stubGlobal('window', { matchMedia: () => ({ matches: false }) })
+  const viewport = { scrollTo: vi.fn((options: ScrollToOptions) => { if (options.behavior !== 'smooth') viewport.scrollTop = Math.max(0, Math.min(viewport.scrollHeight - viewport.clientHeight, options.top ?? viewport.scrollTop)) }), scrollHeight: 1000, clientHeight: 500, scrollTop: 500, firstElementChild: null, addEventListener: (type: string, listener: (event?: unknown) => void) => listeners.set(type, listener), removeEventListener: (type: string) => listeners.delete(type) }
   class TestElement {
     isConnected = true
     classList = { contains: (name: string) => name === 'execution-collapse' }
@@ -32,7 +33,7 @@ function setup(latestSteeringId?: string) {
   // oxlint-disable-next-line react-hooks/rules-of-hooks -- Exercise the hook with mocked React effects and scroll geometry.
   const hook = useTimelineViewport({ selectedSessionId: 'A', history: undefined, activeTurn: undefined, latestSteeringId, isActive: false, inspectorOpen: false, setInspectorOpen: vi.fn() })
   const cleanups = hooks.effects.map((effect) => effect())
-  return { hook, viewport, frames, panel, transition: (type: string) => listeners.get(type)?.({ type, target: panel, propertyName: 'grid-template-rows' }), click: () => listeners.get('click')?.({ target: panel }), resize: () => resize(), wheel: () => listeners.get('wheel')?.({ type: 'wheel' }), scroll: () => listeners.get('scroll')?.(), cleanup: () => { for (const cleanup of cleanups) cleanup?.() }, flush: () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback(0)) } }
+  return { hook, viewport, frames, panel, transition: (type: string) => listeners.get(type)?.({ type, target: panel, propertyName: 'grid-template-rows' }), click: () => listeners.get('click')?.({ target: panel }), resize: () => resize(), wheel: () => listeners.get('wheel')?.({ type: 'wheel' }), scroll: () => listeners.get('scroll')?.(), scrollEnd: () => listeners.get('scrollend')?.(), cleanup: () => { for (const cleanup of cleanups) cleanup?.() }, flush: () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback(0)) } }
 }
 
 it('defers resize-driven scroll writes and coalesces streaming follow requests', () => {
@@ -154,5 +155,85 @@ it('handles transition reversal and a panel unmount without leaving page follow 
     test.hook.followFinalAnswer()
     test.flush()
     expect(test.viewport.scrollTop).toBe(900)
+  } finally { test.cleanup() }
+})
+
+
+it('finishes a long return within 1500ms without restarting smooth scroll on resize', () => {
+  vi.useFakeTimers()
+  const test = setup()
+  try {
+    test.wheel()
+    test.viewport.scrollTop = 0
+    test.viewport.scrollHeight = 1_000_000
+    test.hook.scrollToBottom()
+    expect(test.viewport.scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 1_000_000, behavior: 'smooth' })
+    for (let step = 0; step < 3; step++) {
+      vi.advanceTimersByTime(400)
+      test.viewport.scrollHeight += 1000
+      test.resize()
+      test.scroll()
+      test.flush()
+    }
+    expect(test.viewport.scrollTo).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(300)
+    expect(test.viewport.scrollTo).toHaveBeenLastCalledWith({ top: 1_003_000, behavior: 'instant' })
+    expect(test.viewport.scrollTop).toBe(1_002_500)
+    test.viewport.scrollHeight += 1000
+    test.resize()
+    test.scroll()
+    test.flush()
+    expect(test.viewport.scrollTop).toBe(1_003_500)
+  } finally { test.cleanup() }
+})
+
+it('snaps to the actual bottom when smooth scroll ends before the deadline', () => {
+  vi.useFakeTimers()
+  const test = setup()
+  try {
+    test.hook.scrollToBottom()
+    test.viewport.scrollHeight = 1400
+    test.scrollEnd()
+    expect(test.viewport.scrollTop).toBe(900)
+    const calls = test.viewport.scrollTo.mock.calls.length
+    vi.advanceTimersByTime(2000)
+    expect(test.viewport.scrollTo).toHaveBeenCalledTimes(calls)
+  } finally { test.cleanup() }
+})
+
+it.each(['wheel', 'jump', 'cleanup', 'execution'])('cancels the return deadline on %s', (action) => {
+  vi.useFakeTimers()
+  const test = setup()
+  try {
+    const cleanupSession = hooks.layouts[0]!()
+    test.hook.scrollToBottom()
+    vi.advanceTimersByTime(500)
+    if (action === 'wheel') test.wheel()
+    if (action === 'jump') test.hook.jumpToTurn('old-turn', vi.fn(), 'start')
+    if (action === 'cleanup') cleanupSession?.()
+    if (action === 'execution') test.click()
+    const calls = test.viewport.scrollTo.mock.calls.length
+    vi.advanceTimersByTime(2000)
+    test.flush()
+    expect(test.viewport.scrollTo).toHaveBeenCalledTimes(calls)
+  } finally { test.cleanup() }
+})
+
+it('replaces the previous deadline on another click and skips animation for reduced motion', () => {
+  vi.useFakeTimers()
+  const test = setup()
+  try {
+    test.hook.scrollToBottom()
+    vi.advanceTimersByTime(1000)
+    test.hook.scrollToBottom()
+    vi.advanceTimersByTime(500)
+    expect(test.viewport.scrollTo.mock.calls.every(([options]) => options.behavior === 'smooth')).toBe(true)
+    vi.advanceTimersByTime(1000)
+    expect(test.viewport.scrollTo).toHaveBeenLastCalledWith({ top: 1000, behavior: 'instant' })
+    vi.stubGlobal('window', { matchMedia: () => ({ matches: true }) })
+    test.viewport.scrollTop = 100
+    test.hook.scrollToBottom()
+    expect(test.viewport.scrollTop).toBe(500)
+    expect(vi.getTimerCount()).toBe(0)
   } finally { test.cleanup() }
 })
