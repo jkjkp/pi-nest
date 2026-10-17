@@ -18,6 +18,8 @@ import {
 import { Hono } from 'hono'
 import { z } from 'zod'
 
+import { ProjectRegistry } from './project-registry.js'
+import { RuntimeSecurity } from './runtime-security.js'
 import { PiRuntimeRegistry } from './pi-runtime-registry.js'
 
 const sessionNameSchema = z
@@ -64,15 +66,16 @@ async function resolveSession(sessionId: string): Promise<SessionResolution> {
   }
 }
 
-async function resolveWorkspace(cwd: string) {
+async function resolveWorkspace(cwd: string, projects: ProjectRegistry) {
   try {
-    return (await listPiSessions()).some((session) => session.cwd === cwd)
+    if ((await listPiSessions()).some((session) => session.cwd === cwd)) return 'native'
+    return projects.has(cwd) ? 'registered' : false
   } catch {
     return undefined
   }
 }
 
-export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
+export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects = new ProjectRegistry(), security = new RuntimeSecurity()) {
   return new Hono()
     .get('/sessions', async (context) => {
       try {
@@ -89,9 +92,10 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
       const parsed = createSessionSchema.safeParse(await context.req.json().catch(() => undefined))
       if (!parsed.success) return context.json({ error: 'Invalid session creation request' }, 400)
 
-      const workspace = await resolveWorkspace(parsed.data.cwd)
+      const workspace = await resolveWorkspace(parsed.data.cwd, projects)
       if (workspace === undefined) return context.json({ error: 'Failed to resolve Pi workspace' }, 500)
       if (!workspace) return context.json({ error: 'Pi workspace not found' }, 404)
+      if (workspace === 'registered' && (!security.acceptsOrigin(context.req.header('origin')) || !security.acceptsToken(context.req.header('x-pi-nest-token')))) return context.json({ error: '项目访问被拒绝' }, 403)
 
       let created: ReturnType<typeof createPiSession> | undefined
       let busy = false
@@ -151,9 +155,10 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry()) {
     .post('/projects/reveal', async (context) => {
       const parsed = projectCwdSchema.safeParse(await context.req.json().catch(() => undefined))
       if (!parsed.success) return context.json({ error: 'Invalid Pi workspace request' }, 400)
-      const workspace = await resolveWorkspace(parsed.data.cwd)
+      const workspace = await resolveWorkspace(parsed.data.cwd, projects)
       if (workspace === undefined) return context.json({ error: 'Failed to resolve Pi workspace' }, 500)
       if (!workspace) return context.json({ error: 'Pi workspace not found' }, 404)
+      if (workspace === 'registered' && (!security.acceptsOrigin(context.req.header('origin')) || !security.acceptsToken(context.req.header('x-pi-nest-token')))) return context.json({ error: '项目访问被拒绝' }, 403)
       try {
         await revealPiWorkspace(parsed.data.cwd)
         return context.body(null, 204)
