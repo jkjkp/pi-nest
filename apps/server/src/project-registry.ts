@@ -7,7 +7,7 @@ import type { PiProject } from '@pi-nest/contracts'
 
 const projectsSchema = z.array(z.object({ cwd: z.string().min(1), createdAt: z.string().datetime() }).strict())
 
-function directory(cwd: string) {
+export function resolveProjectDirectory(cwd: string) {
   if (!isAbsolute(cwd)) throw new Error('请输入文件夹的绝对路径。')
   const canonical = realpathSync(cwd)
   if (!statSync(canonical).isDirectory()) throw new Error('该路径不是文件夹。')
@@ -27,11 +27,11 @@ export class ProjectRegistry {
   }
 
   has(cwd: string) {
-    return this.list().some((project) => project.cwd === cwd) && directory(cwd) === cwd
+    return this.list().some((project) => project.cwd === cwd) && resolveProjectDirectory(cwd) === cwd
   }
 
   open(cwd: string): PiProject {
-    const canonical = directory(cwd)
+    const canonical = resolveProjectDirectory(cwd)
     const projects = this.list()
     const existing = projects.find((project) => project.cwd === canonical)
     if (existing) return existing
@@ -48,7 +48,7 @@ export class ProjectRegistry {
   create(parent: string, name: string): PiProject {
     if (!name.trim() || name !== name.trim() || name === '.' || name === '..' || /[\\/\0]/.test(name)) throw new Error('文件夹名称无效。')
     this.list()
-    const path = join(directory(parent), name)
+    const path = join(resolveProjectDirectory(parent), name)
     mkdirSync(path)
     try { return this.open(path) }
     catch (cause) { throw new Error('文件夹已创建，但项目登记失败。请修复登记文件后使用“打开项目”添加。', { cause }) }

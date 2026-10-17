@@ -1,3 +1,4 @@
+import { selectProjectFolder } from './project-folder-picker.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,6 +7,8 @@ import { ProjectRegistry } from './project-registry.js'
 import { createApp } from './app.js'
 import { RuntimeSecurity } from './runtime-security.js'
 import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
+
+vi.mock('./project-folder-picker.js', () => ({ selectProjectFolder: vi.fn() }))
 
 const adapter = vi.hoisted(() => ({ listPiSessions: vi.fn(), createPiSession: vi.fn() }))
 vi.mock('@pi-nest/pi-adapter', async (original) => ({ ...await original<typeof import('@pi-nest/pi-adapter')>(), ...adapter }))
@@ -77,4 +80,23 @@ it('secures folder operations and allows the first Pi prompt only in an explicit
   expect(runtime.beginPrompt).toHaveBeenCalledWith(expect.objectContaining({ cwd: project.cwd }), 'first question')
   const unregistered = JSON.stringify({ cwd: directory, prompt: 'question' })
   expect((await app.request('/api/sessions', { method: 'POST', headers, body: unregistered })).status).toBe(404)
+})
+
+
+it('requires authorization for the native picker and does not register selected folders', async () => {
+  const security = new RuntimeSecurity('http://localhost:31415')
+  const app = createApp(undefined, security, projects)
+  const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }
+  vi.mocked(selectProjectFolder).mockReset().mockResolvedValue(directory)
+  expect((await app.request('/api/projects/select-folder', { method: 'POST', body: '{}' })).status).toBe(403)
+  expect((await app.request('/api/projects/select-folder', { method: 'POST', headers: { ...headers, origin: 'http://evil.example' }, body: '{}' })).status).toBe(403)
+  expect(selectProjectFolder).not.toHaveBeenCalled()
+  expect((await app.request('/api/projects/select-folder', { method: 'POST', headers, body: '{"extra":true}' })).status).toBe(400)
+  const selected = await app.request('/api/projects/select-folder', { method: 'POST', headers, body: JSON.stringify({ cwd: directory }) })
+  expect(await selected.json()).toEqual({ cwd: directory })
+  expect(selectProjectFolder).toHaveBeenCalledExactlyOnceWith(directory)
+  expect(projects.list()).toEqual([])
+  vi.mocked(selectProjectFolder).mockResolvedValue(null)
+  const cancelled = await app.request('/api/projects/select-folder', { method: 'POST', headers, body: '{}' })
+  expect(await cancelled.json()).toEqual({ cwd: null })
 })

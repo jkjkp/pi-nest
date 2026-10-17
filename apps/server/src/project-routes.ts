@@ -1,3 +1,4 @@
+import { selectProjectFolder } from './project-folder-picker.js'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { z } from 'zod'
@@ -13,6 +14,16 @@ const requestSchema = z.discriminatedUnion('kind', [
 
 export function createProjectRoutes(projects: ProjectRegistry, security: RuntimeSecurity) {
   return new Hono().use('/', configurationSecurity(security)).use('/', bodyLimit({ maxSize: 16_384 }))
+    .use('/select-folder', configurationSecurity(security)).use('/select-folder', bodyLimit({ maxSize: 16_384 }))
+    .post('/select-folder', async (context) => {
+      const parsed = z.object({ cwd: pathSchema.optional() }).strict().safeParse(await context.req.json().catch(() => undefined))
+      if (!parsed.success) return context.json({ error: '文件夹选择请求无效。' }, 400)
+      try { return context.json({ cwd: await selectProjectFolder(parsed.data.cwd) }) }
+      catch (cause) {
+        console.error('Failed to select project folder', { cause })
+        return context.json({ error: cause instanceof Error && !('code' in cause) ? cause.message : '无法打开系统文件夹选择器，请重试。' }, 503)
+      }
+    })
     .get('/', (context) => {
       try { return context.json({ projects: projects.list() }) }
       catch { return context.json({ error: '无法读取已添加项目，请检查项目登记文件。' }, 500) }
