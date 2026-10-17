@@ -1,3 +1,5 @@
+export type PiProject = { cwd: string; createdAt: string }
+
 export type PiRuntimeEvent = {
   event: Record<string, unknown>
   observedAt: string
