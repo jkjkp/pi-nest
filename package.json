@@ -7,12 +7,14 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter './apps/*' dev",
+    "dev": "pnpm start",
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "pnpm -r --if-present lint",
     "test": "pnpm -r --if-present test && node --test scripts/web-release.test.mjs",
-    "start:local": "pnpm build && node scripts/start-local.mjs"
+    "start:local": "pnpm start",
+    "dev:hmr": "pnpm --parallel --filter './apps/*' dev",
+    "start": "pnpm build && node scripts/start-local.mjs"
   },
   "devDependencies": {
     "vitest": "5.0.1"

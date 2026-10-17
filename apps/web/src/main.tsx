@@ -20,12 +20,12 @@ function bootstrap() {
   return { queryClient, runtime, sessionRunController, root: createRoot(document.getElementById('root')!) }
 }
 
-const previous = import.meta.hot?.data.bootstrap as ReturnType<typeof bootstrap> | undefined
-const { queryClient, runtime, sessionRunController, root } = previous ?? bootstrap()
-if (import.meta.hot) import.meta.hot.data.bootstrap = { queryClient, runtime, sessionRunController, root }
+const previous = import.meta.hot?.data.bootstrap as (ReturnType<typeof bootstrap> & { router?: ReturnType<typeof createBrowserRouter> }) | undefined
+const application = previous ?? bootstrap()
+const { queryClient, runtime, sessionRunController, root } = application
+const router = previous?.router ?? createBrowserRouter([{ path: '*', element: <App runtime={runtime} sessionRuns={sessionRunController} />, errorElement: <RouteErrorPage /> }])
+if (import.meta.hot) import.meta.hot.data.bootstrap = { ...application, router }
 
-const router = createBrowserRouter([{ path: '*', element: <App runtime={runtime} sessionRuns={sessionRunController} />, errorElement: <RouteErrorPage /> }])
-if (import.meta.hot) import.meta.hot.dispose(() => router.dispose())
 if (import.meta.hot) {
   import.meta.hot.accept()
   import.meta.hot.accept(['./runtime-websocket-client.js', './session-run-controller.js'], () => import.meta.hot?.invalidate())

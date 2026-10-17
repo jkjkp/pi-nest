@@ -9,7 +9,7 @@ const port = 31415
 const websocket = new WebSocketServer({ noServer: true })
 
 const server = serve({ fetch: app.fetch, hostname, port, websocket: { server: websocket } }, ({ address, port: boundPort }) => {
-  console.log(`Pi Nest server listening on http://${address}:${boundPort}`)
+  console.log(`Pi Nest server listening on ${process.env.PI_NEST_WEB_ORIGIN ?? `http://${address}:${boundPort}`}`)
 })
 
 function shutdown() {
