@@ -35,7 +35,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const session = useWorkspaceSession(sessionRuns)
   const navigate = useNavigate()
   const {
-    selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
+    selectedSessionId, selectedSession, sessionResolution, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
@@ -43,6 +43,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     startDraft, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
+  const displaySession = selectedSession ?? history?.session
+  const sessionTitle = displaySession ? sessionDisplayName(displaySession) : selectedSessionId ? sessionResolution === 'missing' ? '会话暂不可用' : '正在恢复会话…' : draftProject ? `新对话 · ${draftProject.name}` : '选择一个会话'
   const runtimeStatistics = useWorkspaceStore((state) => state.runtimeStatistics[selectedSessionId])
   const runtimeLoading = runtimeStates[selectedSessionId]?.lifecycle === 'loading'
   const watchReady = useWorkspaceStore((state) => state.watchStates[selectedSessionId] === 'ready')
@@ -161,7 +163,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </SheetContent>
           </Sheet>
           <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">PN</span>
-          <h1 className="truncate text-sm font-semibold tracking-tight" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : 'Pi Nest'}</h1>
+          <h1 className="truncate text-sm font-semibold tracking-tight" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
         </div>
         <div className="ml-auto flex items-center gap-1">
           <Sheet open={inspectorSheetOpen} onOpenChange={setInspectorSheetOpen}>
@@ -201,20 +203,21 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-background/95 py-2 pr-16 pl-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {(selectedSession || draftProject) && <Folder aria-hidden="true" className="size-[18px] shrink-0 text-muted-foreground" />}
-              <h1 className="min-w-0 truncate text-base font-semibold" title={selectedSession ? sessionDisplayName(selectedSession) : undefined}>{selectedSession ? sessionDisplayName(selectedSession) : draftProject ? `新对话 · ${draftProject.name}` : '选择一个会话'}</h1>
+              <h1 className="min-w-0 truncate text-base font-semibold" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
               {selectedSession && <span className="inline-flex size-4 shrink-0" role={runtimeLoading ? 'status' : undefined} aria-label={runtimeLoading ? '正在加载 Pi 运行时' : undefined}>{runtimeLoading && <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />}</span>}
             </div>
           </header>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="timeline-scroll h-full">
               <div className="w-full space-y-4 px-4 pt-6 pb-[calc(var(--composer-height)+3rem)] sm:px-6">
+                {(sessionResolution === 'error' || sessionResolution === 'missing') && <div className="conversation-stage"><div className="conversation-stage-content flex items-center gap-2 text-sm text-muted-foreground" role="status"><span>{sessionResolution === 'error' ? '会话列表读取失败，已保留当前会话。' : '当前会话未出现在列表中，已保留现有内容。'}</span><Button type="button" size="sm" variant="ghost" onClick={() => void sessionsQuery.refetch()}>重试会话列表</Button></div></div>}
                 {isDraft ? (
                   <div className="conversation-stage py-16">
                     <section className="conversation-stage-content grid min-h-56 place-items-center rounded-2xl border border-dashed bg-muted/20 p-8 text-center">
                       <div className="space-y-2"><h2 className="text-lg font-semibold">在 {draftProject?.name} 开始新对话</h2><p className="text-sm text-muted-foreground">发送第一条消息后才会创建 Pi 会话。</p></div>
                     </section>
                   </div>
-                ) : selectedSession ? <RenderErrorBoundary key={selectedSessionId} scope="timeline" sessionId={selectedSessionId}><SessionTimeline
+                ) : selectedSessionId ? <RenderErrorBoundary key={selectedSessionId} scope="timeline" sessionId={selectedSessionId}><SessionTimeline
                   onSelectModel={() => { setModelSelectorOpen(true); void openModels() }}
                   error={historyError}
                   hasEarlier={historyQuery.hasPreviousPage}

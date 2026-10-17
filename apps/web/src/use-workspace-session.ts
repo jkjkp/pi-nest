@@ -78,6 +78,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
   const sessions = sessionsQuery.data ?? emptySessions
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
+  const sessionResolution = !selectedSessionId ? 'none' : selectedSession ? 'ready' : sessionsQuery.isPending ? 'restoring' : sessionsQuery.isError ? 'error' : 'missing'
   const currentRun = selectedSessionId ? runs[selectedSessionId] : undefined
   const activeTurn = currentRun && activeRuntimeTurn(currentRun.turns)
   const currentModel = runtimeDetails[selectedSessionId]?.model
@@ -99,7 +100,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const planPolicy = planModePolicy(extensionWidgets[selectedSessionId])
   const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
   const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
-  const { history, historyQuery, historyError, historyTurnCount, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump, readTurnPrompt, jumpToUnloadedTurn, loadEarlier, retryHistory } = useSessionHistory(selectedSessionId, Boolean(selectedSession))
+  const { history, historyQuery, historyError, historyTurnCount, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump, readTurnPrompt, jumpToUnloadedTurn, loadEarlier, retryHistory } = useSessionHistory(selectedSessionId, Boolean(selectedSessionId))
   const completedRunId = useWorkspaceStore((state) => state.sessionNotifications[selectedSessionId]?.completedRunId)
   const planTurnId = timelineItems(history?.entries, currentRun?.turns ?? [], currentRun?.systemEvents ?? []).findLast((item) => item.plan)?.id
 
@@ -126,12 +127,12 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const prompt = isDraft ? draftPrompt : drafts[selectedSessionId] ?? ''
 
   useEffect(() => {
-    if (isDraft || sessions.length === 0) return
+    if (selectedSessionId || isDraft || !sessionsQuery.isSuccess || sessions.length === 0) return
     const visibleSessions = projects.flatMap((project) => project.sessions)
     if (visibleSessions.some((session) => session.id === selectedSessionId)) return
     const fallback = visibleSessions[0]
     setSearchParams(fallback ? { session: fallback.id } : {}, { replace: true })
-  }, [isDraft, projects, selectedSessionId, sessions.length, setSearchParams])
+  }, [isDraft, projects, selectedSessionId, sessions.length, sessionsQuery.isSuccess, setSearchParams])
 
   useEffect(() => {
     // An unloaded list must not erase the persisted drag order on startup.
@@ -141,9 +142,9 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }, [navigationOrder, setNavigationOrder, sourceProjects, sessionsQuery.isSuccess])
 
   useEffect(() => {
-    if (!selectedSession) return
+    if (!selectedSessionId) return
     sessionRuns.openSession(selectedSessionId)
-  }, [selectedSession, selectedSessionId, sessionRuns])
+  }, [selectedSessionId, sessionRuns])
 
   useEffect(() => {
     if (!selectedSession || watchStates[selectedSessionId] !== 'ready' || modelOperation.current?.sessionId === selectedSessionId) return
@@ -378,6 +379,11 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     try {
       await deleteSession(sessionId)
       useWorkspaceStore.getState().removeSessionNotification(sessionId)
+      queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => current?.filter((session) => session.id !== sessionId))
+      if (selectedSessionIdRef.current === sessionId) {
+        const next = projects.flatMap((project) => project.sessions).find((session) => session.id !== sessionId)
+        setSearchParams(next ? { session: next.id } : {})
+      }
       queryClient.removeQueries({ queryKey: sessionHistoryQueryKey(sessionId) })
       queryClient.removeQueries({ queryKey: ['session-history-page', sessionId] })
       await sessionsQuery.refetch()
@@ -446,7 +452,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   return {
-    selectedSessionId, selectedSession, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
+    selectedSessionId, selectedSession, sessionResolution, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,
