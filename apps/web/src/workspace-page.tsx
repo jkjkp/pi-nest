@@ -62,6 +62,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const {
     setComposer, showScrollToBottom, scrollToBottom, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
     scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector,
+    rememberReadingPosition, registerTimelineScroll,
   } = useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId: currentRun?.turns.findLast((turn) => turn.steering)?.id, isActive, inspectorOpen, setInspectorOpen })
   const promptTextareaRef = useComposerTextarea(prompt)
   const promptHistory = useComposerHistory(
@@ -83,7 +84,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   })
 
   function selectSession(sessionId: string) {
-    setFollowingLatest(true)
+    rememberReadingPosition()
     session.selectSession(sessionId)
   }
 
@@ -238,6 +239,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   pendingInputs={currentRun?.pendingInputs}
                   pendingJumpTurnId={pendingJump?.sessionId === selectedSessionId ? pendingJump.turnId : undefined}
                   scrollViewport={scrollViewport}
+                  registerTimelineScroll={registerTimelineScroll}
                   systemEvents={currentRun?.systemEvents}
                   runStatus={status}
                   runMessage={currentRun?.waitingMessage}

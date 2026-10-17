@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 
 import { AssistantMarkdown } from './assistant-markdown.js'
 import { historyPageCursorForTurn, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
-import { prependedScrollTop, type TurnJumpAlignment } from './timeline-pagination.js'
+import { prependedScrollTop, type TimelineScrollController, type TurnJumpAlignment } from './timeline-pagination.js'
 import { timelineNavigationTurns } from './timeline-navigation.js'
 import { timelineItems, type RuntimeTurn, type TimelineItem } from './timeline-model.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
@@ -19,7 +19,7 @@ import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 import type { PendingInput, PromptStatus } from './session-run-model.js'
 
-export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onSelectModel, onRetrySteering, onJumpToTurn, onJumpToUnloadedTurn, onReadTurnPrompt, onLoadEarlier, onPendingJumpHandled, onRetry, onRetryNavigation, navigationNotice, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, scrollViewport, systemEvents = [], turnIndex, turns = [] }: {
+export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onSelectModel, onRetrySteering, onJumpToTurn, onJumpToUnloadedTurn, onReadTurnPrompt, onLoadEarlier, onPendingJumpHandled, onRetry, onRetryNavigation, navigationNotice, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, scrollViewport, registerTimelineScroll, systemEvents = [], turnIndex, turns = [] }: {
   error: boolean
   hasEarlier?: boolean
   history: PiSessionHistoryResponse | undefined
@@ -44,6 +44,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   runMessage?: string
   runStatus?: PromptStatus
   scrollViewport?: HTMLElement | null
+  registerTimelineScroll?: (controller: TimelineScrollController | null) => void
   systemEvents?: PiRuntimeEvent[]
   turnIndex?: PiSessionTurnIndex
   turns?: RuntimeTurn[]
@@ -70,6 +71,34 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   const virtualItems = virtualizer.getVirtualItems()
   const activeVirtualItem = virtualizer.getVirtualItemForOffset((virtualizer.scrollOffset ?? 0) + 48)
   const activeTurnId = items[Math.max(0, (activeVirtualItem?.index ?? 1) - 1)]?.id
+  useLayoutEffect(() => {
+    if (!registerTimelineScroll || !scrollViewport || !history) return
+    registerTimelineScroll({
+      sessionId: history.session.id,
+      capture: () => {
+        const top = scrollViewport.getBoundingClientRect().top
+        const turn = [...scrollViewport.querySelectorAll<HTMLElement>('[data-turn-id]')].find((node) => node.getBoundingClientRect().bottom > top + 48)
+        return { turnId: turn?.dataset.turnId, offset: turn ? turn.getBoundingClientRect().top - top : 0, scrollTop: scrollViewport.scrollTop }
+      },
+      restore: (position) => {
+        if (!position.turnId) {
+          scrollViewport.scrollTo({ top: position.scrollTop, behavior: 'instant' })
+          return 'restored'
+        }
+        const index = items.findIndex((item) => item.id === position.turnId)
+        if (index < 0) return 'missing'
+        const turn = [...scrollViewport.querySelectorAll<HTMLElement>('[data-turn-id]')].find((node) => node.dataset.turnId === position.turnId)
+        if (!turn) {
+          virtualizer.scrollToIndex(index + 1, { align: 'start', behavior: 'auto' })
+          return 'pending'
+        }
+        const delta = turn.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top - position.offset
+        if (Math.abs(delta) > 1) scrollViewport.scrollTo({ top: scrollViewport.scrollTop + delta, behavior: 'instant' })
+        return 'restored'
+      },
+    })
+    return () => registerTimelineScroll(null)
+  }, [history, items, registerTimelineScroll, scrollViewport, virtualizer])
   useEffect(() => {
     setCanLoadEarlier(false)
     historyLoadRequested.current = false
