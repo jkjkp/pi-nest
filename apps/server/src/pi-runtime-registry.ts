@@ -3,6 +3,7 @@ export type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntime
 
 import { PiRpcCommandError } from '@pi-nest/pi-adapter'
 
+import { SessionHistorySnapshots } from './session-history-snapshots.js'
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -72,6 +73,7 @@ export type PiRuntimeRegistryOptions = {
 
 /** Single-process ownership and lifecycle manager for native Pi sessions. */
 export class PiRuntimeRegistry {
+  readonly history = new SessionHistorySnapshots()
   private readonly createHost: HostFactory
   private admission = Promise.resolve()
   private readonly entries = new Map<string, RegistryEntry>()
@@ -326,6 +328,7 @@ export class PiRuntimeRegistry {
         this.transition(session.id, 'loading')
         this.transition(session.id, 'active')
         this.touch(session.id)
+        this.history.pin(session, runId)
         const prompt = entry.host.beginPrompt(message)
         void prompt.accepted.then(resolveAccepted, rejectAccepted)
         return prompt.settled
@@ -342,6 +345,7 @@ export class PiRuntimeRegistry {
       })
       .finally(() => {
         if (state.activeTurn === activeTurn) {
+          this.history.unpin(session)
           state.activeTurn = undefined
           this.locks.delete(session.id)
           this.scheduleUnload(session.id)
@@ -400,6 +404,7 @@ export class PiRuntimeRegistry {
     this.streams.clear()
     this.expiredStreams.clear()
     this.states.clear()
+    this.history.clear()
     this.extensionState.close()
     await rm(await this.eventBufferDirectory, { force: true, recursive: true })
   }
@@ -474,6 +479,7 @@ export class PiRuntimeRegistry {
       await entry.host.close()
       this.stateFor(sessionId).inputQueue = { steering: [], followUp: [] }
     }
+    if (entry && (reason === 'failed' || reason === 'deleted')) this.history.unpin(entry.session)
     if (reason === 'failed' || reason === 'deleted') await this.extensionState.clearProjection(sessionId)
     if (reason !== 'shutdown') this.transition(sessionId, 'notLoaded')
     if (reason !== 'shutdown' && !options.preserveUnloadDeadline) this.scheduleUnload(sessionId)
@@ -619,7 +625,9 @@ export class PiRuntimeRegistry {
     const isUserMessage = event.event.type === 'message' && message && typeof message === 'object' && !Array.isArray(message) && (message as Record<string, unknown>).role === 'user'
     if (event.event.type !== 'agent_start' && !isUserMessage) return undefined
     this.cancelUnload(sessionId)
+    const session = this.entries.get(sessionId)?.session
     state.activeTurn = { native: true, runId: randomUUID(), startedAt: event.observedAt }
+    if (session) this.history.pin(session, state.activeTurn.runId, Boolean(isUserMessage))
     this.locks.set(sessionId, 'prompt')
     this.transition(sessionId, 'active')
     return state.activeTurn.runId
@@ -630,6 +638,11 @@ export class PiRuntimeRegistry {
     if (state.activeTurn !== activeTurn) return
     state.completedRun = { runId: activeTurn.runId, stopReason }
     state.activeTurn = undefined
+    const session = this.entries.get(sessionId)?.session
+    if (session) {
+      try { this.history.unpin(session, activeTurn.runId) }
+      catch (cause) { console.error('Failed to publish history snapshot', { sessionId, name: cause instanceof Error ? cause.name : 'Error' }) }
+    }
     this.locks.delete(sessionId)
     this.transition(sessionId, 'idle', undefined, undefined, false, notifyCompletion ? state.completedRun : undefined)
     this.scheduleUnload(sessionId)

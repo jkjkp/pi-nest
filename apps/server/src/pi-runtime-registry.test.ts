@@ -7,6 +7,8 @@ import { PiRpcCommandError } from '@pi-nest/pi-adapter'
 import type { PiRuntimeEvent, PiRuntimeHost } from './pi-runtime-host.js'
 import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
 
+vi.mock('@pi-nest/pi-adapter', async (original) => ({ ...await original<typeof import('@pi-nest/pi-adapter')>(), capturePiSessionHistory: vi.fn(() => ({ entries: [], revision: 'a'.repeat(64), bytes: 1 })) }))
+
 const session = { cwd: '/fixture', id: 'session-1', sessionFile: '/fixture/session.jsonl' }
 const sessionFor = (id: string) => ({ ...session, id })
 

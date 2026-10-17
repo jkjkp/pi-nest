@@ -36,6 +36,10 @@ const nativeSession = {
 }
 function runtimeMock() {
   return {
+    history: {
+      history: vi.fn((session, options) => adapter.readPiSessionHistory({ expectedCwd: session.cwd, expectedSessionId: session.id, sessionFile: session.sessionFile, ...options })),
+      index: vi.fn((session, revision) => adapter.readPiSessionTurnIndex({ expectedCwd: session.cwd, expectedSessionId: session.id, sessionFile: session.sessionFile, ...(revision ? { revision } : {}) })),
+    },
     abort: vi.fn().mockResolvedValue(false),
     beginPrompt: vi.fn(),
     beginMutation: vi.fn().mockResolvedValue(() => undefined),
@@ -86,7 +90,7 @@ describe('Pi Nest API', () => {
     await expect(response.json()).resolves.toEqual({ entries: [], hasEarlier: false, revision: 'a'.repeat(64), session: { cwd: '/working', id: 'session-1', updatedAt: nativeSession.updatedAt } })
     expect(readPiSessionHistory).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', sessionFile: '/pi/session.jsonl' })
     runtime.isPromptStreaming.mockReturnValue(true)
-    expect((await app().request('/api/sessions/session-1/history')).status).toBe(409)
+    expect((await app().request('/api/sessions/session-1/history')).status).toBe(200)
   })
 
   it('passes the bounded stable cursor through to the native Turn page reader', async () => {
@@ -120,14 +124,13 @@ describe('Pi Nest API', () => {
     expect(readPiSessionTurnIndex).toHaveBeenLastCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', revision, sessionFile: '/pi/session.jsonl' })
   })
 
-  it('distinguishes a running session from a history revision conflict', async () => {
+  it('allows running-session snapshots and distinguishes actual revision conflicts', async () => {
     runtime.isPromptStreaming.mockReturnValue(true)
     for (const route of ['history', 'turn-index']) {
       const response = await app().request(`/api/sessions/session-1/${route}`)
-      expect(response.status).toBe(409)
-      await expect(response.json()).resolves.toMatchObject({ code: 'SESSION_RUNNING' })
+      expect(response.status).toBe(200)
     }
-    expect(readPiSessionTurnIndex).not.toHaveBeenCalled()
+    expect(readPiSessionTurnIndex).toHaveBeenCalled()
     runtime.isPromptStreaming.mockReturnValue(false)
     readPiSessionTurnIndex.mockImplementation(() => { throw Object.assign(new adapter.PiSessionHistoryRevisionError(), { name: 'PiSessionHistoryRevisionError' }) })
     readPiSessionHistory.mockImplementation(() => { throw Object.assign(new adapter.PiSessionHistoryRevisionError(), { name: 'PiSessionHistoryRevisionError' }) })

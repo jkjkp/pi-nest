@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
 import { afterEach, expect, it, vi } from 'vitest'
 import { listPiSessions, readPiSessionHistory, readPiSessionTurnIndex, renamePiSession } from '@pi-nest/pi-adapter'
+import { SessionHistorySnapshots } from './session-history-snapshots.js'
 import { createSessionRoutes } from './session-routes.js'
 import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
 
@@ -62,4 +63,32 @@ it('clones the native snapshot after runtime shutdown writes, and keeps fork rev
   expect(readFileSync(sessionFile)).toEqual(sourceBytes)
   expect(readdirSync(directory)).toHaveLength(2)
   expect(finish).toHaveBeenCalledTimes(2)
+})
+
+it('serves pinned native history, pagination and index over HTTP during generation', async () => {
+  directory = mkdtempSync(join(tmpdir(), 'pi-nest-live-history-route-'))
+  const timestamp = '2026-10-17T00:00:00Z'
+  const session = { id: 'source', cwd: directory, sessionFile: join(directory, 'native.jsonl'), createdAt: timestamp, updatedAt: timestamp, firstMessage: 'first', name: undefined }
+  const lines = [{ type: 'session', version: 3, id: session.id, cwd: directory, timestamp }, ...['first', 'second'].map((id, index) => ({ type: 'message', id, parentId: index ? 'first' : null, timestamp, message: { role: 'user', content: id, timestamp: Date.parse(timestamp) } }))]
+  writeFileSync(session.sessionFile, lines.map((line) => JSON.stringify(line)).join('\n') + '\n')
+  vi.mocked(listPiSessions).mockResolvedValue([session])
+  const history = new SessionHistorySnapshots()
+  history.pin(session, 'live')
+  const registry = { history, isPromptStreaming: () => true }
+  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry))
+  appendFileSync(session.sessionFile, JSON.stringify({ type: 'message', id: 'live-user', parentId: 'second', timestamp, message: { role: 'user', content: 'third', timestamp: Date.parse(timestamp) } }) + '\n')
+  const response = await app.request('/api/sessions/source/history?limit=1')
+  expect(response.status).toBe(200)
+  const latest = await response.json()
+  expect(latest.entries.map((entry: { id: string }) => entry.id)).toEqual(['second'])
+  const earlier = await app.request(`/api/sessions/source/history?limit=1&revision=${latest.revision}&before=${latest.beforeCursor}`)
+  expect(earlier.status).toBe(200)
+  expect((await earlier.json()).entries[0].id).toBe('first')
+  const index = await app.request(`/api/sessions/source/turn-index?revision=${latest.revision}`)
+  expect(index.status).toBe(200)
+  expect((await index.json()).entries).toHaveLength(2)
+  history.unpin(session, 'live')
+  const completed = await (await app.request('/api/sessions/source/history?limit=1')).json()
+  expect(completed.entries[0]).toMatchObject({ id: 'live-user', runId: 'live', runIndex: 0 })
+  expect(completed.session.sessionFile).toBeUndefined()
 })
