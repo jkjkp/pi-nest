@@ -102,7 +102,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
   const setRailOverlayRoot = useCallback((node: HTMLDivElement | null) => setRailOverlay(node), [setRailOverlay])
 
   const scrollToFinalAnswer = useCallback((turnId: string) => {
-    if (!followLatestRef.current || !scrollViewport) return
+    if (!selectedSessionId || !followLatestRef.current || !scrollViewport) return
     pendingFinalAnswer.current = turnId
     scheduleScroll(() => {
       if (!followLatestRef.current || executionIsTransitioning()) return
@@ -112,16 +112,16 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       const offset = answer.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top
       scrollViewport.scrollTo({ top: Math.max(0, scrollViewport.scrollTop + offset - 48) })
     })
-  }, [scrollViewport, scheduleScroll, executionIsTransitioning])
+  }, [selectedSessionId, scrollViewport, scheduleScroll, executionIsTransitioning])
 
   const followFinalAnswer = useCallback(() => {
-    if (!followLatestRef.current || !scrollViewport) return
+    if (!selectedSessionId || !followLatestRef.current || !scrollViewport) return
     scheduleScroll(() => {
       if (!followLatestRef.current || navigationInProgress.current || executionIsTransitioning()) return
       const bottom = Math.max(0, scrollViewport.scrollHeight - scrollViewport.clientHeight)
       if (Math.abs(scrollViewport.scrollTop - bottom) > 1) scrollViewport.scrollTop = bottom
     })
-  }, [scrollViewport, scheduleScroll, executionIsTransitioning])
+  }, [selectedSessionId, scrollViewport, scheduleScroll, executionIsTransitioning])
 
   const finishReturnToBottom = useCallback(() => {
     if (!scrollViewport || !returningToBottom.current) return
@@ -162,7 +162,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
   }, [restoreReadingPosition])
 
   useEffect(() => {
-    if (!scrollViewport) return
+    if (!selectedSessionId || !scrollViewport) return
     let previousScrollHeight = scrollViewport.scrollHeight
     let previousViewportHeight = scrollViewport.clientHeight
     const updateFollowLatest = () => {
@@ -265,7 +265,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       scrollViewport.removeEventListener('transitionend', handleExecutionTransition)
       scrollViewport.removeEventListener('transitioncancel', handleExecutionTransition)
     }
-  }, [scrollViewport, setFollowingLatest, followFinalAnswer, scrollToFinalAnswer, scheduleScroll, executionIsTransitioning, rememberReadingPosition, restoreReadingPosition, cancelReturnToBottom, finishReturnToBottom])
+  }, [selectedSessionId, scrollViewport, setFollowingLatest, followFinalAnswer, scrollToFinalAnswer, scheduleScroll, executionIsTransitioning, rememberReadingPosition, restoreReadingPosition, cancelReturnToBottom, finishReturnToBottom])
 
   useLayoutEffect(() => {
     const selectedSessionChanged = previouslyScrolledSessionId.current !== selectedSessionId
@@ -284,8 +284,9 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       showScrollToBottomRef.current = show
       setShowScrollToBottom(show)
       // Position before scroll events can mistake the new session's height for a user scroll.
-      if (!restoringPosition.current) scrollViewport?.scrollTo({ top: scrollViewport.scrollHeight })
+      if (!restoringPosition.current) scrollViewport?.scrollTo({ top: selectedSessionId ? scrollViewport.scrollHeight : 0, behavior: 'instant' })
     }
+    if (!selectedSessionId) return
     if (restoringPosition.current) { restoreReadingPosition(); return }
     if (navigationInProgress.current || (!followLatest && !selectedSessionChanged) || (initialPositioning.current && !history)) return
     scheduleScroll(() => {

@@ -260,3 +260,12 @@ it('hides only the Plan widget and moves its tool policy to status details', () 
   expect(extensionWidgetText({ 'plan-mode-plan': widgets['plan-mode-plan'] })).toBe('')
   expect(planModePolicy({ 'plan-mode-plan': ['Proposed plan ready'] })).toBeUndefined()
 })
+
+
+it('merges registered empty projects with native session directories without duplicates', () => {
+  const registered = [{ cwd: '/empty', createdAt: '2026-10-17T00:00:00Z' }, { cwd: '/existing', createdAt: '2026-10-16T00:00:00Z' }]
+  const groups = groupSessionsByProject([{ id: 'one', cwd: '/existing' }], {}, registered)
+  expect(groups).toHaveLength(2)
+  expect(groups.find((project) => project.cwd === '/empty')).toMatchObject({ name: 'empty', sessions: [] })
+  expect(groups.find((project) => project.cwd === '/existing')?.sessions).toEqual([{ id: 'one', cwd: '/existing' }])
+})

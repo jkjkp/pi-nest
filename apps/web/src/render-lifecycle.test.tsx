@@ -88,6 +88,7 @@ it('keeps execution hooks stable through waiting, thinking, tool use, completion
 it('updates the mounted workspace across streaming phases and session switches without hook errors', async () => {
   const log = vi.spyOn(console, 'error')
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
+  client.setQueryData(['projects'], [])
   const timestamp = new Date().toISOString()
   const sessions = [{ id: 'one', cwd: '/fixture', name: 'One' }, { id: 'two', cwd: '/fixture', name: 'Two' }]
   client.setQueryData(['sessions'], sessions)

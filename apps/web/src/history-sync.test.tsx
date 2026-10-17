@@ -14,6 +14,7 @@ import { timelineItems } from './timeline-model.js'
 
 vi.mock('./workspace-api.js', async (original) => ({
   ...await original<typeof import('./workspace-api.js')>(),
+  fetchProjects: vi.fn(async () => []),
   fetchSessionHistory: vi.fn(), fetchSessionTurnIndex: vi.fn(),
 }))
 

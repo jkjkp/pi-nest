@@ -1,4 +1,4 @@
-import type { PiSessionBranchRequest, PiSessionBranchResponse, PiRuntimeSettings, PiSettingsSnapshot, PiSessionsResponse } from '@pi-nest/contracts'
+import type { PiProject, PiSessionBranchRequest, PiSessionBranchResponse, PiRuntimeSettings, PiSettingsSnapshot, PiSessionsResponse } from '@pi-nest/contracts'
 import { historyPageSize, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
 import type { PiSessionSummary } from './workspace.js'
 
@@ -46,24 +46,13 @@ export async function fetchSessions() {
 }
 
 export async function createSession(cwd: string, prompt: string) {
-  const response = await fetch('/api/sessions', {
-    body: JSON.stringify({ cwd, prompt }),
-    headers: { 'content-type': 'application/json' },
-    method: 'POST',
-  })
-  if (!response.ok) throw new Error('Failed to create Pi session')
-  const body = await response.json() as { session?: PiSessionSummary }
+  const body = await configurationRequest<{ session?: PiSessionSummary }>('/api/sessions', { body: JSON.stringify({ cwd, prompt }), method: 'POST' })
   if (!body.session?.id || !body.session.cwd) throw new Error('Invalid Pi session creation response')
   return body.session
 }
 
 export async function revealProjectInFinder(cwd: string) {
-  const response = await fetch('/api/projects/reveal', {
-    body: JSON.stringify({ cwd }),
-    headers: { 'content-type': 'application/json' },
-    method: 'POST',
-  })
-  if (!response.ok) throw new Error('Failed to reveal Pi workspace in Finder')
+  await configurationRequest('/api/projects/reveal', { body: JSON.stringify({ cwd }), method: 'POST' })
 }
 
 export async function deleteSession(sessionId: string) {
@@ -94,11 +83,11 @@ export async function saveSessionSettings(sessionId: string, settings: Partial<P
 
 export async function configurationRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const bootstrap = await fetch('/api/runtime/bootstrap', { method: 'POST' })
-  if (!bootstrap.ok) throw new Error('无法验证设置访问权限')
+  if (!bootstrap.ok) throw new Error('无法验证访问权限')
   const { token } = await bootstrap.json() as { token: string }
   const response = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-pi-nest-token': token, ...init.headers }, cache: 'no-store' })
-  const body = await response.json()
-  if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : '配置请求失败')
+  const body = response.status === 204 ? undefined : await response.json()
+  if (!response.ok) throw new Error(typeof body?.error === 'string' ? body.error : '配置请求失败')
   return body as T
 }
 
@@ -128,4 +117,15 @@ export async function branchSession(sessionId: string, request: PiSessionBranchR
   const body = await response.json() as PiSessionBranchResponse
   if (!body.session?.id || body.session.id === sessionId || typeof body.draft !== 'string') throw new Error('分支会话返回数据无效，请刷新会话列表。')
   return body
+}
+
+
+export async function fetchProjects() {
+  const body = await configurationRequest<{ projects: PiProject[] }>('/api/projects')
+  return body.projects
+}
+
+export async function addProject(request: { kind: 'open'; cwd: string } | { kind: 'create'; parent: string; name: string }) {
+  const body = await configurationRequest<{ project: PiProject }>('/api/projects', { method: 'POST', body: JSON.stringify(request) })
+  return body.project
 }

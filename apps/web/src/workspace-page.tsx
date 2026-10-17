@@ -1,3 +1,4 @@
+import { ProjectHome } from './project-home.js'
 import { SessionForkDialog } from './session-fork-dialog.js'
 import { CommandNotice } from './command-notice.js'
 import { RenderErrorBoundary } from './render-error-boundary.js'
@@ -39,12 +40,13 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
-    sessionsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
-    startDraft, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
+    startDraft, openProject, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
+  const isHome = !selectedSessionId && !isDraft
   const displaySession = selectedSession ?? history?.session
-  const sessionTitle = displaySession ? sessionDisplayName(displaySession) : selectedSessionId ? sessionResolution === 'missing' ? '会话暂不可用' : '正在恢复会话…' : draftProject ? `新对话 · ${draftProject.name}` : '选择一个会话'
+  const sessionTitle = displaySession ? sessionDisplayName(displaySession) : selectedSessionId ? sessionResolution === 'missing' ? '会话暂不可用' : '正在恢复会话…' : draftProject ? `新对话 · ${draftProject.name}` : '项目'
   const runtimeStatistics = useWorkspaceStore((state) => state.runtimeStatistics[selectedSessionId])
   const runtimeLoading = runtimeStates[selectedSessionId]?.lifecycle === 'loading'
   const watchReady = useWorkspaceStore((state) => state.watchStates[selectedSessionId] === 'ready')
@@ -136,7 +138,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           selectedSessionId={selectedSessionId}
         />
       </div>
-      <footer className="shrink-0 border-t p-3">
+      <footer className="shrink-0 space-y-1 border-t p-3">
+        <Button asChild className="w-full justify-start" size="sm" variant="ghost"><Link to="/" onClick={() => { rememberReadingPosition(); setNavigationOpen(false) }}><Folder aria-hidden="true" />项目首页</Link></Button>
         <Button asChild className="w-full justify-start" size="sm" variant="ghost"><Link to={selectedSession ? `/settings?session=${encodeURIComponent(selectedSession.id)}` : '/settings'} onClick={() => setNavigationOpen(false)}><Settings aria-hidden="true" />设置</Link></Button>
       </footer>
     </div>
@@ -166,7 +169,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">PN</span>
           <h1 className="truncate text-sm font-semibold tracking-tight" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
         </div>
-        <div className="ml-auto flex items-center gap-1">
+        {!isHome && <div className="ml-auto flex items-center gap-1">
           <Sheet open={inspectorSheetOpen} onOpenChange={setInspectorSheetOpen}>
             <SheetTrigger asChild>
               <Button aria-label="打开会话检查器" className="xl:hidden" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
@@ -178,10 +181,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </SheetContent>
           </Sheet>
           <Button aria-label={inspectorOpen ? '收起会话检查器' : '展开会话检查器'} className="hidden xl:inline-flex" onClick={toggleInspector} onPointerDown={(event) => event.preventDefault()} size="icon-sm" type="button" variant="ghost"><PanelRight aria-hidden="true" /></Button>
-        </div>
+        </div>}
       </header>
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 hidden h-14 items-center justify-end px-3 sm:px-4 md:flex">
+      {!isHome && <div className="pointer-events-none absolute inset-x-0 top-0 z-20 hidden h-14 items-center justify-end px-3 sm:px-4 md:flex">
         <Sheet open={desktopInspectorSheetOpen} onOpenChange={setDesktopInspectorSheetOpen}>
           <SheetTrigger asChild>
             <Button aria-label="打开会话检查器" className="pointer-events-auto xl:hidden" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
@@ -193,11 +196,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           </SheetContent>
         </Sheet>
         <Button aria-label={inspectorOpen ? '收起会话检查器' : '展开会话检查器'} className="pointer-events-auto hidden xl:inline-flex" onClick={toggleInspector} onPointerDown={(event) => event.preventDefault()} size="icon-sm" type="button" variant="ghost"><PanelRight aria-hidden="true" /></Button>
-      </div>
+      </div>}
 
       <div
         className="workspace-grid grid min-h-0 flex-1"
-        style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': inspectorOpen ? `${inspectorWidth}px` : '0px' } as CSSProperties}
+        style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': !isHome && inspectorOpen ? `${inspectorWidth}px` : '0px' } as CSSProperties}
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
         <section className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
@@ -210,7 +213,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           </header>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="timeline-scroll h-full">
-              <div className="w-full space-y-4 px-4 pt-6 pb-[calc(var(--composer-height)+3rem)] sm:px-6">
+              <div className={isHome ? "w-full" : "w-full space-y-4 px-4 pt-6 pb-[calc(var(--composer-height)+3rem)] sm:px-6"}>
                 {(sessionResolution === 'error' || sessionResolution === 'missing') && <div className="conversation-stage"><div className="conversation-stage-content flex items-center gap-2 text-sm text-muted-foreground" role="status"><span>{sessionResolution === 'error' ? '会话列表读取失败，已保留当前会话。' : '当前会话未出现在列表中，已保留现有内容。'}</span><Button type="button" size="sm" variant="ghost" onClick={() => void sessionsQuery.refetch()}>重试会话列表</Button></div></div>}
                 {isDraft ? (
                   <div className="conversation-stage py-16">
@@ -247,7 +250,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   navigationNotice={navigationNotice}
                   onRetryNavigation={retryNavigation}
                   turns={currentRun?.turns}
-                /></RenderErrorBoundary> : <div className="conversation-stage py-16"><p className="conversation-stage-content text-center text-sm text-muted-foreground">从左侧选择一个会话，或在项目中创建新对话。</p></div>}
+                /></RenderErrorBoundary> : <ProjectHome projects={projects} loading={sessionsQuery.isPending || projectsQuery.isPending} error={sessionsQuery.isError || projectsQuery.isError} onRetry={() => { void sessionsQuery.refetch(); void projectsQuery.refetch() }} onProjectAdded={openProject} onOpen={startDraft} />}
                 <div className="conversation-stage">
                   <section className="conversation-stage-content space-y-3">
                     {!isDraft && extensionWidget ? <pre className="rounded border bg-muted p-2 text-xs">{extensionWidget}</pre> : null}
@@ -274,7 +277,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               {selectedSession && !isDraft && showScrollToBottom && <div className="conversation-stage absolute inset-x-0 bottom-[calc(var(--composer-height)+0.75rem)] px-4 sm:px-6"><div className="conversation-stage-content flex justify-center"><Button aria-label="滚动到对话底部" className="pointer-events-auto size-11 rounded-full border bg-background/95 shadow-md sm:size-9" onClick={scrollToBottom} onPointerDown={(event) => event.preventDefault()} size="icon" variant="outline"><ArrowDown aria-hidden="true" className="size-5" /></Button></div></div>}
             </div>
           </div>
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-transparent px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6" ref={setComposer} data-slot="composer">
+          {!isHome && <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-transparent px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6" ref={setComposer} data-slot="composer">
             <div className="conversation-stage">
               <div className="conversation-stage-content">
                 <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) setPendingJump({ sessionId: selectedSessionId, turnId: planTurnId }) }} onRetryPlan={retryHistory} /></div>
@@ -330,9 +333,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 </div>
               </div>
             </div>
-          </div>
+          </div>}
         </section>
-        <aside aria-hidden={!inspectorOpen} className={`hidden min-h-0 overflow-hidden bg-card/60 xl:block ${inspectorOpen ? 'border-l' : 'pointer-events-none'}`} inert={!inspectorOpen}>{inspector}</aside>
+        <aside aria-hidden={isHome || !inspectorOpen} className={`hidden min-h-0 overflow-hidden bg-card/60 xl:block ${!isHome && inspectorOpen ? 'border-l' : 'pointer-events-none'}`} inert={isHome || !inspectorOpen}>{inspector}</aside>
       </div>
     </main>
   )

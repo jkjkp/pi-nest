@@ -5,15 +5,16 @@ import { sessionHistoryQueryKey } from './history.js'
 import { useSessionHistory } from './use-session-history.js'
 import { timelineItems } from './timeline-model.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
-import type { PiSessionBranchRequest, PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
+import type { PiProject, PiSessionBranchRequest, PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
 import { thinkingCommand } from './thinking-command.js'
 import { stripAnsiLine } from './ansi-text.js'
 import { activeRuntimeTurn, isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
-import { branchSession, createSession, deleteSession, fetchSessions, renameSession, revealProjectInFinder } from './workspace-api.js'
-import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, planModePolicy, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
+import { branchSession, createSession, deleteSession, fetchProjects, fetchSessions, renameSession, revealProjectInFinder } from './workspace-api.js'
+import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, projectName, projectSessionGroupKey, planModePolicy, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
 
+const emptyProjects: PiProject[] = []
 const emptySessions: Awaited<ReturnType<typeof fetchSessions>> = []
 
 export function useWorkspaceSession(sessionRuns: SessionRunController) {
@@ -76,6 +77,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
   const selectedSessionIdRef = useRef(selectedSessionId)
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
+  const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: fetchProjects, retry: false })
   const sessions = sessionsQuery.data ?? emptySessions
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
   const sessionResolution = !selectedSessionId ? 'none' : selectedSession ? 'ready' : sessionsQuery.isPending ? 'restoring' : sessionsQuery.isError ? 'error' : 'missing'
@@ -118,7 +120,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     selectedSessionIdRef.current = selectedSessionId
   }, [selectedSessionId, queryClient])
 
-  const sourceProjects = useMemo(() => groupSessionsByProject(sessions, navigationOrder.projectCreatedAt), [sessions, navigationOrder.projectCreatedAt])
+  const sourceProjects = useMemo(() => groupSessionsByProject(sessions, navigationOrder.projectCreatedAt, projectsQuery.data ?? emptyProjects), [sessions, navigationOrder.projectCreatedAt, projectsQuery.data])
   const orderedProjects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
   const projects = useMemo(() => orderedProjects.filter((project) => !project.cwd || !hiddenProjectCwds[project.cwd]), [hiddenProjectCwds, orderedProjects])
   const removedProjects = useMemo(() => orderedProjects.filter((project) => Boolean(project.cwd && hiddenProjectCwds[project.cwd])), [hiddenProjectCwds, orderedProjects])
@@ -127,19 +129,11 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const prompt = isDraft ? draftPrompt : drafts[selectedSessionId] ?? ''
 
   useEffect(() => {
-    if (selectedSessionId || isDraft || !sessionsQuery.isSuccess || sessions.length === 0) return
-    const visibleSessions = projects.flatMap((project) => project.sessions)
-    if (visibleSessions.some((session) => session.id === selectedSessionId)) return
-    const fallback = visibleSessions[0]
-    setSearchParams(fallback ? { session: fallback.id } : {}, { replace: true })
-  }, [isDraft, projects, selectedSessionId, sessions.length, sessionsQuery.isSuccess, setSearchParams])
-
-  useEffect(() => {
     // An unloaded list must not erase the persisted drag order on startup.
-    if (!sessionsQuery.isSuccess) return
+    if (!sessionsQuery.isSuccess || !projectsQuery.isSuccess) return
     const reconciled = reconcileNavigationOrder(navigationOrder, sourceProjects)
     if (!navigationOrdersEqual(navigationOrder, reconciled)) setNavigationOrder(reconciled)
-  }, [navigationOrder, setNavigationOrder, sourceProjects, sessionsQuery.isSuccess])
+  }, [navigationOrder, setNavigationOrder, sourceProjects, sessionsQuery.isSuccess, projectsQuery.isSuccess])
 
   useEffect(() => {
     if (!selectedSessionId) return
@@ -192,11 +186,16 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     setNavigationOpen(false)
   }
 
+  function openProject(project: PiProject) {
+    queryClient.setQueryData<PiProject[]>(['projects'], (saved = []) => [...saved.filter((item) => item.cwd !== project.cwd), project])
+    restoreProject(project.cwd)
+    startDraft({ ...project, key: projectSessionGroupKey(project.cwd), name: projectName(project.cwd), sessions: [] })
+  }
+
   function removeProject(project: ProjectSessionGroup) {
     if (!project.cwd) return
-    const next = projects.flatMap((candidate) => candidate.cwd === project.cwd ? [] : candidate.sessions)[0]
     hideProject(project.cwd)
-    if (draftProject?.cwd === project.cwd || selectedSession?.cwd === project.cwd) setSearchParams(next ? { session: next.id } : {})
+    if (draftProject?.cwd === project.cwd || selectedSession?.cwd === project.cwd) setSearchParams({})
   }
 
   async function submitDraft() {
@@ -456,8 +455,8 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,
-    sessionsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
-    selectSession, createBranch, startDraft, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
+    selectSession, createBranch, startDraft, openProject, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel,
     loadEarlier, retryHistory,
   }

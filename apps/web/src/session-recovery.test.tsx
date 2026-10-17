@@ -13,6 +13,7 @@ import type { SessionRunController } from './session-run-controller.js'
 
 vi.mock('./workspace-api.js', async (original) => ({
   ...await original<typeof import('./workspace-api.js')>(),
+  fetchProjects: vi.fn(async () => []),
   deleteSession: vi.fn(), fetchSessions: vi.fn(), fetchSessionHistory: vi.fn(), fetchSessionTurnIndex: vi.fn(),
 }))
 const one = { id: 'one', cwd: '/fixture', name: '已有会话' }

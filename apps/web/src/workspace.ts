@@ -1,3 +1,4 @@
+import type { PiProject } from '@pi-nest/contracts'
 import type { PiSessionSummary, RuntimeStatus } from '@pi-nest/contracts'
 import type { PromptStatus, SessionRunSummary } from './session-run-model.js'
 import { stripAnsiLine } from './ansi-text.js'
@@ -45,8 +46,12 @@ function createdAtValue(createdAt?: string) {
   return Number.isNaN(value) ? Number.NEGATIVE_INFINITY : value
 }
 
-export function groupSessionsByProject(sessions: PiSessionSummary[], projectCreatedAt: Record<string, string> = {}): ProjectSessionGroup[] {
+export function groupSessionsByProject(sessions: PiSessionSummary[], projectCreatedAt: Record<string, string> = {}, registeredProjects: PiProject[] = []): ProjectSessionGroup[] {
   const groups = new Map<string, ProjectSessionGroup>()
+  for (const project of registeredProjects) {
+    const key = projectSessionGroupKey(project.cwd)
+    groups.set(key, { ...project, key, name: projectName(project.cwd), sessions: [] })
+  }
   for (const session of sessions) {
     const key = projectSessionGroupKey(session.cwd)
     const existing = groups.get(key)
@@ -58,7 +63,7 @@ export function groupSessionsByProject(sessions: PiSessionSummary[], projectCrea
     .map((group) => {
       const sorted = [...group.sessions].sort((left, right) => createdAtValue(right.createdAt) - createdAtValue(left.createdAt) || left.id.localeCompare(right.id))
       const earliest = sorted.filter((session) => Number.isFinite(createdAtValue(session.createdAt))).at(-1)?.createdAt
-      return { ...group, createdAt: projectCreatedAt[group.key] ?? earliest, sessions: sorted }
+      return { ...group, createdAt: projectCreatedAt[group.key] ?? group.createdAt ?? earliest, sessions: sorted }
     })
     .sort((left, right) => createdAtValue(right.createdAt) - createdAtValue(left.createdAt) || left.key.localeCompare(right.key))
 }
