@@ -39,7 +39,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, removedProjects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, restoreProject, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
-    sessionsQuery, historyQuery, history, historyError, historyNotice, historyPaused, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
+    sessionsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
     startDraft, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
@@ -217,10 +217,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 ) : selectedSession ? <RenderErrorBoundary key={selectedSessionId} scope="timeline" sessionId={selectedSessionId}><SessionTimeline
                   onSelectModel={() => { setModelSelectorOpen(true); void openModels() }}
                   error={historyError}
-                  historyNotice={historyNotice}
                   hasEarlier={historyQuery.hasPreviousPage}
                   history={history}
-                  isLoading={!historyPaused && !historyNotice && !history && historyQuery.isPending}
+                  isLoading={!history && historyQuery.isPending}
                   isLoadingEarlier={historyQuery.isFetchingPreviousPage}
                   isRunning={isStreaming}
                   onLoadEarlier={loadEarlier}

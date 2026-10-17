@@ -136,7 +136,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       status,
       systemEvents: [],
       pendingInputs: useWorkspaceStore.getState().runs[sessionId]?.pendingInputs ?? [],
-      turns: [...completedTurns, { events: [], ...(historyAnchorId ? { historyAnchorId } : {}), ...(historyTurnCount === undefined ? {} : { historyTurnCount }), id: `pending:${sessionId}:${crypto.randomUUID()}`, prompt, submittedAt, startedAt: submittedAt }],
+      turns: [...completedTurns, { runId, events: [], ...(historyAnchorId ? { historyAnchorId } : {}), ...(historyTurnCount === undefined ? {} : { historyTurnCount }), id: `pending:${sessionId}:${crypto.randomUUID()}`, prompt, submittedAt, startedAt: submittedAt }],
     })
   }
 
@@ -346,7 +346,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     const id = retryId ?? `steering:${crypto.randomUUID()}`
     const submittedAt = new Date().toISOString()
     if (retryId) updateSteering(sessionId, id, 'sending')
-    else store.updateRun(sessionId, { turns: [...(run?.turns ?? []), { id, prompt: message, events: [], startedAt: submittedAt, submittedAt, executionStartedAt: run?.executionStartedAt ?? (run && activeRuntimeTurn(run.turns)?.startedAt), steering: { status: 'sending', queuedInputId } }] })
+    else store.updateRun(sessionId, { turns: [...(run?.turns ?? []), { id, runId: activeRuns.get(sessionId)?.runId, prompt: message, events: [], startedAt: submittedAt, submittedAt, executionStartedAt: run?.executionStartedAt ?? (run && activeRuntimeTurn(run.turns)?.startedAt), steering: { status: 'sending', queuedInputId } }] })
     try {
       await send()
       updateSteering(sessionId, id, 'accepted')

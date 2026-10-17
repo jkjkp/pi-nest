@@ -8,11 +8,11 @@ afterEach(() => vi.unstubAllGlobals())
 const history = (revision: string) => ({ entries: [], hasEarlier: false, revision, session: { id: 'session' } }) as PiSessionHistoryResponse
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
-it('refreshes once and atomically replaces old history pages and the index cache', async () => {
+it.each(['REVISION_CHANGED', 'HISTORY_SNAPSHOT_EXPIRED'])('refreshes once on %s and atomically replaces history and index', async (code) => {
   const client = new QueryClient()
   client.setQueryData(sessionHistoryQueryKey('session'), { pages: [history('old'), history('old')], pageParams: [{}, { before: 'earlier', revision: 'old' }] })
   client.setQueryData(['session-history-page', 'session', 'old'], history('old'))
-  const fetch = vi.fn().mockResolvedValueOnce(json({ code: 'REVISION_CHANGED' }, 409)).mockResolvedValueOnce(json(history('new'))).mockResolvedValueOnce(json({ entries: [], revision: 'new' }))
+  const fetch = vi.fn().mockResolvedValueOnce(json({ code }, 409)).mockResolvedValueOnce(json(history('new'))).mockResolvedValueOnce(json({ entries: [], revision: 'new' }))
   vi.stubGlobal('fetch', fetch)
   const signal = new AbortController().signal
   const index = await fetchSessionNavigation('session', 'old', signal, client)

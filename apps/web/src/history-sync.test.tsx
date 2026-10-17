@@ -61,123 +61,91 @@ async function finish() {
   await settle()
 }
 
-it('defers all history reads while running without a cache and resumes after settling', async () => {
+it('loads history and navigation during generation, including before runtime replay', async () => {
   running()
-  await mount()
-  expect(fetchSessionHistory).not.toHaveBeenCalled()
-  expect(fetchSessionTurnIndex).not.toHaveBeenCalled()
-  expect(workspace.historyNotice).toBe('任务进行中，结束后同步历史')
-  expect(workspace.historyError).toBe(false)
-  workspace.retryHistory(); workspace.loadEarlier(); workspace.retryNavigation()
-  await expect(workspace.readTurnPrompt('old-user', undefined)).rejects.toThrow('当前任务结束')
-  expect(fetchSessionHistory).not.toHaveBeenCalled()
-  await finish()
-  expect(fetchSessionHistory).toHaveBeenCalledTimes(1)
-  expect(workspace.history?.revision).toBe('old')
-  expect(workspace.historyNotice).toBeUndefined()
-  expect(useWorkspaceStore.getState().runs.one?.turns[0]?.prompt).toBe('current question')
-  expect(useWorkspaceStore.getState().drafts.one).toBe('draft')
-})
-
-it('also defers reads for a runtime active snapshot before replay reconstructs its turn', async () => {
-  useWorkspaceStore.getState().setRuntimeState('one', { lifecycle: 'active', revision: 2 })
-  await mount()
-  expect(fetchSessionHistory).not.toHaveBeenCalled()
-  expect(workspace.historyPaused).toBe(true)
-  expect(workspace.historyNotice).toBeDefined()
-})
-
-it('waits for a runtime snapshot when the watch acknowledgement arrives first', async () => {
-  useWorkspaceStore.setState({ runtimeStates: {} })
-  await mount()
-  expect(fetchSessionHistory).not.toHaveBeenCalled()
-  await act(() => running())
-  expect(fetchSessionHistory).not.toHaveBeenCalled()
-})
-
-it('retains cached history during invalidation and synchronizes the latest snapshot after completion', async () => {
-  client.setQueryData<InfiniteData<PiSessionHistoryResponse>>(sessionHistoryQueryKey('one'), { pages: [history], pageParams: [{}] })
-  running()
-  await mount()
-  await act(() => { void client.invalidateQueries({ queryKey: sessionHistoryQueryKey('one') }) })
-  expect(fetchSessionHistory).not.toHaveBeenCalled()
-  expect(workspace.history?.entries[0]?.id).toBe('old-user')
-  expect(workspace.historyNotice).toBeUndefined()
-  vi.mocked(fetchSessionHistory).mockResolvedValue({ ...history, revision: 'new', entries: [...history.entries,
-    { id: 'live-user', parentId: 'old-user', timestamp: '2026-10-16T00:00:01Z', type: 'message', raw: { type: 'message', message: { role: 'user', content: 'current question' } } },
-    { id: 'answer', parentId: 'live-user', timestamp: '2026-10-16T00:00:02Z', type: 'message', raw: { type: 'message', message: { role: 'assistant', content: 'completed answer', stopReason: 'stop' } } },
-  ] })
-  vi.mocked(fetchSessionTurnIndex).mockResolvedValue({ entries: [], revision: 'new' })
-  await finish()
-  expect(workspace.history?.revision).toBe('new')
-  expect(workspace.historyError).toBe(false)
-  const items = timelineItems(workspace.history?.entries, workspace.currentRun?.turns ?? [], [])
-  expect(items.filter((item) => item.prompt === 'current question')).toHaveLength(1)
-  expect(items.flatMap((item) => item.parts).filter((part) => part.kind === 'assistant_text' && part.text === 'completed answer')).toHaveLength(1)
-})
-
-it('treats an unexpected SESSION_RUNNING conflict as deferred, without retrying until completion', async () => {
-  vi.mocked(fetchSessionHistory).mockRejectedValueOnce(new RequestError(409, 'SESSION_RUNNING'))
   await mount(); await settle()
-  expect(workspace.historyQuery.isError).toBe(true)
-  expect(workspace.historyError).toBe(false)
-  expect(workspace.historyNotice).toBeDefined()
   expect(fetchSessionHistory).toHaveBeenCalledTimes(1)
-  await act(() => running())
-  await finish()
-  expect(fetchSessionHistory).toHaveBeenCalledTimes(2)
-  expect(workspace.historyNotice).toBeUndefined()
+  expect(fetchSessionTurnIndex).toHaveBeenCalledWith('one', 'old', expect.any(AbortSignal))
+  expect(workspace.history?.entries[0]?.id).toBe('old-user')
+  await expect(workspace.readTurnPrompt('old-user')).resolves.toBe('previous question')
+  expect(workspace.historyError).toBe(false)
 })
 
-it('cancels an in-flight history read when generation starts and preserves the live turn', async () => {
+it('reads history without waiting for a runtime snapshot', async () => {
+  useWorkspaceStore.setState({ runtimeStates: {} })
+  await mount(); await settle()
+  expect(workspace.history?.revision).toBe('old')
+})
+
+it('does not cancel an in-flight history request when generation starts', async () => {
   let resolve!: (value: PiSessionHistoryResponse) => void
   vi.mocked(fetchSessionHistory).mockImplementationOnce(() => new Promise((done) => { resolve = done }))
   await mount()
   const signal = vi.mocked(fetchSessionHistory).mock.calls[0]![3]!
   await act(() => running())
-  expect(signal.aborted).toBe(true)
-  await act(() => resolve(history))
+  expect(signal.aborted).toBe(false)
+  await act(() => resolve(history)); await settle()
+  expect(workspace.history?.revision).toBe('old')
+  expect(workspace.currentRun?.status).toBe('running')
+})
+
+it('paginates and previews old turns while generation continues, and stops at the oldest page', async () => {
+  const latest = { ...history, hasEarlier: true, beforeCursor: 'old-user' }
+  vi.mocked(fetchSessionHistory).mockResolvedValueOnce(latest).mockResolvedValue(history)
+  running(); await mount(); await settle()
+  expect(workspace.historyQuery.hasPreviousPage).toBe(true)
+  await act(async () => { workspace.loadEarlier(); await new Promise((done) => setTimeout(done, 10)) }); await settle()
+  expect(fetchSessionHistory).toHaveBeenLastCalledWith('one', 'old-user', 'old', expect.any(AbortSignal))
+  expect(workspace.historyQuery.hasPreviousPage).toBe(false)
+  await expect(workspace.readTurnPrompt('old-user', 'old-user')).resolves.toBe('previous question')
+  expect(workspace.currentRun?.status).toBe('running')
+})
+
+it('retains the loaded range until its replacement is complete and merges by run identity', async () => {
+  const older = { ...history, entries: [{ ...history.entries[0]!, id: 'older-user', timestamp: '2026-10-15T00:00:00Z' }] }
+  client.setQueryData<InfiniteData<PiSessionHistoryResponse>>(sessionHistoryQueryKey('one'), { pages: [older, history], pageParams: [{}, {}] })
+  running(); await mount()
+  useWorkspaceStore.getState().updateRun('one', { turns: [{ ...workspace.currentRun!.turns[0]!, runId: 'current-run' }] })
+  const native = { ...history.entries[0]!, id: 'native-user', runId: 'current-run', runIndex: 0, timestamp: '2026-10-16T00:00:01Z', raw: { type: 'message', message: { role: 'user', content: 'current question' } } }
+  let release!: (value: PiSessionHistoryResponse) => void
+  vi.mocked(fetchSessionHistory).mockImplementation(async (_id, before) => before ? new Promise((done) => { release = done }) : { ...history, revision: 'new', hasEarlier: true, beforeCursor: 'native-user', entries: [native] })
+  vi.mocked(fetchSessionTurnIndex).mockResolvedValue({ entries: [{ id: 'older-user', startedAt: older.entries[0]!.timestamp, promptPreview: 'older', index: 1 }], revision: 'new' })
+  await act(() => { void client.invalidateQueries({ queryKey: sessionHistoryQueryKey('one') }) }); await settle()
+  expect(workspace.history?.revision).toBe('old')
+  expect(workspace.history?.entries.map((entry) => entry.id)).toEqual(['older-user', 'old-user'])
+  await act(() => release({ ...older, revision: 'new', entries: [...older.entries, ...history.entries] })); await settle()
+  expect(workspace.history?.revision).toBe('new')
+  expect(workspace.history?.entries.map((entry) => entry.id)).toEqual(['older-user', 'old-user', 'native-user'])
+  expect(timelineItems(workspace.history?.entries, workspace.currentRun?.turns ?? [], []).filter((item) => item.prompt === 'current question')).toHaveLength(1)
+  expect(useWorkspaceStore.getState().drafts.one).toBe('draft')
+})
+
+it.each([new RequestError(500), new RequestError(409, 'HISTORY_SNAPSHOT_EXPIRED')])('keeps actual read failures visible and retryable: %s', async (error) => {
+  vi.mocked(fetchSessionHistory).mockRejectedValueOnce(error)
+  running(); await mount(); await settle()
+  expect(workspace.historyError).toBe(true)
+  await act(() => workspace.retryHistory()); await settle()
   expect(workspace.historyError).toBe(false)
-  expect(workspace.history).toBeUndefined()
-  expect(useWorkspaceStore.getState().runs.one?.status).toBe('running')
-  await finish()
   expect(workspace.history?.revision).toBe('old')
 })
 
-it.each([new RequestError(500), new RequestError(409, 'REVISION_CHANGED')])('keeps real history failures visible: %s', async (error) => {
-  vi.mocked(fetchSessionHistory).mockRejectedValueOnce(error)
-  await mount(); await settle()
-  expect(workspace.historyError).toBe(true)
-  expect(workspace.historyNotice).toBeUndefined()
-})
-
-it('retains a readable cached page when the completion refresh fails', async () => {
+it('retains readable cached pages when completion refresh fails', async () => {
   client.setQueryData<InfiniteData<PiSessionHistoryResponse>>(sessionHistoryQueryKey('one'), { pages: [history], pageParams: [{}] })
   running(); await mount()
   vi.mocked(fetchSessionHistory).mockRejectedValueOnce(new RequestError(500))
   await finish()
   expect(workspace.history?.entries[0]?.id).toBe('old-user')
   expect(workspace.historyError).toBe(true)
-  expect(useWorkspaceStore.getState().runs.one?.turns[0]?.prompt).toBe('current question')
 })
 
-it('allows a stable history snapshot while the runtime is waiting for extension input', async () => {
-  running()
-  useWorkspaceStore.getState().updateRun('one', { status: 'awaiting_input' })
-  await mount(); await settle()
-  expect(fetchSessionHistory).toHaveBeenCalledTimes(1)
-  expect(workspace.historyPaused).toBe(false)
-})
-
-it('renders a waiting notice alongside the live turn rather than the red history failure', async () => {
+it('renders old history alongside live output without a waiting notice', async () => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(800)
   vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(1200)
-  running()
-  await mount(true)
-  expect(container.textContent).toContain('任务进行中，结束后同步历史')
+  running(); await mount(true); await settle()
+  expect(container.textContent).toContain('previous question')
   expect(container.textContent).toContain('current question')
+  expect(container.textContent).not.toContain('任务进行中，结束后同步历史')
   expect(container.textContent).not.toContain('无法读取会话历史')
   expect(container.querySelector('textarea')?.value).toBe('draft')
   expect(container.querySelector('[aria-label="停止生成"]')).not.toBeNull()
-  expect(fetchSessionHistory).not.toHaveBeenCalled()
 })

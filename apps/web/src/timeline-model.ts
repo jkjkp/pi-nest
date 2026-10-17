@@ -41,6 +41,8 @@ export type TimelineItem = {
   kind: 'turn'
   parts: TimelinePart[]
   prompt: string | undefined
+  runId?: string
+  runIndex?: number
   runtimeTiming?: TurnTiming
   startedAt: string
 }
@@ -275,6 +277,8 @@ function historyItems(entries: PiSessionHistoryEntry[]): TimelineItem[] {
     if (entry.type === 'message' && nativeMessage?.role === 'user') {
       if (active) items.push(active)
       active = newTurn(entry.id, textContent(nativeMessage.content), entry.timestamp)
+      active.runId = entry.runId
+      active.runIndex = entry.runIndex
       projectEvent(active, event)
       continue
     }
@@ -314,10 +318,13 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
     const nativeId = record(nativeUser?.event.message)?.id
     const nativePrompt = textContent(record(nativeUser?.event.message)?.content)
     const anchorIndex = historyProjection.findIndex((item) => item.id === turn.historyAnchorId)
+    const runId = turn.runId ?? turn.events.find((event) => event.runId)?.runId
+    const runIndex = turns.slice(0, turns.indexOf(turn)).filter((previous) => (previous.runId ?? previous.events.find((event) => event.runId)?.runId) === runId && (!previous.steering || previous.steering.status === 'applied')).length
     const persisted = historyProjection.find((item, index) => {
       if (turn.steering?.status === 'failed' || turn.steering?.status === 'sending') return false
       if (matchedHistory.has(item.id)) return false
       if (typeof nativeId === 'string') return item.id === nativeId
+      if (runId) return item.runId === runId && item.runIndex === runIndex
       if (item.prompt !== (nativePrompt ?? turn.prompt)) return false
       // The submission boundary survives pagination and repeated identical prompts.
       if (turn.historyAnchorId && anchorIndex >= 0) return index > anchorIndex

@@ -46,6 +46,7 @@ export type SessionRunSummary = {
 }
 
 export type RuntimeTurn = {
+  runId?: string
   steering?: { status: 'sending' | 'accepted' | 'applied' | 'failed' | 'unknown'; error?: string; queuedInputId?: string }
   executionStartedAt?: string
   completedAt?: string

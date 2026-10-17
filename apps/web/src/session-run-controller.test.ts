@@ -386,7 +386,7 @@ describe('session run controller', () => {
     const items = timelineItems(undefined, run.turns, [])
     expect(items[1]!.parts.some((part) => part.kind === 'assistant_text' && part.text === 'Changing direction')).toBe(true)
     expect(items[0]!.parts.some((part) => part.kind === 'assistant_text' && part.text === 'Changing direction')).toBe(false)
-    const persisted = timelineItems([{ id: 'saved-steering', parentId: null, type: 'message', timestamp: run.turns[1]!.submittedAt!, raw: { message: { role: 'user', content: 'new direction' } } }], run.turns, [])
+    const persisted = timelineItems([{ id: 'saved-steering', runId: 'run-1', runIndex: 1, parentId: null, type: 'message', timestamp: run.turns[1]!.submittedAt!, raw: { message: { role: 'user', content: 'new direction' } } }], run.turns, [])
     expect(persisted.filter((item) => item.prompt === 'new direction')).toHaveLength(1)
     expect(persisted.find((item) => item.prompt === 'new direction')?.displayId).toBe(items[1]?.displayId)
   })
