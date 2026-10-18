@@ -1,10 +1,11 @@
-import { Children, isValidElement, memo, type ComponentProps } from 'react'
+import { Children, createContext, isValidElement, memo, useContext, type ComponentProps } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+import { MarkdownCodeBlock } from './markdown-code-block.js'
 import { MermaidDiagram } from './mermaid-diagram.js'
 
-const allowedElements = ['a', 'blockquote', 'br', 'code', 'li', 'ol', 'p', 'pre', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul']
+const allowedElements = ['a', 'blockquote', 'br', 'code', 'del', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'input', 'li', 'ol', 'p', 'pre', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul']
 
 function safeUrl(value: string) {
   try {
@@ -19,19 +20,19 @@ function language(className: string | undefined) {
   return className?.match(/(?:^|\s)language-([^\s]+)/)?.[1]?.toLowerCase()
 }
 
-function MarkdownPre({ children, node: _node, ...props }: ComponentProps<'pre'> & { node?: unknown }) {
-  const child = Children.count(children) === 1 ? Children.only(children) : undefined
-  if (isValidElement<{ className?: string }>(child) && language(child.props.className) === 'mermaid') return <>{children}</>
-  return <pre className="my-3 max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs leading-6" {...props}>{children}</pre>
-}
+const StreamingContext = createContext(false)
 
-function MarkdownCode({ children, className, isStreaming, node: _node, ...props }: ComponentProps<'code'> & { isStreaming: boolean; node?: unknown }) {
-  const value = String(children).replace(/\n$/, '')
-  if (language(className) === 'mermaid') {
-    if (isStreaming) return <pre className="my-3 max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs leading-6"><code className={className} {...props}>{children}</code></pre>
-    return <MermaidDiagram source={value} />
-  }
-  return <code className={className ? className : 'rounded bg-muted px-1 py-0.5 text-[0.9em]'} {...props}>{children}</code>
+function MarkdownPre({ children }: ComponentProps<'pre'>) {
+  const isStreaming = useContext(StreamingContext)
+  const child = Children.count(children) === 1 ? Children.only(children) : undefined
+  if (!isValidElement<{ children?: string; className?: string }>(child)) return <pre>{children}</pre>
+  // The Markdown renderer appends one newline to block code, outside the authored source.
+  const code = String(child.props.children ?? '').replace(/\n$/, '')
+  const lang = language(child.props.className)
+  if (lang === 'mermaid') return isStreaming
+    ? <pre className="my-3 max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs leading-6"><code>{code}</code></pre>
+    : <MermaidDiagram source={code} />
+  return <MarkdownCodeBlock code={code} language={lang} isStreaming={isStreaming} />
 }
 
 function MarkdownLink({ children, href }: ComponentProps<'a'>) {
@@ -39,26 +40,38 @@ function MarkdownLink({ children, href }: ComponentProps<'a'>) {
   return url ? <a className="text-primary underline underline-offset-4" href={url} rel="noopener noreferrer" target="_blank">{children}</a> : <>{children}</>
 }
 
-function markdownComponents(isStreaming: boolean): Components {
-  return {
-    a: MarkdownLink,
-    blockquote: ({ children }) => <blockquote className="my-3 border-l-4 border-border pl-4 text-muted-foreground">{children}</blockquote>,
-    code: (props) => <MarkdownCode {...props} isStreaming={isStreaming} />,
-    ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-6">{children}</ol>,
-    p: ({ children }) => <p className="my-3 first:mt-0 last:mb-0">{children}</p>,
-    pre: MarkdownPre,
-    strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-    table: ({ children }) => <div className="my-3 overflow-x-auto rounded-md border"><table className="w-full border-collapse text-sm">{children}</table></div>,
-    td: ({ children }) => <td className="border-t px-3 py-2 align-top">{children}</td>,
-    th: ({ children }) => <th className="border-b bg-muted/60 px-3 py-2 text-left font-semibold">{children}</th>,
-    ul: ({ children }) => <ul className="my-3 list-disc space-y-1 pl-6">{children}</ul>,
-  }
+const markdownComponents: Components = {
+  a: MarkdownLink,
+  blockquote: ({ children }) => <blockquote className="my-3 border-l-4 border-border pl-4 text-muted-foreground">{children}</blockquote>,
+  code: ({ children }) => <code className="rounded bg-muted px-1 py-0.5 text-[0.9em]">{children}</code>,
+  h1: ({ children }) => <h1 className="mt-6 mb-3 text-2xl leading-tight font-semibold first:mt-0">{children}</h1>,
+  h2: ({ children }) => <h2 className="mt-5 mb-3 text-xl leading-snug font-semibold first:mt-0">{children}</h2>,
+  h3: ({ children }) => <h3 className="mt-4 mb-2 text-lg leading-snug font-semibold first:mt-0">{children}</h3>,
+  h4: ({ children }) => <h4 className="mt-4 mb-2 text-base font-semibold first:mt-0">{children}</h4>,
+  h5: ({ children }) => <h5 className="mt-3 mb-2 text-sm font-semibold first:mt-0">{children}</h5>,
+  h6: ({ children }) => <h6 className="mt-3 mb-2 text-sm font-semibold text-muted-foreground first:mt-0">{children}</h6>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  del: ({ children }) => <del className="line-through">{children}</del>,
+  hr: () => <hr className="my-5 border-t" />,
+  input: ({ checked }) => <input type="checkbox" checked={Boolean(checked)} disabled aria-label={checked ? '已完成' : '未完成'} className="mr-2 align-middle" />,
+  ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-6">{children}</ol>,
+  p: ({ children }) => <p className="my-3 first:mt-0 last:mb-0">{children}</p>,
+  pre: MarkdownPre,
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  table: ({ children }) => <div className="my-3 overflow-x-auto rounded-md border"><table className="w-full border-collapse text-sm">{children}</table></div>,
+  td: ({ children }) => <td className="border-t px-3 py-2 align-top">{children}</td>,
+  th: ({ children }) => <th className="border-b bg-muted/60 px-3 py-2 text-left font-semibold">{children}</th>,
+  ul: ({ children, className }) => <ul className={`my-3 list-disc space-y-1 pl-6 ${className ?? ''}`}>{children}</ul>,
 }
 
 export const AssistantMarkdown = memo(function AssistantMarkdown({ isStreaming, source }: { isStreaming: boolean; source: string }) {
   return (
-    <ReactMarkdown allowedElements={allowedElements} components={markdownComponents(isStreaming)} remarkPlugins={[remarkGfm]} skipHtml unwrapDisallowed urlTransform={safeUrl}>
-      {source}
-    </ReactMarkdown>
+    <StreamingContext.Provider value={isStreaming}>
+      <div className="min-w-0 [overflow-wrap:anywhere] [&_.contains-task-list]:list-none [&_.contains-task-list]:pl-2">
+        <ReactMarkdown allowedElements={allowedElements} components={markdownComponents} remarkPlugins={[remarkGfm]} skipHtml unwrapDisallowed urlTransform={safeUrl}>
+          {source}
+        </ReactMarkdown>
+      </div>
+    </StreamingContext.Provider>
   )
 })

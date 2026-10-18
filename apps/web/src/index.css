@@ -207,3 +207,12 @@ textarea {
     display: none;
   }
 }
+
+@media (prefers-color-scheme: dark) {
+  .markdown-code span {
+    color: var(--shiki-dark) !important;
+    font-style: var(--shiki-dark-font-style);
+    font-weight: var(--shiki-dark-font-weight);
+    text-decoration: var(--shiki-dark-text-decoration);
+  }
+}
