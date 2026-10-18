@@ -1,0 +1,749 @@
+{
+  "environment": {
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/155.0.0.0 Safari/537.36",
+    "hardwareConcurrency": 10,
+    "viewport": [
+      1280,
+      900
+    ],
+    "mode": "production",
+    "cpu": "Apple M4",
+    "gitBase": "a4b2d57",
+    "revision": "working tree with incremental Markdown changes",
+    "browserVersion": "155.0.8059.80",
+    "date": "2026-10-18",
+    "cpuThrottling": "none"
+  },
+  "grammar": [
+    {
+      "name": "mixed",
+      "mode": "full",
+      "characters": 50000,
+      "grammarUnits": 4942160,
+      "calls": 196,
+      "parseMs": {
+        "total": 5924.8,
+        "p95": 59.8,
+        "max": 155
+      },
+      "fullParseAndConvertMs": 70.4
+    },
+    {
+      "name": "mixed",
+      "mode": "incremental",
+      "characters": 50000,
+      "grammarUnits": 57672,
+      "calls": 220,
+      "parseMs": {
+        "total": 63.1,
+        "p95": 0.5,
+        "max": 1.6
+      },
+      "fullParseAndConvertMs": 63.1
+    },
+    {
+      "name": "fence",
+      "mode": "full",
+      "characters": 50030,
+      "grammarUnits": 4942190,
+      "calls": 196,
+      "parseMs": {
+        "total": 421.3,
+        "p95": 4.2,
+        "max": 4.7
+      },
+      "fullParseAndConvertMs": 4.6
+    },
+    {
+      "name": "fence",
+      "mode": "incremental",
+      "characters": 50030,
+      "grammarUnits": 109048,
+      "calls": 393,
+      "parseMs": {
+        "total": 20.2,
+        "p95": 0.2,
+        "max": 0.4
+      },
+      "fullParseAndConvertMs": 4.8
+    },
+    {
+      "name": "paragraph",
+      "mode": "full",
+      "characters": 50014,
+      "grammarUnits": 4942174,
+      "calls": 196,
+      "parseMs": {
+        "total": 744.4,
+        "p95": 7.3,
+        "max": 7.8
+      },
+      "fullParseAndConvertMs": 7.4
+    },
+    {
+      "name": "paragraph",
+      "mode": "incremental",
+      "characters": 50014,
+      "grammarUnits": 4942174,
+      "calls": 196,
+      "parseMs": {
+        "total": 747.7,
+        "p95": 7.4,
+        "max": 7.9
+      },
+      "fullParseAndConvertMs": 8.3
+    },
+    {
+      "name": "list",
+      "mode": "full",
+      "characters": 50000,
+      "grammarUnits": 4942160,
+      "calls": 196,
+      "parseMs": {
+        "total": 6795.7,
+        "p95": 65,
+        "max": 292.4
+      },
+      "fullParseAndConvertMs": 89.8
+    },
+    {
+      "name": "list",
+      "mode": "incremental",
+      "characters": 50000,
+      "grammarUnits": 4942160,
+      "calls": 196,
+      "parseMs": {
+        "total": 6350.9,
+        "p95": 65.9,
+        "max": 153.1
+      },
+      "fullParseAndConvertMs": 95.1
+    },
+    {
+      "name": "table",
+      "mode": "full",
+      "characters": 50024,
+      "grammarUnits": 4942184,
+      "calls": 196,
+      "parseMs": {
+        "total": 7266.7,
+        "p95": 72.7,
+        "max": 81.1
+      },
+      "fullParseAndConvertMs": 84.1
+    },
+    {
+      "name": "table",
+      "mode": "incremental",
+      "characters": 50024,
+      "grammarUnits": 4942184,
+      "calls": 196,
+      "parseMs": {
+        "total": 7413.7,
+        "p95": 73.4,
+        "max": 87.4
+      },
+      "fullParseAndConvertMs": 86.8
+    },
+    {
+      "name": "references",
+      "mode": "full",
+      "characters": 50041,
+      "grammarUnits": 4942201,
+      "calls": 196,
+      "parseMs": {
+        "total": 5177.3,
+        "p95": 51.4,
+        "max": 57.8
+      },
+      "fullParseAndConvertMs": 63.4
+    },
+    {
+      "name": "references",
+      "mode": "incremental",
+      "characters": 50041,
+      "grammarUnits": 4942201,
+      "calls": 196,
+      "parseMs": {
+        "total": 5230.7,
+        "p95": 53.1,
+        "max": 60.2
+      },
+      "fullParseAndConvertMs": 62.2
+    }
+  ],
+  "renderer": [
+    {
+      "name": "mixed",
+      "mode": "legacy",
+      "characters": 50000,
+      "commitMs": {
+        "total": 3787.6,
+        "p95": 76.1,
+        "max": 81.5
+      },
+      "layoutMs": {
+        "total": 124.6,
+        "p95": 1.9,
+        "max": 5.2
+      },
+      "syntheticInputToRafMs": {
+        "total": 27.4,
+        "p95": 8.1,
+        "max": 8.1
+      },
+      "settleCommitMs": 77.8,
+      "longTasks": {
+        "count": 40,
+        "maxMs": 86,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "mixed",
+      "mode": "incremental",
+      "characters": 50000,
+      "commitMs": {
+        "total": 189.8,
+        "p95": 2.6,
+        "max": 2.7
+      },
+      "layoutMs": {
+        "total": 126.9,
+        "p95": 2,
+        "max": 2.3
+      },
+      "syntheticInputToRafMs": {
+        "total": 120.7,
+        "p95": 15.2,
+        "max": 15.2
+      },
+      "settleCommitMs": 8.7,
+      "longTasks": {
+        "count": 0,
+        "maxMs": 0,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "fence",
+      "mode": "legacy",
+      "characters": 50030,
+      "commitMs": {
+        "total": 253.2,
+        "p95": 5,
+        "max": 7.2
+      },
+      "layoutMs": {
+        "total": 416.7,
+        "p95": 8.4,
+        "max": 9.4
+      },
+      "syntheticInputToRafMs": {
+        "total": 91,
+        "p95": 14.9,
+        "max": 14.9
+      },
+      "settleCommitMs": 5.1,
+      "longTasks": {
+        "count": 0,
+        "maxMs": 0,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "fence",
+      "mode": "incremental",
+      "characters": 50030,
+      "commitMs": {
+        "total": 47.2,
+        "p95": 0.7,
+        "max": 0.9
+      },
+      "layoutMs": {
+        "total": 419.6,
+        "p95": 8.2,
+        "max": 8.8
+      },
+      "syntheticInputToRafMs": {
+        "total": 111.1,
+        "p95": 14.8,
+        "max": 14.8
+      },
+      "settleCommitMs": 0.1,
+      "longTasks": {
+        "count": 0,
+        "maxMs": 0,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "paragraph",
+      "mode": "legacy",
+      "characters": 50014,
+      "commitMs": {
+        "total": 422,
+        "p95": 7.9,
+        "max": 12.5
+      },
+      "layoutMs": {
+        "total": 741,
+        "p95": 15.8,
+        "max": 16.4
+      },
+      "syntheticInputToRafMs": {
+        "total": 70.4,
+        "p95": 15.2,
+        "max": 15.2
+      },
+      "settleCommitMs": 6.8,
+      "longTasks": {
+        "count": 0,
+        "maxMs": 0,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "paragraph",
+      "mode": "incremental",
+      "characters": 50014,
+      "commitMs": {
+        "total": 400.9,
+        "p95": 7.4,
+        "max": 12.5
+      },
+      "layoutMs": {
+        "total": 678.3,
+        "p95": 14.8,
+        "max": 15.4
+      },
+      "syntheticInputToRafMs": {
+        "total": 65.8,
+        "p95": 13.6,
+        "max": 13.6
+      },
+      "settleCommitMs": 0,
+      "longTasks": {
+        "count": 0,
+        "maxMs": 0,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "list",
+      "mode": "legacy",
+      "characters": 50000,
+      "commitMs": {
+        "total": 4643.4,
+        "p95": 93.2,
+        "max": 363.8
+      },
+      "layoutMs": {
+        "total": 79.3,
+        "p95": 1.2,
+        "max": 1.3
+      },
+      "syntheticInputToRafMs": {
+        "total": 22.8,
+        "p95": 6.6,
+        "max": 6.6
+      },
+      "settleCommitMs": 96.6,
+      "longTasks": {
+        "count": 45,
+        "maxMs": 366,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "list",
+      "mode": "incremental",
+      "characters": 50000,
+      "commitMs": {
+        "total": 4230.9,
+        "p95": 89,
+        "max": 147.6
+      },
+      "layoutMs": {
+        "total": 78.6,
+        "p95": 1.3,
+        "max": 1.4
+      },
+      "syntheticInputToRafMs": {
+        "total": 19.5,
+        "p95": 9.4,
+        "max": 9.4
+      },
+      "settleCommitMs": 0.2,
+      "longTasks": {
+        "count": 41,
+        "maxMs": 149,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "table",
+      "mode": "legacy",
+      "characters": 50024,
+      "commitMs": {
+        "total": 5391.7,
+        "p95": 107.7,
+        "max": 117.1
+      },
+      "layoutMs": {
+        "total": 197.5,
+        "p95": 3.5,
+        "max": 3.8
+      },
+      "syntheticInputToRafMs": {
+        "total": 20.6,
+        "p95": 4,
+        "max": 4
+      },
+      "settleCommitMs": 108,
+      "longTasks": {
+        "count": 57,
+        "maxMs": 124,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "table",
+      "mode": "incremental",
+      "characters": 50024,
+      "commitMs": {
+        "total": 4717.5,
+        "p95": 91.8,
+        "max": 107
+      },
+      "layoutMs": {
+        "total": 197.8,
+        "p95": 3.5,
+        "max": 3.7
+      },
+      "syntheticInputToRafMs": {
+        "total": 23.8,
+        "p95": 6.9,
+        "max": 6.9
+      },
+      "settleCommitMs": 0.3,
+      "longTasks": {
+        "count": 51,
+        "maxMs": 113,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "references",
+      "mode": "legacy",
+      "characters": 50041,
+      "commitMs": {
+        "total": 3775,
+        "p95": 75.7,
+        "max": 82.6
+      },
+      "layoutMs": {
+        "total": 116.4,
+        "p95": 1.8,
+        "max": 2
+      },
+      "syntheticInputToRafMs": {
+        "total": 24.1,
+        "p95": 8,
+        "max": 8
+      },
+      "settleCommitMs": 76.4,
+      "longTasks": {
+        "count": 41,
+        "maxMs": 87,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "references",
+      "mode": "incremental",
+      "characters": 50041,
+      "commitMs": {
+        "total": 3537.3,
+        "p95": 70.6,
+        "max": 78.9
+      },
+      "layoutMs": {
+        "total": 117.6,
+        "p95": 1.9,
+        "max": 2.2
+      },
+      "syntheticInputToRafMs": {
+        "total": 23.8,
+        "p95": 7.2,
+        "max": 7.2
+      },
+      "settleCommitMs": 6.8,
+      "longTasks": {
+        "count": 34,
+        "maxMs": 83,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "mixed",
+      "mode": "legacy",
+      "characters": 100000,
+      "commitMs": {
+        "total": 16223.9,
+        "p95": 163.6,
+        "max": 181
+      },
+      "layoutMs": {
+        "total": 373.7,
+        "p95": 3.3,
+        "max": 3.6
+      },
+      "syntheticInputToRafMs": {
+        "total": 67,
+        "p95": 6.3,
+        "max": 7.4
+      },
+      "settleCommitMs": 170,
+      "longTasks": {
+        "count": 138,
+        "maxMs": 189,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "mixed",
+      "mode": "incremental",
+      "characters": 100000,
+      "commitMs": {
+        "total": 494.4,
+        "p95": 3.2,
+        "max": 4.1
+      },
+      "layoutMs": {
+        "total": 370.6,
+        "p95": 3,
+        "max": 3.8
+      },
+      "syntheticInputToRafMs": {
+        "total": 233.6,
+        "p95": 14.3,
+        "max": 14.4
+      },
+      "settleCommitMs": 13.2,
+      "longTasks": {
+        "count": 0,
+        "maxMs": 0,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "fence",
+      "mode": "legacy",
+      "characters": 100028,
+      "commitMs": {
+        "total": 914.3,
+        "p95": 8.4,
+        "max": 11.6
+      },
+      "layoutMs": {
+        "total": 1550.3,
+        "p95": 14.4,
+        "max": 16.4
+      },
+      "syntheticInputToRafMs": {
+        "total": 98.2,
+        "p95": 10.9,
+        "max": 11.6
+      },
+      "settleCommitMs": 9.6,
+      "longTasks": {
+        "count": 0,
+        "maxMs": 0,
+        "afterSettleCount": 0
+      }
+    },
+    {
+      "name": "fence",
+      "mode": "incremental",
+      "characters": 100028,
+      "commitMs": {
+        "total": 96.1,
+        "p95": 0.8,
+        "max": 1.3
+      },
+      "layoutMs": {
+        "total": 1595.6,
+        "p95": 14.4,
+        "max": 19.7
+      },
+      "syntheticInputToRafMs": {
+        "total": 154.8,
+        "p95": 13.5,
+        "max": 15.1
+      },
+      "settleCommitMs": 0.1,
+      "longTasks": {
+        "count": 0,
+        "maxMs": 0,
+        "afterSettleCount": 0
+      }
+    }
+  ],
+  "runtime": [
+    {
+      "mode": "legacy",
+      "batchesMs": {
+        "total": 8.2,
+        "p95": 0.2,
+        "max": 0.3
+      },
+      "projectionMs": {
+        "total": 7.8,
+        "p95": 0.2,
+        "max": 0.4
+      },
+      "commitMs": {
+        "total": 3928.7,
+        "p95": 75.6,
+        "max": 78.8
+      },
+      "aStatus": "complete",
+      "bStatus": "complete",
+      "actualTimelineMounted": true
+    },
+    {
+      "mode": "incremental",
+      "batchesMs": {
+        "total": 11.1,
+        "p95": 0.2,
+        "max": 0.3
+      },
+      "projectionMs": {
+        "total": 5.9,
+        "p95": 0.2,
+        "max": 0.2
+      },
+      "commitMs": {
+        "total": 292.5,
+        "p95": 5,
+        "max": 5.3
+      },
+      "aStatus": "complete",
+      "bStatus": "complete",
+      "actualTimelineMounted": true
+    }
+  ],
+  "draftPreserved": true,
+  "retention": {
+    "messagesPerPass": 30,
+    "parserInstancesAfterFirstPass": 0,
+    "parserInstancesAfterSecondPass": 0
+  },
+  "pageErrors": [],
+  "runtimeLatencyReplay": {
+    "result": [
+      {
+        "mode": "legacy",
+        "batchesMs": {
+          "total": 8.9,
+          "p95": 0.2,
+          "max": 0.2
+        },
+        "projectionMs": {
+          "total": 5.8,
+          "p95": 0.2,
+          "max": 0.3
+        },
+        "commitMs": {
+          "total": 3969.5,
+          "p95": 75.1,
+          "max": 80.7
+        },
+        "postFlushToRafMs": {
+          "total": 4102.3,
+          "p95": 75.3,
+          "max": 82.3
+        },
+        "eventToRafMs": {
+          "total": 7487,
+          "p95": 109.7,
+          "max": 116.1
+        },
+        "aStatus": "complete",
+        "bStatus": "complete",
+        "actualTimelineMounted": true
+      },
+      {
+        "mode": "incremental",
+        "batchesMs": {
+          "total": 14.5,
+          "p95": 0.3,
+          "max": 0.4
+        },
+        "projectionMs": {
+          "total": 8.7,
+          "p95": 0.2,
+          "max": 0.3
+        },
+        "commitMs": {
+          "total": 381.6,
+          "p95": 5.4,
+          "max": 6.3
+        },
+        "postFlushToRafMs": {
+          "total": 942.1,
+          "p95": 16.9,
+          "max": 22
+        },
+        "eventToRafMs": {
+          "total": 4353.4,
+          "p95": 51.4,
+          "max": 71.3
+        },
+        "aStatus": "complete",
+        "bStatus": "complete",
+        "actualTimelineMounted": true
+      }
+    ],
+    "errors": []
+  },
+  "workspaceSmoke": {
+    "initialDraft": {
+      "drafts": {
+        "smoke-a": "unsent smoke draft"
+      },
+      "runs": {
+        "smoke-a": "running",
+        "smoke-b": "running"
+      }
+    },
+    "snapshot": {
+      "drafts": {
+        "smoke-a": "unsent smoke draft"
+      },
+      "runs": {
+        "smoke-a": "complete",
+        "smoke-b": "running"
+      }
+    },
+    "before": 2440,
+    "after": 2440,
+    "readingPositionPreserved": true,
+    "draftPreserved": true,
+    "settledRetained": true,
+    "historyRetained": true,
+    "wrapping": "true",
+    "noCrash": true,
+    "errors": [],
+    "requests": []
+  },
+  "notes": [
+    "Synthetic fixtures; character counts and grammarUnits are UTF-16 code units.",
+    "React commitMs includes parse/conversion/reconciliation but excludes forced layout, which is reported separately.",
+    "fullParseAndConvertMs is a full-grammar diagnostic, not the cached renderer completion cost.",
+    "Synthetic input-to-rAF is not real-user INP; total event-to-rAF includes the unchanged 32ms event buffer.",
+    "Large lists/tables/reference documents retain conservative parsing and can exceed frame budgets.",
+    "Retention checks count parser instances after GC; they do not prove absence of all application memory leaks."
+  ]
+}

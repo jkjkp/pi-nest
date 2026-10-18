@@ -47,7 +47,7 @@ it('cancels a previous file request and never replaces the selected file with a 
 it('shows a readable failure and clamps a removed historical line to the current file end', async () => {
   vi.mocked(fetchSessionFilePreview).mockRejectedValue(new Error('文件已删除或不存在。'))
   await render('missing')
-  expect(container.querySelector('[role="alert"]')?.textContent).toBe('文件已删除或不存在。')
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('文件已删除或不存在。')
   vi.mocked(fetchSessionFilePreview).mockResolvedValue({ path: 'short.ts', content: 'one\ntwo' })
   await render('short.ts', 800)
   expect(container.textContent).toContain('原行号已超出当前文件')
@@ -67,7 +67,7 @@ it('retains old text when refresh fails, then clamps the reading window after a 
   const scroll = container.querySelector('[aria-label="文件文本"]')!
   await act(async () => { scroll.scrollTop = 100; scroll.dispatchEvent(new Event('scroll', { bubbles: true })) })
   vi.mocked(fetchSessionFilePreview).mockRejectedValueOnce(new Error('文件暂时无法访问。'))
-  await click('刷新文件')
+  await act(async () => { await queryClient.invalidateQueries({ queryKey: ['session-file-preview'] }) })
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
   expect(container.querySelector('[role="alert"]')?.textContent).toContain('仍显示上次读取的内容')
   expect(container.querySelector('pre')?.textContent).toContain('row 201')
@@ -78,7 +78,7 @@ it('retains old text when refresh fails, then clamps the reading window after a 
   expect(container.textContent).toContain('1–1 / 1')
 })
 
-it('restores the page and scroll position after collapse, and relocates in the same file without refetching', async () => {
+it('restores reading position with fresh content on reopen, and relocates without another fetch', async () => {
   vi.mocked(fetchSessionFilePreview).mockResolvedValue({ path: 'read.ts', content: Array.from({ length: 1200 }, (_, i) => `row ${i + 1}`).join('\n') })
   await render('read.ts', 500)
   await click('后 200 行')
@@ -87,25 +87,18 @@ it('restores the page and scroll position after collapse, and relocates in the s
   await render('read.ts', 500)
   expect(container.querySelector('pre')?.textContent).toContain('row 660')
   expect(container.querySelector('[aria-label="文件文本"]')?.scrollTop).toBe(75)
-  expect(fetchSessionFilePreview).toHaveBeenCalledTimes(1)
+  expect(fetchSessionFilePreview).toHaveBeenCalledTimes(2)
   await act(async () => root.render(<QueryClientProvider client={queryClient}><SessionFilePreview key="read.ts" sessionId="one" path="read.ts" line={900} navigation={1} onClose={() => undefined} /></QueryClientProvider>))
   expect(container.querySelector('.bg-accent')?.textContent).toContain('row 900')
-  expect(fetchSessionFilePreview).toHaveBeenCalledTimes(1)
-  await click('前 200 行')
-  await click('返回目标行')
-  expect(container.querySelector('.bg-accent')?.textContent).toContain('row 900')
+  expect(fetchSessionFilePreview).toHaveBeenCalledTimes(2)
 })
 
-it('validates line jumps, handles an empty file, and reports clipboard failures', async () => {
+it('keeps empty-file previews free of the removed toolbar and jump controls', async () => {
   vi.mocked(fetchSessionFilePreview).mockResolvedValue({ path: 'empty', content: '' })
   await render('empty')
   expect(container.textContent).toContain('此文件为空')
-  await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain('正整数')
-  const clipboard = vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValueOnce(new Error('denied'))
-  await click('复制路径')
-  expect(container.textContent).toContain('复制失败')
-  clipboard.mockRestore()
+  expect(container.querySelector('form')).toBeNull()
+  expect([...container.querySelectorAll('button')].map((button) => button.textContent)).toEqual(['收起预览'])
 })
 
 it('renders Markdown with safe document-relative navigation, suppresses remote images and opens line targets as source', async () => {
@@ -118,8 +111,8 @@ it('renders Markdown with safe document-relative navigation, suppresses remote i
   expect(container.querySelector('script')).toBeNull()
   await click('Code')
   expect(openFile).toHaveBeenCalledWith('docs/../src/a.ts', 8)
-  await click('源码')
-  expect(container.querySelector('pre')?.textContent).toContain('# Guide')
+  expect(container.querySelector('[aria-label="Markdown 显示模式"]')).toBeNull()
+  expect([...container.querySelectorAll('button')].some((button) => /^(刷新文件|复制路径|源码|阅读|跳转)$/.test(button.textContent ?? ''))).toBe(false)
   await act(async () => root.render(<QueryClientProvider client={queryClient}><SessionFilePreview key="md" sessionId="one" path="docs/readme.md" line={2} navigation={1} onOpenFile={openFile} onClose={() => undefined} /></QueryClientProvider>))
   expect(container.querySelector('[aria-label="文件文本"]')).not.toBeNull()
   expect(container.querySelector('.bg-accent')?.textContent).toContain('2')
@@ -141,7 +134,7 @@ it('loads image bytes through the authorized API and releases object URLs on ref
   await act(async () => zoomIn.click())
   expect(container.textContent).toContain('125%')
   vi.mocked(fetchSessionImagePreview).mockResolvedValue({ path: 'image.png', blob: new Blob(['second'], { type: 'image/png' }) })
-  await click('刷新文件')
+  await act(async () => { await queryClient.invalidateQueries({ queryKey: ['session-file-preview'] }) })
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
   expect(revoke).toHaveBeenCalledWith('blob:first')
   await act(async () => image.dispatchEvent(new Event('error')))

@@ -232,7 +232,8 @@ function FinalAnswer({ isRunning, onStart, onStream, parts, turnId }: { isRunnin
     previousAnswer.current = answer
   }, [answer, isRunning, onStart, onStream])
 
-  return <div className="space-y-3" data-final-answer-turn-id={turnId}>{parts.map((part, index) => <article key={`${part.events[0]?.id ?? index}-${index}`}><AssistantMarkdown isStreaming={isRunning} source={part.text} /></article>)}</div>
+  // Part order survives history handoff; transport event IDs do not.
+  return <div className="space-y-3" data-final-answer-turn-id={turnId}>{parts.map((part, index) => <article key={index}><AssistantMarkdown isStreaming={isRunning} source={part.text} /></article>)}</div>
 }
 
 function UserPrompt({ prompt, startedAt }: { prompt: string; startedAt: string }) {

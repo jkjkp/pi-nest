@@ -1,20 +1,10 @@
-import { Children, createContext, isValidElement, memo, useContext, type ComponentProps } from 'react'
-import ReactMarkdown, { type Components } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { Children, Fragment, createContext, isValidElement, memo, useContext, useMemo, type ComponentProps } from 'react'
+import type { Components } from 'react-markdown'
+import { MarkdownBlock, parseMarkdown, safeUrl } from './markdown-pipeline.js'
+import { IncrementalMarkdownParser } from './markdown-incremental.js'
 
 import { MarkdownCodeBlock } from './markdown-code-block.js'
 import { MermaidDiagram } from './mermaid-diagram.js'
-
-const allowedElements = ['a', 'blockquote', 'br', 'code', 'del', 'em', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'input', 'li', 'ol', 'p', 'pre', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul']
-
-function safeUrl(value: string) {
-  try {
-    const url = new URL(value)
-    return url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:' ? value : undefined
-  } catch {
-    return undefined
-  }
-}
 
 function language(className: string | undefined) {
   return className?.match(/(?:^|\s)language-([^\s]+)/)?.[1]?.toLowerCase()
@@ -44,7 +34,8 @@ function MarkdownLink({ children, href }: ComponentProps<'a'>) {
   return url ? <a className="text-primary underline underline-offset-4" href={url} rel="noopener noreferrer" target="_blank">{children}</a> : <>{children}</>
 }
 
-const markdownComponents: Components = {
+// oxlint-disable-next-line react/only-export-components -- The regression oracle reuses the exact display components.
+export const markdownComponents: Components = {
   a: MarkdownLink,
   blockquote: ({ children }) => <blockquote className="my-3 border-l-4 border-border pl-4 text-muted-foreground">{children}</blockquote>,
   code: ({ children }) => <code className="rounded bg-muted px-1 py-0.5 text-[0.9em]">{children}</code>,
@@ -69,13 +60,15 @@ const markdownComponents: Components = {
 }
 
 export const AssistantMarkdown = memo(function AssistantMarkdown({ isStreaming, source, onOpenLocalLink }: { isStreaming: boolean; source: string; onOpenLocalLink?: (href: string) => void }) {
+  const parser = useMemo(() => new IncrementalMarkdownParser(parseMarkdown), [])
+  // Streaming and settled syntax are identical; definitions already use the full-document fallback.
+  const blocks = useMemo(() => parser.update(source), [source, parser])
+  const children = blocks.root
+    ? <MarkdownBlock node={blocks.root} components={markdownComponents} allowLocal={Boolean(onOpenLocalLink)} />
+    : [...blocks.frozen, ...blocks.tail].map(({ node, key }, index) => <Fragment key={key}>{index > 0 && '\n'}<MarkdownBlock node={node} components={markdownComponents} allowLocal={Boolean(onOpenLocalLink)} /></Fragment>)
   return (
     <LocalLinkContext value={onOpenLocalLink}><StreamingContext.Provider value={isStreaming}>
-      <div className="min-w-0 [overflow-wrap:anywhere] [&_.contains-task-list]:list-none [&_.contains-task-list]:pl-2">
-        <ReactMarkdown allowedElements={allowedElements} components={markdownComponents} remarkPlugins={[remarkGfm]} skipHtml unwrapDisallowed urlTransform={(url) => safeUrl(url) ?? (onOpenLocalLink && url && !/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(url) ? url : undefined)}>
-          {source}
-        </ReactMarkdown>
-      </div>
+      <div className="min-w-0 [overflow-wrap:anywhere] [&_.contains-task-list]:list-none [&_.contains-task-list]:pl-2">{children}</div>
     </StreamingContext.Provider></LocalLinkContext>
   )
 })
