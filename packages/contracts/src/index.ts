@@ -1,3 +1,5 @@
+export type PiSessionFilePreview = { path: string; content: string }
+
 export type PiProject = { cwd: string; createdAt: string }
 
 export type PiRuntimeEvent = {
