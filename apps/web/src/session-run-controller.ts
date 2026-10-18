@@ -1,4 +1,4 @@
-import type { PiRuntimeCommand } from '@pi-nest/contracts'
+import type { PiRuntimeCommand, AttachmentRef } from '@pi-nest/contracts'
 import { unstable_batchedUpdates } from 'react-dom'
 import { stripAnsiText } from './ansi-text.js'
 import { isRuntimeConnectionError, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
@@ -10,13 +10,14 @@ type SessionRunControllerOptions = {
   runtime: RuntimeWebSocketClient
 }
 
-type StartSessionRunOptions = { historyAnchorId?: string; historyTurnCount?: number; prompt: string; sessionId: string; startedAt?: string }
+export type InputAttachments = { attachments: AttachmentRef[]; attachmentIds: string[]; submissionId: string }
+type StartSessionRunOptions = { attachments?: AttachmentRef[]; submissionId?: string; onAccepted?: () => void; historyAnchorId?: string; historyTurnCount?: number; prompt: string; sessionId: string; startedAt?: string }
 type ActiveRun = { awaitingRunId: boolean; runId: string | undefined; stopReason: string | undefined }
 
 export type SessionRunController = {
   adopt: (options: StartSessionRunOptions) => void
   compact: (sessionId: string, customInstructions?: string) => Promise<void>
-  followUp: (sessionId: string, message: string) => Promise<void>
+  followUp: (sessionId: string, message: string, input?: InputAttachments) => Promise<void>
   getCommands: (sessionId: string) => Promise<PiRuntimeCommand[]>
   getAvailableModels: (sessionId: string) => Promise<PiRuntimeModel[]>
   getAvailableThinkingLevels: (sessionId: string) => Promise<string[]>
@@ -29,7 +30,8 @@ export type SessionRunController = {
   setModel: (sessionId: string, provider: string, modelId: string) => Promise<void>
   setThinkingLevel: (sessionId: string, level: string) => Promise<void>
   start: (options: StartSessionRunOptions) => boolean
-  steer: (sessionId: string, message: string) => Promise<void>
+  steer: (sessionId: string, message: string, input?: InputAttachments) => Promise<void>
+  resumeQueued: (sessionId: string, inputId: string) => Promise<void>
   steerQueued: (sessionId: string, inputId: string) => Promise<void>
   retrySteering: (sessionId: string, turnId: string) => Promise<void>
   stop: (sessionId: string) => Promise<boolean>
@@ -105,6 +107,8 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     clearAwaitingAgentCheck(sessionId)
     activeRuns.delete(sessionId)
     store.completeLatestRunTurn(sessionId, new Date().toISOString())
+    const unconfirmedAttachments = store.runs[sessionId]?.turns.some((turn) => turn.attachments?.length && !turn.events.some((event) => nativeUserMessage(event)))
+    if (unconfirmedAttachments) store.updateRun(sessionId, { attachmentWarning: 'Pi 已处理输入，但未观察到附件用户消息；请检查扩展是否接管。' })
     store.updateRun(sessionId, { status: stopReason === 'error' ? 'error' : stopReason === 'aborted' ? 'aborted' : 'complete', stopReason })
     const visible = foregroundSessionId === sessionId && (typeof document === 'undefined' || document.visibilityState === 'visible')
     if (runId) store.finishNotification(sessionId, runId, !visible, stopReason !== 'error' && stopReason !== 'aborted')
@@ -127,7 +131,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     void invalidateHistory(sessionId)
   }
 
-  function beginRun({ historyAnchorId, historyTurnCount, prompt, sessionId, startedAt }: StartSessionRunOptions, status: Extract<PromptStatus, 'awaiting_agent' | 'submitted' | 'running'> = 'submitted', awaitingRunId = false, runId?: string) {
+  function beginRun({ historyAnchorId, historyTurnCount, prompt, sessionId, startedAt, attachments, submissionId }: StartSessionRunOptions, status: Extract<PromptStatus, 'awaiting_agent' | 'submitted' | 'running'> = 'submitted', awaitingRunId = false, runId?: string) {
     const completedTurns = useWorkspaceStore.getState().runs[sessionId]?.turns.filter((turn) => turn.completedAt || (turn.steering && turn.steering.status !== 'applied')) ?? []
     const submittedAt = startedAt ?? new Date().toISOString()
     activeRuns.set(sessionId, { awaitingRunId, runId, stopReason: undefined })
@@ -136,7 +140,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       status,
       systemEvents: [],
       pendingInputs: useWorkspaceStore.getState().runs[sessionId]?.pendingInputs ?? [],
-      turns: [...completedTurns, { runId, events: [], ...(historyAnchorId ? { historyAnchorId } : {}), ...(historyTurnCount === undefined ? {} : { historyTurnCount }), id: `pending:${sessionId}:${crypto.randomUUID()}`, prompt, submittedAt, startedAt: submittedAt }],
+      turns: [...completedTurns, { runId, events: [], ...(historyAnchorId ? { historyAnchorId } : {}), ...(historyTurnCount === undefined ? {} : { historyTurnCount }), id: `pending:${sessionId}:${crypto.randomUUID()}`, prompt, attachments, submissionId, submittedAt, startedAt: submittedAt }],
     })
   }
 
@@ -145,7 +149,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     const raw = event.event
     if (raw.type === 'queue_update' && Array.isArray(raw.steering) && raw.steering.every((message) => typeof message === 'string') && Array.isArray(raw.followUp) && raw.followUp.every((message) => typeof message === 'string')) {
       queueSyncedSessions.add(event.sessionId)
-      store.updateRun(event.sessionId, { pendingInputs: reconcilePendingInputs(store.runs[event.sessionId]?.pendingInputs ?? [], { steering: raw.steering, followUp: raw.followUp }, String(event.sequence)) })
+      store.updateRun(event.sessionId, { pendingInputs: reconcilePendingInputs(store.runs[event.sessionId]?.pendingInputs ?? [], { steering: raw.steering, followUp: raw.followUp, ...(Array.isArray(raw.inputs) ? { inputs: raw.inputs as import('@pi-nest/contracts').PiQueuedInput[] } : {}), ...(Array.isArray(raw.steeringInputs) ? { steeringInputs: raw.steeringInputs as import('@pi-nest/contracts').PiQueuedInput[] } : {}) }, String(event.sequence)) })
     }
     if (raw.type === 'thinking_level_changed' && typeof raw.level === 'string' && runtime.shouldApplyExtensionUi(event)) {
       const details = store.runtimeDetails[event.sessionId]
@@ -280,7 +284,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     applyModelStatus(status)
     if (status.lifecycle === 'idle' && status.completedRun) finishRun(status.sessionId, status.completedRun.runId, status.completedRun.stopReason)
     if (status.lifecycle === 'notLoaded' || status.lifecycle === 'failed') {
-      store.updateRun(status.sessionId, { pendingInputs: store.runs[status.sessionId]?.pendingInputs?.filter((input) => input.mode === 'plan_implementation') ?? [] })
+      store.updateRun(status.sessionId, { pendingInputs: store.runs[status.sessionId]?.pendingInputs?.filter((input) => input.mode === 'plan_implementation' || input.recoveryRequired) ?? [] })
       statisticsRequests.set(status.sessionId, (statisticsRequests.get(status.sessionId) ?? 0) + 1)
       store.setRuntimeStatistics(status.sessionId, { ...store.runtimeStatistics[status.sessionId], loading: false, error: '等待 Pi 运行恢复后更新统计。' })
     }
@@ -321,12 +325,12 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     return state
   }
 
-  async function submitRunningInput(sessionId: string, message: string, mode: 'follow_up' | 'steer') {
-    if (mode === 'steer') return submitSteering(sessionId, message, () => runtime.steer(sessionId, message))
-    const id = `pending-input:${++nextPendingInputId}`
-    useWorkspaceStore.getState().appendPendingInput(sessionId, { id, message, mode, submittedAt: new Date().toISOString(), submitting: true })
+  async function submitRunningInput(sessionId: string, message: string, mode: 'follow_up' | 'steer', input?: InputAttachments) {
+    if (mode === 'steer') return submitSteering(sessionId, message, () => runtime.steer(sessionId, message, ...(input ? [{ attachmentIds: input.attachmentIds, submissionId: input.submissionId }] : [])), undefined, undefined, input)
+    const id = input?.submissionId ?? `pending-input:${++nextPendingInputId}`
+    useWorkspaceStore.getState().appendPendingInput(sessionId, { id, message, mode, ...(input ? { attachments: input.attachments, submissionId: input.submissionId } : {}), submittedAt: new Date().toISOString(), submitting: true })
     try {
-      await runtime.followUp(sessionId, message)
+      await runtime.followUp(sessionId, message, ...(input ? [{ attachmentIds: input.attachmentIds, submissionId: input.submissionId }] : []))
       const store = useWorkspaceStore.getState()
       store.updateRun(sessionId, { pendingInputs: store.runs[sessionId]?.pendingInputs?.map((input) => input.id === id ? { ...input, submitting: false } : input) ?? [] })
     } catch (cause) {
@@ -340,13 +344,13 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     store.updateRun(sessionId, { turns: store.runs[sessionId]?.turns.map((turn) => turn.id !== id || turn.steering?.status === 'applied' ? turn : { ...turn, steering: { ...turn.steering, status, error } }) ?? [] })
   }
 
-  async function submitSteering(sessionId: string, message: string, send: () => Promise<unknown>, queuedInputId?: string, retryId?: string) {
+  async function submitSteering(sessionId: string, message: string, send: () => Promise<unknown>, queuedInputId?: string, retryId?: string, input?: InputAttachments) {
     const store = useWorkspaceStore.getState()
     const run = store.runs[sessionId]
     const id = retryId ?? `steering:${crypto.randomUUID()}`
     const submittedAt = new Date().toISOString()
     if (retryId) updateSteering(sessionId, id, 'sending')
-    else store.updateRun(sessionId, { turns: [...(run?.turns ?? []), { id, runId: activeRuns.get(sessionId)?.runId, prompt: message, events: [], startedAt: submittedAt, submittedAt, executionStartedAt: run?.executionStartedAt ?? (run && activeRuntimeTurn(run.turns)?.startedAt), steering: { status: 'sending', queuedInputId } }] })
+    else store.updateRun(sessionId, { turns: [...(run?.turns ?? []), { id, runId: activeRuns.get(sessionId)?.runId, prompt: message, ...(input ? { attachments: input.attachments, submissionId: input.submissionId } : {}), events: [], startedAt: submittedAt, submittedAt, executionStartedAt: run?.executionStartedAt ?? (run && activeRuntimeTurn(run.turns)?.startedAt), steering: { status: 'sending', queuedInputId } }] })
     try {
       await send()
       updateSteering(sessionId, id, 'accepted')
@@ -360,7 +364,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     const inputs = useWorkspaceStore.getState().runs[sessionId]?.pendingInputs?.filter((input) => input.mode === 'follow_up') ?? []
     const index = inputs.findIndex((input) => input.id === inputId)
     if (index < 0 || inputs[index]!.submitting) throw new Error('排队消息已发生变化，请重试。')
-    return submitSteering(sessionId, inputs[index]!.message, () => runtime.steerQueued(sessionId, inputs[index]!.message, index), inputId, retryId)
+    return submitSteering(sessionId, inputs[index]!.message, () => runtime.steerQueued(sessionId, inputs[index]!.message, index, ...(inputs[index]!.submissionId ? [inputs[index]!.id] : [])), inputId, retryId, inputs[index]!.attachments?.length ? { attachments: inputs[index]!.attachments!, attachmentIds: inputs[index]!.attachments!.map((a) => a.id), submissionId: inputs[index]!.submissionId! } : undefined)
   }
 
   return {
@@ -371,7 +375,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       }
     },
     compact: async (sessionId, customInstructions) => { await resumeRuntime(sessionId); await runtime.compact(sessionId, customInstructions); await invalidateHistory(sessionId); await getSessionStatistics(sessionId) },
-    followUp: (sessionId, message) => submitRunningInput(sessionId, message, 'follow_up'),
+    followUp: (sessionId, message, input) => submitRunningInput(sessionId, message, 'follow_up', input),
     getCommands: async (sessionId) => (await runtime.getCommands(sessionId)).commands,
     getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,
     getAvailableThinkingLevels: async (sessionId) => (await runtime.getAvailableThinkingLevels(sessionId)).levels,
@@ -424,7 +428,8 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
           await runtime.watch(sessionId, 'foreground')
           useWorkspaceStore.getState().setWatchState(sessionId, 'ready')
           await resumeRuntime(sessionId)
-          const accepted = await runtime.prompt(sessionId, prompt)
+          const accepted = await runtime.prompt(sessionId, prompt, ...(options.attachments?.length ? [{ attachmentIds: options.attachments.map((a) => a.id), submissionId: options.submissionId! }] : []))
+          options.onAccepted?.()
           const activeRun = activeRuns.get(sessionId)
           if (!activeRun || typeof accepted?.runId !== 'string') throw new Error('Pi runtime did not acknowledge this prompt')
           activeRun.awaitingRunId = false
@@ -455,13 +460,14 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
         return false
       }
     },
-    steer: (sessionId, message) => submitRunningInput(sessionId, message, 'steer'),
+    steer: (sessionId, message, input) => submitRunningInput(sessionId, message, 'steer', input),
+    resumeQueued: async (sessionId, inputId) => { await runtime.watch(sessionId); await runtime.resumeQueued(sessionId, inputId) },
     steerQueued,
     retrySteering: async (sessionId, turnId) => {
       const turn = useWorkspaceStore.getState().runs[sessionId]?.turns.find((turn) => turn.id === turnId)
       if (!turn?.prompt || turn.steering?.status !== 'failed') return
       if (turn.steering.queuedInputId) return steerQueued(sessionId, turn.steering.queuedInputId, turnId)
-      return submitSteering(sessionId, turn.prompt, () => runtime.steer(sessionId, turn.prompt!), undefined, turnId)
+      return submitSteering(sessionId, turn.prompt, () => runtime.steer(sessionId, turn.prompt!, turn.attachments?.length ? { attachmentIds: turn.attachments.map((a) => a.id), submissionId: turn.submissionId! } : undefined), undefined, turnId, turn.attachments?.length ? { attachments: turn.attachments, attachmentIds: turn.attachments.map((a) => a.id), submissionId: turn.submissionId! } : undefined)
     },
   }
 }

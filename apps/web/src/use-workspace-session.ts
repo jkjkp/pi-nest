@@ -1,3 +1,4 @@
+import { useAttachmentDraft, setDraftAttachments } from './attachment-draft.js'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
@@ -124,6 +125,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const orderedProjects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
   const projects = useMemo(() => orderedProjects.filter((project) => !project.cwd || !hiddenProjectCwds[project.cwd]), [hiddenProjectCwds, orderedProjects])
   const draftProject = !selectedSessionId ? projects.find((project) => project.key === draftProjectKey) : undefined
+  const attachmentDraft = useAttachmentDraft(selectedSessionId, draftProject?.cwd)
   const isDraft = Boolean(draftProject)
   const prompt = isDraft ? draftPrompt : drafts[selectedSessionId] ?? ''
 
@@ -198,25 +200,40 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   async function submitDraft() {
-    if (!draftProject?.cwd || draftPrompt.trim().length === 0 || creatingDraft) return
+    if (!draftProject?.cwd || (!draftPrompt.trim() && !attachmentDraft.items.length) || creatingDraft) return
     setCreatingDraft(true)
     setDraftError(undefined)
     try {
       const firstPrompt = draftPrompt.trim()
-      const created = await createSession(draftProject.cwd, firstPrompt)
-      sessionRuns.adopt({ historyTurnCount: 0, prompt: firstPrompt, sessionId: created.id })
+      const attachedItems = [...attachmentDraft.items]
+      const input = attachmentDraft.submission(firstPrompt)
+      const created = await createSession(draftProject.cwd, firstPrompt, ...(input && attachmentDraft.scope?.kind === 'draft' ? [{ attachmentIds: input.attachmentIds, submissionId: input.submissionId, draftId: attachmentDraft.scope.draftId }] : []))
+      attachmentDraft.clear(attachedItems)
+      sessionRuns.adopt({ historyTurnCount: 0, prompt: firstPrompt || '请查看附件。', ...(input ? { attachments: input.attachments, submissionId: input.submissionId } : {}), sessionId: created.id })
       queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => [created, ...(current ?? []).filter((session) => session.id !== created.id)])
-      setDraftPrompt('')
+      setDraftPrompt((value) => value.trim() === firstPrompt ? '' : value)
       setSearchParams({ session: created.id })
       setNavigationOpen(false)
     } catch (cause) {
       setDraftError(cause instanceof Error ? cause.message : '创建 Pi 会话失败，请重试。')
+      if (cause instanceof Error && 'sessionId' in cause && typeof cause.sessionId === 'string') {
+        setDraftAttachments(cause.sessionId, attachmentDraft.snapshot())
+        useWorkspaceStore.getState().setDraft(cause.sessionId, draftPrompt)
+        setControlFailure({ sessionId: cause.sessionId, message: cause.message })
+        setSearchParams({ session: cause.sessionId })
+        void sessionsQuery.refetch()
+      }
     } finally {
       setCreatingDraft(false)
     }
   }
 
   function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up') {
+    if (attachmentDraft.items.length && (attachmentDraft.busy || prompt.trimStart().startsWith('/'))) {
+      const error = attachmentDraft.busy ? '请等待附件上传完成，或移除失败的附件。' : '带附件时暂不支持命令，请先移除附件。'
+      if (isDraft) setDraftError(error); else setControlError(error)
+      return
+    }
     const command = thinkingCommand(prompt)
     if (command) {
       if (isDraft || !selectedSessionId) { setDraftError('请先进入已有会话，再调整思考等级。'); return }
@@ -230,9 +247,12 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     if (modelOperation.current?.sessionId === selectedSessionId) return
     setControlError(undefined)
     if (isDraft) return void submitDraft()
-    if (!selectedSessionId || prompt.trim().length === 0) return
+    if (!selectedSessionId || (!prompt.trim() && !attachmentDraft.items.length)) return
+    const input = attachmentDraft.submission(prompt)
+    const attachedItems = [...attachmentDraft.items]
+    const acceptedAttachments = () => attachmentDraft.clear(attachedItems)
     if (!isActive) {
-      if (sessionRuns.start({ historyAnchorId: history?.entries.filter((entry) => (entry.raw.message as { role?: string } | undefined)?.role === 'user').at(-1)?.id, historyTurnCount, prompt, sessionId: selectedSessionId })) setDraft(selectedSessionId, '')
+      if (sessionRuns.start({ ...(input ? { attachments: input.attachments, submissionId: input.submissionId, onAccepted: () => { acceptedAttachments(); if (useWorkspaceStore.getState().drafts[selectedSessionId] === prompt) setDraft(selectedSessionId, '') } } : {}), historyAnchorId: history?.entries.filter((entry) => (entry.raw.message as { role?: string } | undefined)?.role === 'user').at(-1)?.id, historyTurnCount, prompt: prompt || '请查看附件。', sessionId: selectedSessionId }) && !input) setDraft(selectedSessionId, '')
     }
     else if (status === 'running') {
       if (runningInputRequests.current.has(selectedSessionId)) return
@@ -240,16 +260,17 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
       const message = prompt
       runningInputRequests.current.add(sessionId)
       setRunningInputSessions([...runningInputRequests.current])
-      if (mode === 'steer' && useWorkspaceStore.getState().drafts[sessionId] === message) setDraft(sessionId, '')
+      if (!input && mode === 'steer' && useWorkspaceStore.getState().drafts[sessionId] === message) setDraft(sessionId, '')
       void (async () => {
         try {
-          if (mode === 'steer') await sessionRuns.steer(sessionId, message)
-          else await sessionRuns.followUp(sessionId, message)
+          if (mode === 'steer') await sessionRuns.steer(sessionId, message || '请查看附件。', ...(input ? [input] : []))
+          else await sessionRuns.followUp(sessionId, message || '请查看附件。', ...(input ? [input] : []))
+          acceptedAttachments()
           if (useWorkspaceStore.getState().drafts[sessionId] === message) setDraft(sessionId, '')
         } catch (cause) {
           const ended = mode === 'follow_up' && cause instanceof Error && 'code' in cause && cause.code === 'SESSION_NOT_RUNNING' && !isRunActive(useWorkspaceStore.getState().runs[sessionId]?.status ?? 'idle')
-          if (ended && sessionRuns.start({ prompt: message, sessionId })) {
-            if (useWorkspaceStore.getState().drafts[sessionId] === message) setDraft(sessionId, '')
+          if (ended && sessionRuns.start({ prompt: message || '请查看附件。', sessionId, ...(input ? { attachments: input.attachments, submissionId: input.submissionId, onAccepted: () => { acceptedAttachments(); if (useWorkspaceStore.getState().drafts[sessionId] === message) setDraft(sessionId, '') } } : {}) })) {
+            if (!input && useWorkspaceStore.getState().drafts[sessionId] === message) setDraft(sessionId, '')
           } else setControlError(cause instanceof Error ? cause.message : 'Pi 控制命令失败', sessionId)
         } finally {
           runningInputRequests.current.delete(sessionId)
@@ -358,6 +379,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
       const result = await branchSession(sessionId, request)
       queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => [result.session, ...(current ?? []).filter((session) => session.id !== result.session.id)])
       useWorkspaceStore.getState().setDraft(result.session.id, result.draft)
+      if (result.attachments?.length) setDraftAttachments(result.session.id, result.attachments)
       return result
     } finally { setMutatingSessionId(undefined) }
   }
@@ -453,7 +475,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   return {
-    selectedSessionId, selectedSession, sessionResolution, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
+    attachmentDraft, selectedSessionId, selectedSession, sessionResolution, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,

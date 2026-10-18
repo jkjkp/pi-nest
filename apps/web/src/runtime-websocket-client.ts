@@ -153,11 +153,12 @@ export class RuntimeWebSocketClient {
 
   resumeRuntime(sessionId: string) { return this.command({ type: 'resume', sessionId }) }
 
-  prompt(sessionId: string, message: string) { return this.command<RuntimePromptAck>({ type: 'prompt', sessionId, message }) }
+  prompt(sessionId: string, message: string, input?: { attachmentIds: string[]; submissionId: string }) { return this.command<RuntimePromptAck>({ type: 'prompt', sessionId, message, ...input }) }
   abort(sessionId: string) { return this.command({ type: 'abort', sessionId }) }
-  steer(sessionId: string, message: string) { return this.command({ type: 'steer', sessionId, message }) }
-  followUp(sessionId: string, message: string) { return this.command({ type: 'follow_up', sessionId, message }) }
-  steerQueued(sessionId: string, message: string, index: number) { return this.command({ type: 'steer_queued', sessionId, message, index }) }
+  steer(sessionId: string, message: string, input?: { attachmentIds: string[]; submissionId: string }) { return this.command({ type: 'steer', sessionId, message, ...input }) }
+  followUp(sessionId: string, message: string, input?: { attachmentIds: string[]; submissionId: string }) { return this.command({ type: 'follow_up', sessionId, message, ...input }) }
+  steerQueued(sessionId: string, message: string, index: number, inputId?: string) { return this.command({ type: 'steer_queued', sessionId, message, index, ...(inputId ? { inputId } : {}) }) }
+  resumeQueued(sessionId: string, inputId: string) { return this.command({ type: 'resume_queued', sessionId, inputId }) }
   setModel(sessionId: string, provider: string, modelId: string) { return this.command({ type: 'set_model', sessionId, modelId, provider }) }
   setThinkingLevel(sessionId: string, level: string) { return this.command({ type: 'set_thinking_level', sessionId, level }) }
   compact(sessionId: string, customInstructions?: string) { return this.command({ type: 'compact', sessionId, ...(customInstructions ? { customInstructions } : {}) }) }
@@ -279,7 +280,7 @@ export class RuntimeWebSocketClient {
     this.projectionFloors.set(message.sessionId, message.atSequence)
     this.uiFreshness.set(message.sessionId, message.extensionUi.freshness)
     const snapshot: SessionSnapshot = {
-      ...(message.inputQueue && Array.isArray(message.inputQueue.steering) && message.inputQueue.steering.every((value) => typeof value === 'string') && Array.isArray(message.inputQueue.followUp) && message.inputQueue.followUp.every((value) => typeof value === 'string') ? { inputQueue: { steering: [...message.inputQueue.steering], followUp: [...message.inputQueue.followUp] } } : {}),
+      ...(message.inputQueue && Array.isArray(message.inputQueue.steering) && message.inputQueue.steering.every((value) => typeof value === 'string') && Array.isArray(message.inputQueue.followUp) && message.inputQueue.followUp.every((value) => typeof value === 'string') ? { inputQueue: { steering: [...message.inputQueue.steering], followUp: [...message.inputQueue.followUp], ...(Array.isArray(message.inputQueue.inputs) ? { inputs: message.inputQueue.inputs } : {}), ...(Array.isArray(message.inputQueue.steeringInputs) ? { steeringInputs: message.inputQueue.steeringInputs } : {}) } } : {}),
       ...(activeTurn ? { activeTurn } : {}),
       ...(completedRun ? { completedRun } : {}),
       atSequence: message.atSequence,

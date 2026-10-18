@@ -317,3 +317,13 @@ it('matches a stripped native plan prompt to history rather than adding a duplic
   const turns = [{ id: 'pending', prompt: '/plan research', startedAt: entries[0]!.timestamp, events: [runtime(1, { type: 'message_start', message: { role: 'user', content: 'research' } })] }]
   expect(timelineItems(entries, turns, [])).toHaveLength(1)
 })
+
+it('retains attachment-only native turns and uses final image references when live content becomes history', () => {
+  const attachment = { id: 'a'.repeat(64), kind: 'image' as const, name: '图片', size: 100, mediaType: 'image/png' }
+  const timestamp = '2026-10-18T00:00:00.000Z'
+  const entry = { id: 'user-image', parentId: null, type: 'message', timestamp, raw: { type: 'message', message: { role: 'user', content: [{ type: 'image', attachment, piNestProjection: 'attachment-reference' }] } } }
+  const items = timelineItems([entry], [], [])
+  expect(items).toHaveLength(1)
+  expect(items[0]?.attachments).toEqual([attachment])
+  expect(items[0]?.prompt).toBe('图片附件')
+})

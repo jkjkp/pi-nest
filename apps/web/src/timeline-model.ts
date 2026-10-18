@@ -1,3 +1,5 @@
+import { messageAttachments } from './session-run-model.js'
+import type { AttachmentRef } from '@pi-nest/contracts'
 import { modelCallError, type ModelCallError } from './model-call-error.js'
 import type { RuntimeTurn } from './session-run-model.js'
 import type { PiSessionHistoryEntry } from './history.js'
@@ -31,6 +33,8 @@ export type TimelinePart =
   | { arguments?: Record<string, unknown>; events: TimelineEvent[]; kind: 'tool'; toolCallId: string | undefined; toolName: string }
 
 export type TimelineItem = {
+  attachmentWarning?: string
+  attachments?: AttachmentRef[]
   steering?: RuntimeTurn['steering']
   plan?: { text: string; source: 'completion' | 'custom'; id: string }
   diagnostics: TimelineDiagnostic[]
@@ -250,7 +254,13 @@ function projectEvent(item: TimelineItem, event: TimelineEvent) {
     if (projectAssistantContent(item, event, nativeMessage.content) || error) return
     return diagnostic(item, event, 'unrenderable_message')
   }
-  if ((type === 'message' || type === 'message_start' || type === 'message_end') && nativeMessage?.role === 'user') return
+  if ((type === 'message' || type === 'message_start' || type === 'message_end') && nativeMessage?.role === 'user') {
+    if (typeof nativeMessage.piNestAttachmentWarning === 'string') item.attachmentWarning = nativeMessage.piNestAttachmentWarning
+    const attachments = messageAttachments(nativeMessage)
+    if (item.attachments?.length && attachments.length !== item.attachments.length) item.attachmentWarning = 'Pi 实际记录的附件与提交不一致，请检查模型或扩展。'
+    if (attachments.length || item.attachments) item.attachments = attachments
+    return
+  }
   if ((type === 'message' || type === 'message_end') && nativeMessage?.role === 'toolResult') {
     const toolCallId = typeof nativeMessage.toolCallId === 'string' ? nativeMessage.toolCallId : undefined
     const toolName = typeof nativeMessage.toolName === 'string' ? nativeMessage.toolName : '未知工具'
@@ -277,7 +287,7 @@ function historyItems(entries: PiSessionHistoryEntry[]): TimelineItem[] {
     const nativeMessage = message(event)
     if (entry.type === 'message' && nativeMessage?.role === 'user') {
       if (active) items.push(active)
-      active = newTurn(entry.id, textContent(nativeMessage.content), entry.timestamp)
+      active = newTurn(entry.id, textContent(nativeMessage.content) ?? (messageAttachments(nativeMessage).length ? '图片附件' : undefined), entry.timestamp)
       active.runId = entry.runId
       active.runIndex = entry.runIndex
       projectEvent(active, event)
@@ -313,7 +323,7 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
   for (const turn of turns) {
     // A local turn exists only after an explicit user prompt has been accepted.
     // Runtime events may enrich it, but cannot create another conversation node.
-    if (!turn.prompt?.trim()) continue
+    if (!turn.prompt?.trim() && !turn.attachments?.length) continue
     const runtimeTiming = { ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }), startedAt: turn.executionStartedAt ?? turn.startedAt }
     const nativeUser = turn.events.find((event) => record(event.event.message)?.role === 'user')
     const nativeId = record(nativeUser?.event.message)?.id
@@ -332,6 +342,7 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
       return Date.parse(item.startedAt) >= Date.parse(turn.submittedAt ?? turn.startedAt) - 2_000
     })
     const item = newTurn(persisted?.id ?? turn.id, turn.prompt ?? promptFrom(turn.events), persisted?.startedAt ?? turn.startedAt, runtimeTiming)
+    item.attachments = turn.attachments ?? persisted?.attachments
     item.displayId = `${turn.id}:${turn.submittedAt ?? turn.startedAt}`
     item.steering = turn.steering ? { ...turn.steering, ...(persisted ? { status: 'applied' as const } : {}) } : undefined
     for (const event of turn.events) projectEvent(item, runtimeEvent(event))

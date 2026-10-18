@@ -741,3 +741,14 @@ it('forwards compaction instructions and refreshes history and statistics after 
   expect(invalidateHistory).toHaveBeenCalledWith('session-a')
   expect(runtime.getSessionStatistics).toHaveBeenCalledWith('session-a')
 })
+
+it('restores attachment-bearing steering and follow-up receipts from a fresh watch without guessing by text', () => {
+  useWorkspaceStore.setState({ runs: {}, runtimeStates: {}, watchStates: {}, runtimeDetails: {} })
+  const runtime = runtimeMock()
+  createSessionRunController({ runtime: runtime as never, invalidateHistory: vi.fn() })
+  const ref = { id: 'a'.repeat(64), kind: 'image', name: 'image.png', size: 100, mediaType: 'image/png' }
+  runtime.snapshot({ sessionId: 'recovered', runtime: { lifecycle: 'notLoaded', revision: 1 }, inputQueue: { steering: [], followUp: ['same'], inputs: [{ id: 'recovered-file', message: 'same', attachmentIds: [ref.id], attachments: [ref], recoveryRequired: true }] } })
+  expect(useWorkspaceStore.getState().runs.recovered?.pendingInputs?.[0]).toMatchObject({ id: 'recovered-file', attachments: [ref], recoveryRequired: true })
+  runtime.snapshot({ sessionId: 'active', runtime: { lifecycle: 'active', revision: 1 }, activeTurn: { runId: 'run', prompt: 'original', startedAt: '2026-10-18T00:00:00Z' }, inputQueue: { steering: ['same'], followUp: ['same'], steeringInputs: [{ id: 'steering-id', message: 'same', attachmentIds: [ref.id], attachments: [ref] }], inputs: [{ id: 'follow-up-id', message: 'same', attachmentIds: [ref.id], attachments: [ref] }] } })
+  expect(useWorkspaceStore.getState().runs.active?.pendingInputs?.map((input) => ({ id: input.id, mode: input.mode, attachments: input.attachments }))).toEqual([{ id: 'steering-id', mode: 'steer', attachments: [ref] }, { id: 'follow-up-id', mode: 'follow_up', attachments: [ref] }])
+})

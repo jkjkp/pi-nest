@@ -1,3 +1,5 @@
+import { attachmentDrop } from './attachment-draft.js'
+import { AttachmentPicker, ComposerAttachments } from './attachment-ui.js'
 import { filePreviewKey } from './file-preview-state.js'
 import { FilePreviewResizeHandle } from './file-preview-resize-handle.js'
 import { OpenToolFile } from './tool-file-context.js'
@@ -41,7 +43,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const session = useWorkspaceSession(sessionRuns)
   const navigate = useNavigate()
   const {
-    selectedSessionId, selectedSession, sessionResolution, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
+    attachmentDraft, selectedSessionId, selectedSession, sessionResolution, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
@@ -49,6 +51,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     startDraft, openProject, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
+  const [attachmentError, setAttachmentError] = useState<string>()
   const isHome = !selectedSessionId && !isDraft
   const displaySession = selectedSession ?? history?.session
   const sessionTitle = displaySession ? sessionDisplayName(displaySession) : selectedSessionId ? sessionResolution === 'missing' ? '会话暂不可用' : '正在恢复会话…' : draftProject ? `新对话 · ${draftProject.name}` : '项目'
@@ -103,8 +106,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   }
 
   function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up') {
-    if ((!selectedSessionId && !isDraft) || !prompt.trim()) return
-    if (commands.submit(prompt)) return
+    if ((!selectedSessionId && !isDraft) || (!prompt.trim() && !attachmentDraft.items.length)) return
+    if (!attachmentDraft.items.length && commands.submit(prompt)) return
     if (mode !== 'steer') setFollowingLatest(true)
     session.submitPrompt(mode)
   }
@@ -207,7 +210,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
         style={{ '--inspector-width': `${previewWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': !isHome && currentPreview && previewOpen ? `min(${Number.isFinite(previewWidth) ? previewWidth : 300}px, calc((100% - var(--navigation-width)) / 2))` : '0px' } as CSSProperties}
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
-        <section className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
+        <section onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={(event) => { try { attachmentDrop(event, attachmentDraft.add) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '附件无法添加') } }} className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
           <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-background/95 py-2 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {(selectedSession || draftProject) && <Folder aria-hidden="true" className="size-[18px] shrink-0 text-muted-foreground" />}
@@ -228,6 +231,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                     </section>
                   </div>
                 ) : selectedSessionId ? <RenderErrorBoundary key={selectedSessionId} scope="timeline" sessionId={selectedSessionId}><SessionTimeline
+                  sessionId={selectedSessionId}
                   onSelectModel={() => { setModelSelectorOpen(true); void openModels() }}
                   sessionCwd={displaySession?.cwd}
                   error={historyError}
@@ -273,6 +277,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                       </p>
                     )}
                     {!currentRun?.error && runtimeStatus && <p className="text-xs text-muted-foreground" role={runtimeStates[selectedSessionId]?.lifecycle === 'failed' ? 'alert' : undefined}>{runtimeStatus}</p>}
+                    {currentRun?.attachmentWarning && <p role="status" className="text-xs text-warning">{currentRun.attachmentWarning}</p>}
                     {controlError && <p className="text-xs text-destructive" role="alert">{controlError}</p>}
                     {draftError && <p className="text-xs text-destructive" role="alert">{draftError}</p>}
                   </section>
@@ -288,12 +293,14 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             <div className="conversation-stage">
               <div className="conversation-stage-content">
                 <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) setPendingJump({ sessionId: selectedSessionId, turnId: planTurnId }) }} onRetryPlan={retryHistory} /></div>
-                <PendingInputs inputs={(currentRun?.pendingInputs ?? []).filter((input) => !currentRun?.turns.some((turn) => turn.steering?.queuedInputId === input.id && turn.steering.status !== 'failed'))} key={selectedSessionId} onSteer={steerQueued} disabled={submittingInput || status !== 'running'} />
+                <PendingInputs inputs={(currentRun?.pendingInputs ?? []).filter((input) => !currentRun?.turns.some((turn) => (turn.steering?.queuedInputId === input.id || input.submissionId && turn.submissionId === input.submissionId && turn.steering) && turn.steering?.status !== 'failed'))} key={selectedSessionId} onResume={(inputId) => { void sessionRuns.resumeQueued(selectedSessionId, inputId).catch((cause) => setAttachmentError(cause.message)) }} onSteer={steerQueued} disabled={submittingInput || status !== 'running'} />
+                <ComposerAttachments draft={attachmentDraft} />
+                {attachmentError && <p role="alert" className="pointer-events-auto mb-2 text-xs text-destructive">{attachmentError}<Button variant="ghost" size="sm" onClick={() => setAttachmentError(undefined)}>关闭</Button></p>}
                 <CommandNotice notice={commands.notice} />
                 <div data-slot="message-composer" className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-[#303030] sm:px-6">
               <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
               <CommandComposer
-                onExecuteCommand={(value) => { commands.submit(value) }}
+                onExecuteCommand={(value) => { if (attachmentDraft.items.length) setAttachmentError('带附件时暂不支持命令，请先移除附件。'); else commands.submit(value) }}
                 key={selectedSessionId || `draft:${draftProject?.key}`}
                 sessionId={isDraft ? '' : selectedSessionId}
                 sessionRuns={sessionRuns}
@@ -301,6 +308,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
                 disabled={(!selectedSession && !isDraft) || creatingDraft}
                 id="prompt"
+                onPaste={(event) => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); try { attachmentDraft.add(files) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '粘贴失败') } } }}
                 maxLength={20_000}
                 onFocus={(event) => resizeComposerTextarea(event.currentTarget)}
                 onValueChange={(value) => {
@@ -322,6 +330,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                 value={prompt}
               />
               <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-2">
+                <AttachmentPicker draft={attachmentDraft} onError={setAttachmentError} />
                 {planStatus && <DropdownMenu><DropdownMenuTrigger asChild><Button aria-label="查看 Plan 模式详情" className="h-auto px-0 py-0 text-xs text-muted-foreground" size="sm" type="button" variant="ghost">{planStatus}</Button></DropdownMenuTrigger><DropdownMenuContent align="start" side="top" className="max-w-xs"><p className="px-2 py-1.5 text-sm font-medium">Plan mode</p><p className="px-2 pb-2 text-xs text-muted-foreground">{planPolicy ?? '当前阶段未提供工具列表。'}</p></DropdownMenuContent></DropdownMenu>}
                 {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
                 <div className="ml-auto flex max-w-full items-center gap-2">
@@ -331,9 +340,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   <ThinkingSelector key={`thinking:${selectedSessionId}`} open={thinkingOpen} onOpenChange={setThinkingOpen} current={currentThinkingLevel} levels={thinkingLevels} status={thinkingStatus} error={thinkingError} failure={thinkingFailure} disabled={!selectedSession || modelStatus === 'loading' || modelStatus === 'switching'} isActive={isActive} onLoad={() => void openThinking()} onRetry={() => void openThinking(true)} onSelect={changeThinkingLevel} />
                   {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
                   {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
-                  {status === 'running' && prompt.trim().length > 0 && <Button className="rounded-full" disabled={submittingInput || commands.busy} onClick={() => submitPrompt()} title={parseComposerCommand(prompt) ? '执行输入的命令' : '当前任务完成后执行'} type="button">{submittingInput ? '提交中…' : parseComposerCommand(prompt) ? '执行命令' : '排队'}</Button>}
+                  {status === 'running' && (prompt.trim().length > 0 || attachmentDraft.items.length > 0) && <Button className="rounded-full" disabled={submittingInput || commands.busy || attachmentDraft.busy} onClick={() => submitPrompt()} title={parseComposerCommand(prompt) ? '执行输入的命令' : '当前任务完成后执行'} type="button">{submittingInput ? '提交中…' : parseComposerCommand(prompt) ? '执行命令' : '排队'}</Button>}
                   {!isActive && (
-                    <Button aria-label="发送提示词" className="rounded-full" disabled={commands.busy || (!selectedSession && !isDraft) || creatingDraft || modelStatus === 'loading' || modelStatus === 'switching' || thinkingStatus === 'loading' || thinkingStatus === 'switching' || prompt.trim().length === 0} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
+                    <Button aria-label="发送提示词" className="rounded-full" disabled={commands.busy || (!selectedSession && !isDraft) || creatingDraft || modelStatus === 'loading' || modelStatus === 'switching' || thinkingStatus === 'loading' || thinkingStatus === 'switching' || attachmentDraft.busy || (prompt.trim().length === 0 && attachmentDraft.items.length === 0)} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
                   )}
                 </div>
                 </div>
@@ -351,12 +360,12 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   )
 }
 
-export function PendingInputs({ inputs, onSteer, disabled = false }: { inputs: PendingInput[]; onSteer?: (inputId: string) => void; disabled?: boolean }) {
+export function PendingInputs({ inputs, onSteer, onResume, disabled = false }: { inputs: PendingInput[]; onResume?: (inputId: string) => void; onSteer?: (inputId: string) => void; disabled?: boolean }) {
   const [expanded, setExpanded] = useState(false)
-  const pending = inputs.filter((input) => input.mode === 'follow_up')
+  const pending = inputs.filter((input) => input.mode === 'follow_up' || input.mode === 'steer' && input.attachments?.length)
   if (pending.length === 0) return null
   return <section aria-label="待处理消息" aria-live="polite" className="pointer-events-auto mb-2 rounded-xl border bg-background/95 px-3 py-2 text-xs">
-    <ul className="max-h-32 space-y-1 overflow-y-auto">{(expanded ? pending : pending.slice(0, 2)).map((input) => <li className="flex min-w-0 items-center gap-2" key={input.id}><span className="shrink-0 text-muted-foreground">{input.submitting ? '正在提交' : input.mode === 'steer' ? '引导待生效' : '已排队'}</span><span className={expanded ? 'min-w-0 flex-1 whitespace-pre-wrap break-words' : 'min-w-0 flex-1 truncate'} title={input.message}>{input.message}</span>{input.mode === 'follow_up' && onSteer && <Button className="h-auto shrink-0 px-2 py-1 text-xs" disabled={disabled || input.submitting} onClick={() => onSteer(input.id)} type="button" variant="ghost">引导</Button>}</li>)}</ul>
+    <ul className="max-h-32 space-y-1 overflow-y-auto">{(expanded ? pending : pending.slice(0, 2)).map((input) => <li className="flex min-w-0 items-center gap-2" key={input.id}><span className="shrink-0 text-muted-foreground">{input.submitting ? '正在提交' : input.mode === 'steer' ? '引导待生效' : '已排队'}</span><span className={expanded ? 'min-w-0 flex-1 whitespace-pre-wrap break-words' : 'min-w-0 flex-1 truncate'} title={input.message}>{input.message}{input.attachments?.length ? ` · ${input.attachments.length} 个附件` : ''}</span>{input.recoveryRequired && onResume ? <Button type="button" size="sm" variant="outline" onClick={() => onResume(input.id)}>确认继续</Button> : input.mode === 'follow_up' && onSteer && <Button className="h-auto shrink-0 px-2 py-1 text-xs" disabled={disabled || input.submitting} onClick={() => onSteer(input.id)} type="button" variant="ghost">引导</Button>}</li>)}</ul>
     {pending.length > 2 && <Button className="mt-1 h-auto p-0 text-xs text-muted-foreground" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} type="button" variant="ghost">{expanded ? '收起' : `还有 ${pending.length - 2} 条`}</Button>}
   </section>
 }

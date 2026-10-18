@@ -1,3 +1,4 @@
+import { MessageAttachments } from './attachment-ui.js'
 import { ModelCallErrorNotice } from './model-call-error-notice.js'
 import { RenderErrorBoundary } from './render-error-boundary.js'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -20,7 +21,7 @@ import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 import type { PendingInput, PromptStatus } from './session-run-model.js'
 
-export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onSelectModel, onRetrySteering, onJumpToTurn, onJumpToUnloadedTurn, onReadTurnPrompt, onLoadEarlier, onPendingJumpHandled, onRetry, onRetryNavigation, navigationNotice, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, sessionCwd, scrollViewport, registerTimelineScroll, systemEvents = [], turnIndex, turns = [] }: {
+export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onSelectModel, onRetrySteering, onJumpToTurn, onJumpToUnloadedTurn, onReadTurnPrompt, onLoadEarlier, onPendingJumpHandled, onRetry, onRetryNavigation, navigationNotice, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, sessionId, sessionCwd, scrollViewport, registerTimelineScroll, systemEvents = [], turnIndex, turns = [] }: {
   error: boolean
   hasEarlier?: boolean
   history: PiSessionHistoryResponse | undefined
@@ -44,6 +45,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   pendingJumpTurnId?: string
   runMessage?: string
   runStatus?: PromptStatus
+  sessionId?: string
   sessionCwd?: string
   scrollViewport?: HTMLElement | null
   registerTimelineScroll?: (controller: TimelineScrollController | null) => void
@@ -162,7 +164,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   return <section className="conversation-stage pb-6">{navigationNotice && <div className="conversation-stage-content mb-2 flex items-center justify-end gap-2 text-xs text-muted-foreground" role="status"><span>{navigationNotice}</span><Button onClick={onRetryNavigation} size="sm" variant="ghost" type="button">重试</Button></div>}{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail key={history?.session.id} onReadPrompt={readPrompt} activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>{virtualItems.map((virtualItem) => {
     if (virtualItem.index === 0) return <div className="absolute left-0 top-0 w-full" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>
     const item = items[virtualItem.index - 1]!
-    return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><RenderErrorBoundary scope="turn" sessionId={history?.session.id} turnId={item.id}><TurnItem cwd={sessionCwd ?? history?.session.cwd} hasFollowingTurn={item !== activeExecutionItem} onSelectModel={onSelectModel} onRetrySteering={onRetrySteering} canRetrySteering={isRunning} isRunning={isRunning && item === activeExecutionItem} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} runMessage={item === activeExecutionItem ? runMessage : undefined} runStatus={item === activeExecutionItem ? runStatus : undefined} /></RenderErrorBoundary></div>
+    return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement} style={{ transform: `translateY(${virtualItem.start}px)` }}><RenderErrorBoundary scope="turn" sessionId={history?.session.id} turnId={item.id}><TurnItem sessionId={sessionId ?? history?.session.id} cwd={sessionCwd ?? history?.session.cwd} hasFollowingTurn={item !== activeExecutionItem} onSelectModel={onSelectModel} onRetrySteering={onRetrySteering} canRetrySteering={isRunning} isRunning={isRunning && item === activeExecutionItem} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} runMessage={item === activeExecutionItem ? runMessage : undefined} runStatus={item === activeExecutionItem ? runStatus : undefined} /></RenderErrorBoundary></div>
   })}</div>{pendingImplementation.map((input) => <PendingUserInput input={input} key={input.id} />)}</div></section>
 }
 
@@ -198,12 +200,14 @@ function HistoryError({ onRetry }: { onRetry: () => void }) {
   )
 }
 
-const TurnItem = memo(function TurnItem({ isRunning, item, cwd, hasFollowingTurn, onFinalAnswerStart, onFinalAnswerStream, onSelectModel, onRetrySteering, canRetrySteering, runMessage, runStatus }: { cwd?: string; hasFollowingTurn: boolean; onSelectModel?: () => void; onRetrySteering?: (turnId: string) => void; canRetrySteering: boolean; isRunning: boolean; item: TimelineItem; onFinalAnswerStart: ((turnId: string) => void) | undefined; onFinalAnswerStream: (() => void) | undefined; runMessage: string | undefined; runStatus: PromptStatus | undefined }) {
+const TurnItem = memo(function TurnItem({ sessionId, isRunning, item, cwd, hasFollowingTurn, onFinalAnswerStart, onFinalAnswerStream, onSelectModel, onRetrySteering, canRetrySteering, runMessage, runStatus }: { sessionId?: string; cwd?: string; hasFollowingTurn: boolean; onSelectModel?: () => void; onRetrySteering?: (turnId: string) => void; canRetrySteering: boolean; isRunning: boolean; item: TimelineItem; onFinalAnswerStart: ((turnId: string) => void) | undefined; onFinalAnswerStream: (() => void) | undefined; runMessage: string | undefined; runStatus: PromptStatus | undefined }) {
   const presentation = useMemo(() => projectTurnPresentation(item, isRunning), [item, isRunning])
   const files = useMemo(() => projectTurnFiles(presentation.activities, cwd), [presentation.activities, cwd])
   const summaryState = turnFileSummaryState(item, isRunning, runStatus, hasFollowingTurn)
   return (
     <article className="space-y-3" data-turn-id={item.id}>
+      {sessionId && !!item.attachments?.length && <div className="ml-auto w-fit max-w-full"><MessageAttachments attachments={item.attachments} scope={{ kind: 'session', sessionId }} /></div>}
+      {item.attachmentWarning && <p role="alert" className="text-xs text-destructive">{item.attachmentWarning}</p>}
       {item.prompt && <UserPrompt prompt={item.prompt} startedAt={item.startedAt} />}
       {item.steering && item.steering.status !== 'applied' ? <div aria-live="polite" className="flex items-center justify-end gap-2 text-xs text-muted-foreground"><span className={item.steering.status === 'failed' ? 'text-destructive' : undefined}>{item.steering.status === 'sending' ? '发送中…' : item.steering.status === 'accepted' ? '引导已发送' : item.steering.status === 'unknown' ? '正在确认发送状态，请勿重复发送' : `发送失败：${item.steering.error ?? '请重试'}`}</span>{item.steering.status === 'failed' && onRetrySteering && <Button disabled={!canRetrySteering} onClick={() => onRetrySteering(item.id)} type="button" size="sm" variant="ghost">重试</Button>}</div> : <TurnExecution files={files} showFileProgress={!summaryState} isRunning={isRunning} item={item} presentation={presentation} runMessage={runMessage} runStatus={runStatus} />}
       {item.modelErrors?.map((error, index) => <ModelCallErrorNotice error={error} onSelectModel={onSelectModel} key={index} />)}

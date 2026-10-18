@@ -45,8 +45,8 @@ export async function fetchSessions() {
   return body.sessions
 }
 
-export async function createSession(cwd: string, prompt: string) {
-  const body = await configurationRequest<{ session?: PiSessionSummary }>('/api/sessions', { body: JSON.stringify({ cwd, prompt }), method: 'POST' })
+export async function createSession(cwd: string, prompt: string, attachments?: { attachmentIds: string[]; submissionId: string; draftId: string }) {
+  const body = await configurationRequest<{ session?: PiSessionSummary }>('/api/sessions', { body: JSON.stringify({ cwd, prompt, ...attachments }), method: 'POST' })
   if (!body.session?.id || !body.session.cwd) throw new Error('Invalid Pi session creation response')
   return body.session
 }
@@ -81,14 +81,14 @@ export async function saveSessionSettings(sessionId: string, settings: Partial<P
   return body.settings
 }
 
-async function configurationResponse(path: string, init: RequestInit = {}) {
+export async function configurationResponse(path: string, init: RequestInit = {}) {
   const bootstrap = await fetch('/api/runtime/bootstrap', { method: 'POST', signal: init.signal })
   if (!bootstrap.ok) throw new Error('无法验证访问权限')
   const { token } = await bootstrap.json() as { token: string }
   const response = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-pi-nest-token': token, ...init.headers }, cache: 'no-store' })
   if (!response.ok) {
     const body = await response.json().catch(() => undefined)
-    throw new Error(typeof body?.error === 'string' ? body.error : '请求失败，请重试。')
+    throw Object.assign(new Error(typeof body?.error === 'string' ? body.error : '请求失败，请重试。'), { code: body?.code, sessionId: body?.sessionId })
   }
   return response
 }
