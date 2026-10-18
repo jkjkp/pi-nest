@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSessionFilePreviewRoutes, readSessionFilePreview } from './session-file-preview.js'
+import { createSessionFilePreviewRoutes, readSessionFilePreview, readSessionImagePreview } from './session-file-preview.js'
 import { RuntimeSecurity } from './runtime-security.js'
 import { createApp } from './app.js'
 
@@ -71,4 +71,57 @@ it('resolves grep paths relative to its directory or single-file search scope', 
   await expect(readSessionFilePreview(cwd, '../a.ts', 'src')).rejects.toMatchObject({ status: 403 })
   await expect(readSessionFilePreview(cwd, 'wrong.ts', 'src/a.ts')).rejects.toMatchObject({ status: 400 })
   await expect(readSessionFilePreview(cwd, 'outside', '..')).rejects.toMatchObject({ status: 403 })
+})
+
+const pixelPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64')
+const pixelJpeg = Buffer.from('/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAAaADAAQAAAABAAAAAQAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgAAQABAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMAAgICAgICAwICAwUDAwMFBgUFBQUGCAYGBgYGCAoICAgICAgKCgoKCgoKCgwMDAwMDA4ODg4ODw8PDw8PDw8PD//bAEMBAgICBAQEBwQEBxALCQsQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEP/dAAQAAf/aAAwDAQACEQMRAD8A+L6KKK/lM/38P//Z', 'base64')
+const pixelGif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64')
+const pixelWebp = Buffer.from('UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA', 'base64')
+
+it('authorizes image bytes independently and chooses MIME from actual data rather than the extension', async () => {
+  writeFileSync(join(cwd, '像素.jpg'), pixelPng)
+  const security = new RuntimeSecurity('http://localhost:31415')
+  const app = createApp(undefined, security)
+  const request = (headers: Record<string, string>, body: object = { path: '像素.jpg' }) => app.request('/api/sessions/one/file-preview/image', { method: 'POST', headers, body: JSON.stringify(body) })
+  const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }
+  expect((await request({})).status).toBe(403)
+  expect((await request({ ...headers, origin: 'https://evil.example' })).status).toBe(403)
+  expect((await request({ ...headers, 'x-pi-nest-token': 'wrong' })).status).toBe(403)
+  const image = await request(headers)
+  expect(image.status).toBe(200)
+  expect(image.headers.get('content-type')).toBe('image/png')
+  expect(image.headers.get('cache-control')).toBe('no-store')
+  expect(image.headers.get('x-content-type-options')).toBe('nosniff')
+  expect(decodeURIComponent(image.headers.get('x-pi-nest-file-path')!)).toBe('像素.jpg')
+  expect(Buffer.from(await image.arrayBuffer())).toEqual(pixelPng)
+  expect((await request(headers, { path: 'x', content: 'forged' })).status).toBe(400)
+  expect((await request(headers, { path: 'x'.repeat(17_000) })).status).toBe(413)
+})
+
+it('allows raster formats, bounds image dimensions and bytes, and rejects corrupt or active content', async () => {
+  for (const [name, bytes, mime] of [['pixel.png', pixelPng, 'image/png'], ['pixel.jpeg', pixelJpeg, 'image/jpeg'], ['pixel.gif', pixelGif, 'image/gif'], ['pixel.webp', pixelWebp, 'image/webp']] as const) {
+    writeFileSync(join(cwd, name), bytes)
+    expect((await readSessionImagePreview(cwd, name)).mime).toBe(mime)
+  }
+  writeFileSync(join(cwd, 'fake.png'), '<html><script>alert(1)</script></html>')
+  writeFileSync(join(cwd, 'vector.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>')
+  writeFileSync(join(cwd, 'truncated.png'), pixelPng.subarray(0, 18))
+  const forged = Buffer.from(pixelPng); forged[0] = 0
+  writeFileSync(join(cwd, 'forged.png'), forged)
+  for (const path of ['fake.png', 'vector.svg', 'truncated.png', 'forged.png']) await expect(readSessionImagePreview(cwd, path)).rejects.toMatchObject({ status: 415 })
+  writeFileSync(join(cwd, 'large.png'), Buffer.alloc(10 * 1_048_576 + 1))
+  await expect(readSessionImagePreview(cwd, 'large.png')).rejects.toMatchObject({ status: 413 })
+  const enormous = Buffer.from(pixelPng)
+  enormous.writeUInt32BE(40_000_001, 16)
+  writeFileSync(join(cwd, 'enormous.png'), enormous)
+  await expect(readSessionImagePreview(cwd, 'enormous.png')).rejects.toMatchObject({ status: 413 })
+})
+
+it('applies the same directory and symlink restrictions to image previews', async () => {
+  writeFileSync(join(directory, 'private.png'), pixelPng)
+  symlinkSync(join(directory, 'private.png'), join(cwd, 'escape.png'))
+  for (const path of ['../private.png', join(directory, 'private.png'), 'escape.png']) await expect(readSessionImagePreview(cwd, path)).rejects.toMatchObject({ status: 403 })
+  mkdirSync(join(cwd, 'images'))
+  writeFileSync(join(cwd, 'images', 'pixel.png'), pixelPng)
+  expect((await readSessionImagePreview(cwd, 'pixel.png', 'images')).path).toBe('images/pixel.png')
 })

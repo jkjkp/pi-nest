@@ -13,11 +13,12 @@
   },
   "dependencies": {
     "@hono/node-server": "2.1.1",
+    "@pi-nest/contracts": "workspace:*",
     "@pi-nest/pi-adapter": "workspace:*",
+    "buffer-image-size": "0.6.4",
     "hono": "4.13.8",
     "ws": "8.21.3",
-    "zod": "4.6.5",
-    "@pi-nest/contracts": "workspace:*"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/node": "22.19.19",
