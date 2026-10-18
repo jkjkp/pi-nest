@@ -56,6 +56,7 @@ type WorkspaceState = {
   setExtensionStatus: (sessionId: string, key: string, status: string | undefined) => void
   setExtensionWidget: (sessionId: string, key: string, lines: string[] | undefined) => void
   setInspectorOpen: (open: boolean) => void
+  setInspectorWidth: (width: number) => void
   hideProject: (cwd: string) => void
   setNavigationOpen: (open: boolean) => void
   setNavigationOrder: (order: NavigationOrder) => void
@@ -283,6 +284,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     return { extensionWidgets: { ...state.extensionWidgets, [sessionId]: widgets } }
   }),
   setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
+  setInspectorWidth: (width) => set({ inspectorWidth: Number.isFinite(width) ? Math.max(240, width) : 300 }),
   hideProject: (cwd) => set((state) => ({ hiddenProjectCwds: { ...state.hiddenProjectCwds, [cwd]: true } })),
   setNavigationOpen: (navigationOpen) => set({ navigationOpen }),
   setNavigationOrder: (navigationOrder) => set({ navigationOrder }),
@@ -324,7 +326,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
       storage: createJSONStorage(() => (typeof window === 'undefined' ? unavailableStorage : window.localStorage)),
     },
   ),

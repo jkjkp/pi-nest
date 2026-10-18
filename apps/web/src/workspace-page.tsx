@@ -1,3 +1,4 @@
+import { FilePreviewResizeHandle } from './file-preview-resize-handle.js'
 import { OpenToolFile } from './tool-file-context.js'
 import { SessionFilePreview } from './session-file-preview.js'
 import { ProjectDialog } from './project-dialog.js'
@@ -9,7 +10,7 @@ import { parseComposerCommand } from './composer-commands.js'
 import { useWorkspaceCommands } from './use-workspace-commands.js'
 import { SessionRenameDialog } from './session-rename-dialog.js'
 import { SessionStatistics } from './session-statistics.js'
-import { type CSSProperties, useCallback, useEffect, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowDown, CircleX, Folder, LoaderCircle, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 
@@ -55,6 +56,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const watchReady = useWorkspaceStore((state) => state.watchStates[selectedSessionId] === 'ready')
   const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
   const inspectorWidth = useWorkspaceStore((state) => state.inspectorWidth)
+  const setInspectorWidth = useWorkspaceStore((state) => state.setInspectorWidth)
+  const workspaceGrid = useRef<HTMLDivElement>(null)
   const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
   const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
@@ -188,7 +191,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
       <div
         className="workspace-grid grid min-h-0 flex-1"
-        style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': !isHome && currentPreview && inspectorOpen ? `${inspectorWidth}px` : '0px' } as CSSProperties}
+        ref={workspaceGrid}
+        style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': !isHome && currentPreview && inspectorOpen ? `${Number.isFinite(inspectorWidth) ? inspectorWidth : 300}px` : '0px' } as CSSProperties}
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
         <section className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
@@ -216,6 +220,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   </div>
                 ) : selectedSessionId ? <RenderErrorBoundary key={selectedSessionId} scope="timeline" sessionId={selectedSessionId}><SessionTimeline
                   onSelectModel={() => { setModelSelectorOpen(true); void openModels() }}
+                  sessionCwd={displaySession?.cwd}
                   error={historyError}
                   hasEarlier={historyQuery.hasPreviousPage}
                   history={history}
@@ -328,7 +333,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </div>
           </div>}
         </section>
-        <aside aria-hidden={isHome || !currentPreview || !inspectorOpen} className={`hidden min-h-0 overflow-hidden bg-card/60 xl:block ${!isHome && currentPreview && inspectorOpen ? 'border-l' : 'pointer-events-none'}`} inert={isHome || !currentPreview || !inspectorOpen}>{filePreview}</aside>
+        <aside aria-hidden={isHome || !currentPreview || !inspectorOpen} className={`relative hidden min-h-0 min-w-0 bg-card/60 xl:block ${!isHome && currentPreview && inspectorOpen ? 'border-l' : 'pointer-events-none'}`} inert={isHome || !currentPreview || !inspectorOpen}>
+          {!isHome && currentPreview && inspectorOpen && <FilePreviewResizeHandle containerRef={workspaceGrid} navigationWidth={navigationWidth} width={inspectorWidth} onWidthChange={setInspectorWidth} />}
+          <div className="h-full min-h-0 overflow-hidden">{filePreview}</div>
+        </aside>
       </div>
     </main></OpenToolFile>
   )

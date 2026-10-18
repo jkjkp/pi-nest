@@ -269,3 +269,16 @@ it('merges registered empty projects with native session directories without dup
   expect(groups.find((project) => project.cwd === '/empty')).toMatchObject({ name: 'empty', sessions: [] })
   expect(groups.find((project) => project.cwd === '/existing')?.sessions).toEqual([{ id: 'one', cwd: '/existing' }])
 })
+
+it('persists file-preview width as a browser preference and rejects invalid sizes', () => {
+  const store = useWorkspaceStore.getState()
+  try {
+    store.setInspectorWidth(480)
+    expect(useWorkspaceStore.getState().inspectorWidth).toBe(480)
+    expect(useWorkspaceStore.persist.getOptions().partialize!(useWorkspaceStore.getState())).toMatchObject({ inspectorWidth: 480 })
+    store.setInspectorWidth(-100)
+    expect(useWorkspaceStore.getState().inspectorWidth).toBe(240)
+    store.setInspectorWidth(Infinity)
+    expect(useWorkspaceStore.getState().inspectorWidth).toBe(300)
+  } finally { store.setInspectorWidth(300) }
+})
