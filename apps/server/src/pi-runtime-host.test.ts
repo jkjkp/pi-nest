@@ -202,3 +202,21 @@ it('reads native session totals and adds the actual auto-compaction setting', as
   expect(response.data).toMatchObject({ cost: 0.01, autoCompactionEnabled: true, contextUsage: { percent: null } })
   await host.close()
 })
+
+it('passes image input to the real RPC shape and refuses a known text-only model before prompt admission', async () => {
+  const image = { type: 'image' as const, data: 'base64', mimeType: 'image/png' }
+  const process = new FakeProcess()
+  process.send = vi.fn(async (command) => command.type === 'get_state' ? { data: { isStreaming: false, model: { input: ['text', 'image'] } } } : { success: true }) as typeof process.send
+  const host = hostFor(process)
+  const prompt = host.beginPrompt('look', [image])
+  await prompt.accepted
+  await prompt.settled
+  expect(process.send).toHaveBeenCalledWith({ type: 'prompt', message: 'look', images: [image] })
+  await host.close()
+  const unsupported = new FakeProcess()
+  unsupported.send = vi.fn(async () => ({ data: { model: { input: ['text'] } } })) as unknown as typeof unsupported.send
+  const next = hostFor(unsupported).beginPrompt('look', [image])
+  void next.settled.catch(() => {})
+  await expect(next.accepted).rejects.toThrow('不支持图片')
+  expect(unsupported.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'prompt' }))
+})

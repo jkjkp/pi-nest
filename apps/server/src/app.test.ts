@@ -1,3 +1,4 @@
+import { AttachmentStore } from './attachment-store.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createApp } from './app.js'
@@ -36,6 +37,7 @@ const nativeSession = {
 }
 function runtimeMock() {
   return {
+    attachments: new AttachmentStore(),
     history: {
       history: vi.fn((session, options) => adapter.readPiSessionHistory({ expectedCwd: session.cwd, expectedSessionId: session.id, sessionFile: session.sessionFile, ...options })),
       index: vi.fn((session, revision) => adapter.readPiSessionTurnIndex({ expectedCwd: session.cwd, expectedSessionId: session.id, sessionFile: session.sessionFile, ...(revision ? { revision } : {}) })),

@@ -1,3 +1,4 @@
+import { AttachmentStore } from './attachment-store.js'
 import { selectProjectFolder } from './project-folder-picker.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -56,7 +57,7 @@ it('does not overwrite a damaged registry or create a folder before detecting th
 
 it('secures folder operations and allows the first Pi prompt only in an explicitly registered directory', async () => {
   const security = new RuntimeSecurity('http://localhost:31415')
-  const runtime = { beginPrompt: vi.fn(() => ({ accepted: Promise.resolve() })) } as unknown as PiRuntimeRegistry
+  const runtime = { attachments: new AttachmentStore(), beginPrompt: vi.fn(() => ({ accepted: Promise.resolve() })) } as unknown as PiRuntimeRegistry
   const app = createApp(runtime, security, projects)
   const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }
   const request = { kind: 'create', parent: directory, name: 'new-project' }

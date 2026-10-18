@@ -1,3 +1,4 @@
+import { AttachmentError } from './attachment-store.js'
 import { HistorySnapshotExpired } from './session-history-snapshots.js'
 import { runtimeSettingsSchema } from './configuration-schema.js'
 import type { PiSessionsResponse, PiSessionHistoryResponse } from '@pi-nest/contracts'
@@ -28,7 +29,10 @@ const sessionNameSchema = z
 
 const createSessionSchema = z.object({
   cwd: z.string().trim().min(1).max(4_096),
-  prompt: z.string().trim().min(1).max(20_000),
+  prompt: z.string().trim().max(20_000),
+  attachmentIds: z.array(z.string().regex(/^(?:[a-f0-9-]{36}|[a-f0-9]{64})$/)).min(1).max(8).optional(),
+  submissionId: z.string().uuid().optional(),
+  draftId: z.string().uuid().optional(),
 }).strict()
 
 const branchSessionSchema = z.discriminatedUnion('kind', [
@@ -82,7 +86,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
         const sessions = await listPiSessions()
 
         return context.json({
-          sessions: sessions.map(({ id, cwd, name, firstMessage, createdAt, updatedAt }) => ({ id, cwd, name, firstMessage, createdAt, updatedAt })),
+          sessions: sessions.map(({ id, cwd, name, firstMessage, createdAt, updatedAt }) => ({ id, cwd, name, firstMessage: runtime.attachments.displayPrompt(firstMessage, id), createdAt, updatedAt })),
         } satisfies PiSessionsResponse)
       } catch {
         return context.json({ error: 'Failed to list Pi sessions' }, 500)
@@ -90,37 +94,48 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
     })
     .post('/sessions', async (context) => {
       const parsed = createSessionSchema.safeParse(await context.req.json().catch(() => undefined))
-      if (!parsed.success) return context.json({ error: 'Invalid session creation request' }, 400)
+      if (!parsed.success || !parsed.data.prompt && !parsed.data.attachmentIds?.length) return context.json({ error: 'Invalid session creation request' }, 400)
 
       const workspace = await resolveWorkspace(parsed.data.cwd, projects)
       if (workspace === undefined) return context.json({ error: 'Failed to resolve Pi workspace' }, 500)
       if (!workspace) return context.json({ error: 'Pi workspace not found' }, 404)
       if (workspace === 'registered' && (!security.acceptsOrigin(context.req.header('origin')) || !security.acceptsToken(context.req.header('x-pi-nest-token')))) return context.json({ error: '项目访问被拒绝' }, 403)
 
+      const input = { message: parsed.data.prompt, ...(parsed.data.attachmentIds ? { attachmentIds: parsed.data.attachmentIds, submissionId: parsed.data.submissionId } : {}) }
+      const draftScope = `draft:${parsed.data.draftId}:${parsed.data.cwd}`
+      if (input.attachmentIds?.length && (!security.acceptsOrigin(context.req.header('origin')) || !security.acceptsToken(context.req.header('x-pi-nest-token')))) return context.json({ error: '附件访问被拒绝' }, 403)
       let created: ReturnType<typeof createPiSession> | undefined
       let busy = false
       try {
-        created = createPiSession(parsed.data.cwd)
-        const prompt = runtime.beginPrompt(created, parsed.data.prompt)
-        if (!prompt) {
-          busy = true
-          throw new Error('Pi runtime is busy')
-        }
-        await prompt.accepted
-        return context.json({
-          session: {
-            createdAt: created.createdAt,
-            cwd: created.cwd,
-            firstMessage: parsed.data.prompt.replace(/\s+/g, ' ').trim(),
-            id: created.id,
-            updatedAt: new Date().toISOString(),
-          },
-        }, 201)
+        if (input.attachmentIds?.length) await runtime.attachments.prepare(draftScope, input)
+        const result = await runtime.attachments.deliver(draftScope, input, async () => {
+          created = createPiSession(parsed.data.cwd)
+          runtime.attachments.transfer(input, draftScope, created.id)
+          const prompt = runtime.beginPrompt(created, parsed.data.prompt || '请查看附件。', ...(input.attachmentIds?.length ? [input] : []))
+          if (!prompt) {
+            busy = true
+            throw new Error('Pi runtime is busy')
+          }
+          await prompt.accepted
+          return {
+            session: {
+              createdAt: created.createdAt,
+              cwd: created.cwd,
+              firstMessage: parsed.data.prompt.replace(/\s+/g, ' ').trim() || '附件对话',
+              id: created.id,
+              updatedAt: new Date().toISOString(),
+            },
+          }
+        })
+        return context.json(result, 201)
       } catch (cause) {
+        const uncertainSessionId = runtime.attachments.uncertainSession(draftScope, input)
+        if (uncertainSessionId) return context.json({ error: '输入状态待确认，会话已保留，请查看历史后再决定是否重试。', code: 'SUBMISSION_UNKNOWN', sessionId: uncertainSessionId }, 409)
         if (created) {
           await runtime.deleteSession(created.id).catch(() => undefined)
           await deletePiSession({ expectedCwd: created.cwd, expectedSessionId: created.id, sessionFile: created.sessionFile }).catch(() => undefined)
         }
+        if (cause instanceof AttachmentError) return context.json({ error: cause.message, code: cause.code }, cause.status)
         if (!busy) console.error('Failed to initialize Pi session', { cause })
         return context.json(
           busy
@@ -142,9 +157,20 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
       let finish: (() => void) | undefined
       try {
         finish = await mutation
-        const { session, draft } = branchPiSession({ ...parsed.data, expectedSessionId: resolved.session.id, expectedCwd: resolved.session.cwd, sessionFile: resolved.session.sessionFile })
+        const { session, draft, draftContent, entries } = branchPiSession({ ...parsed.data, expectedSessionId: resolved.session.id, expectedCwd: resolved.session.cwd, sessionFile: resolved.session.sessionFile })
         const { id, cwd, createdAt, name, firstMessage } = session
-        return context.json({ session: { id, cwd, createdAt, updatedAt: createdAt, name, firstMessage }, draft }, 201)
+        runtime.attachments.inherit(entries, resolved.session.id, id)
+        let attachments: import('@pi-nest/contracts').AttachmentRef[] | undefined
+        let draftText = draft
+        if (draftContent) {
+          runtime.attachments.inherit(draftContent, resolved.session.id, id)
+          const projected = runtime.attachments.project({ role: 'user', content: draftContent }, id)
+          if (Array.isArray(projected.content)) {
+            attachments = projected.content.flatMap((block: any) => block.attachment ? [block.attachment] : [])
+            draftText = projected.content.flatMap((block: any) => block.type === 'text' ? [block.text] : []).join('')
+          }
+        }
+        return context.json({ session: { id, cwd, createdAt, updatedAt: createdAt, name, firstMessage: runtime.attachments.displayPrompt(firstMessage, id) }, draft: draftText, ...(attachments?.length ? { attachments } : {}) }, 201)
       } catch (cause) {
         if (historyRevisionChanged(cause)) return context.json({ error: '会话历史已变化，请刷新后重试。', code: 'HISTORY_REVISION_CHANGED' }, 409)
         if (cause instanceof PiSessionBranchTargetError) return context.json({ error: cause.message, code: 'INVALID_BRANCH_TARGET' }, 400)
@@ -184,7 +210,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
         })
         context.header('Cache-Control', 'no-store')
         return context.json({
-          ...history,
+          ...runtime.attachments.project(history, sessionId),
           session: { id: resolved.session.id, cwd: resolved.session.cwd, updatedAt: resolved.session.updatedAt },
         } satisfies PiSessionHistoryResponse)
       } catch (cause) {
@@ -209,7 +235,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
       try {
         const turnIndex = runtime.history.index(resolved.session, query.data.revision)
         context.header('Cache-Control', 'no-store')
-        return context.json(turnIndex)
+        return context.json({ ...turnIndex, entries: turnIndex.entries.map((entry) => ({ ...entry, promptPreview: runtime.attachments.displayPrompt(entry.promptPreview, sessionId) ?? '' })) })
       } catch (cause) {
         if (cause instanceof HistorySnapshotExpired) return context.json({ error: 'History snapshot expired', code: 'HISTORY_SNAPSHOT_EXPIRED' }, 409)
         if (historyRevisionChanged(cause)) return context.json({ error: 'Pi session changed while reading history', code: 'REVISION_CHANGED' }, 409)

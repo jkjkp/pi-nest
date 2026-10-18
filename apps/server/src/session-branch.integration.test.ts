@@ -1,3 +1,4 @@
+import { AttachmentStore } from './attachment-store.js'
 import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,7 +30,7 @@ it('clones the native snapshot after runtime shutdown writes, and keeps fork rev
   vi.mocked(listPiSessions).mockResolvedValue([{ id: 'source', cwd: directory, sessionFile, createdAt: timestamp, updatedAt: timestamp, name: undefined, firstMessage: 'Original question' }])
   const finish = vi.fn()
   let shutdownComplete!: () => void
-  const registry = { beginMutation: vi.fn(() => new Promise<() => void>((resolve) => {
+  const registry = { attachments: new AttachmentStore(), beginMutation: vi.fn(() => new Promise<() => void>((resolve) => {
     shutdownComplete = () => {
       renamePiSession({ ...binding, name: 'Shutdown metadata' })
       resolve(finish)
@@ -74,7 +75,7 @@ it('serves pinned native history, pagination and index over HTTP during generati
   vi.mocked(listPiSessions).mockResolvedValue([session])
   const history = new SessionHistorySnapshots()
   history.pin(session, 'live')
-  const registry = { history, isPromptStreaming: () => true }
+  const registry = { attachments: new AttachmentStore(), history, isPromptStreaming: () => true }
   const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry))
   appendFileSync(session.sessionFile, JSON.stringify({ type: 'message', id: 'live-user', parentId: 'second', timestamp, message: { role: 'user', content: 'third', timestamp: Date.parse(timestamp) } }) + '\n')
   const response = await app.request('/api/sessions/source/history?limit=1')

@@ -1,3 +1,4 @@
+import { AttachmentStore } from './attachment-store.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RuntimeWebSocketBroker } from './runtime-websocket.js'
@@ -16,6 +17,7 @@ function socket() {
 function runtime() {
   const subscribers = new Map<string, Set<(event: any) => void>>()
   return {
+    attachments: new AttachmentStore(),
     abort: vi.fn().mockResolvedValue(true),
     commandWhenIdle: vi.fn<(...args: any[]) => Promise<any> | undefined>().mockResolvedValue({ data: { levels: ['low', 'high'], models: [{ id: 'model-2', name: 'Model 2', provider: 'test' }] } }),
     getSessionStatistics: vi.fn().mockResolvedValue({ data: { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 }, cost: 0.1, contextUsage: { tokens: null, percent: null, contextWindow: 1000000 }, sessionFile: "/private/session.jsonl" } }),

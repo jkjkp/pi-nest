@@ -1,6 +1,6 @@
 import { latestCacheHitRate } from './runtime-statistics.js'
 import type { PiRuntimeEvent, RuntimeFailureKind as PiRuntimeFailureKind } from '@pi-nest/contracts'
-import { PiRpcConnectionError, PiRpcProcess, type PiRpcProcessState } from '@pi-nest/pi-adapter'
+import { PiRpcConnectionError, PiRpcProcess, type PiRpcProcessState, type PiInputImage } from '@pi-nest/pi-adapter'
 
 export type PiRuntimeSession = {
   cwd: string
@@ -149,7 +149,7 @@ export class PiRuntimeHost {
     return prompt.settled
   }
 
-  beginPrompt(message: string): PiRuntimePrompt {
+  beginPrompt(message: string, images?: PiInputImage[]): PiRuntimePrompt {
     let accept: () => void = () => undefined
     let rejectAcceptance: (cause: unknown) => void = () => undefined
     let accepted = false
@@ -160,14 +160,14 @@ export class PiRuntimeHost {
       }
       rejectAcceptance = reject
     })
-    const settled = this.runPrompt(message, accept).catch((cause) => {
+    const settled = this.runPrompt(message, accept, images).catch((cause) => {
       if (!accepted) rejectAcceptance(cause)
       throw cause
     })
     return { accepted: acceptance, settled }
   }
 
-  private async runPrompt(message: string, accept: () => void): Promise<PiRuntimePromptResult> {
+  private async runPrompt(message: string, accept: () => void, images?: PiInputImage[]): Promise<PiRuntimePromptResult> {
     if (this.running) throw new Error('Pi runtime session is already running')
     await this.start()
     const process = this.process
@@ -189,7 +189,12 @@ export class PiRuntimeHost {
     })
 
     try {
-      await process.send({ type: 'prompt', message })
+      if (images?.length) {
+        const state = stateFrom(await process.send({ type: 'get_state' }))
+        const model = state.model as { input?: string[] } | undefined
+        if (Array.isArray(model?.input) && !model.input.includes('image')) throw new Error('当前模型不支持图片输入，请选择视觉模型。')
+      }
+      await process.send({ type: 'prompt', message, ...(images?.length ? { images } : {}) })
       accept()
       const state = stateFrom(await process.send({ type: 'get_state' }))
       this.model = modelFrom(state)
@@ -222,6 +227,11 @@ export class PiRuntimeHost {
   async command(command: Record<string, unknown>): Promise<Record<string, unknown>> {
     await this.start()
     if (!this.process) throw new Error('Pi runtime process is unavailable')
+    if (Array.isArray(command.images) && command.images.length) {
+      const state = stateFrom(await this.process.send({ type: 'get_state' }))
+      const model = state.model as { input?: string[] } | undefined
+      if (Array.isArray(model?.input) && !model.input.includes('image')) throw new Error('当前模型不支持图片输入，请选择视觉模型。')
+    }
     const response = await this.process.send(command) as Record<string, unknown>
     if (command.type === 'get_session_stats') {
       const state = stateFrom(await this.process.send({ type: 'get_state' }))

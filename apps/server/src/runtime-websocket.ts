@@ -1,3 +1,4 @@
+import { AttachmentError } from './attachment-store.js'
 import { runtimeStatisticsSchema } from './runtime-statistics.js'
 import type { RuntimeMessage, RuntimeCommand } from '@pi-nest/contracts'
 import { listPiSessions, PiRpcCommandError } from '@pi-nest/pi-adapter'
@@ -7,16 +8,18 @@ import type { PiRuntimeEvent, PiRuntimeSession } from './pi-runtime-host.js'
 import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry, type PiRuntimeSessionSnapshot, type PiRuntimeStatus } from './pi-runtime-registry.js'
 import { PiRuntimeResumeError } from './session-event-stream.js'
 
+const attachmentsShape = { attachmentIds: z.array(z.string().regex(/^(?:[a-f0-9-]{36}|[a-f0-9]{64})$/)).min(1).max(8).optional(), submissionId: z.string().uuid().optional() }
 const commandSchema = z.discriminatedUnion('type', [
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_commands') }).strict(),
   z.object({ id: z.string().min(1).max(128), resume: z.object({ after: z.number().int().nonnegative() }).strict().optional(), sessionId: z.string().min(1), type: z.literal('watch') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('unwatch') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('resume') }).strict(),
-  z.object({ id: z.string().min(1).max(128), message: z.string().trim().min(1).max(20_000), sessionId: z.string().min(1), type: z.literal('prompt') }).strict(),
+  z.object({ id: z.string().min(1).max(128), ...attachmentsShape, message: z.string().trim().max(20_000), sessionId: z.string().min(1), type: z.literal('prompt') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('abort') }).strict(),
-  z.object({ id: z.string().min(1).max(128), message: z.string().trim().min(1).max(20_000), sessionId: z.string().min(1), type: z.literal('steer') }).strict(),
-  z.object({ id: z.string().min(1).max(128), message: z.string().trim().min(1).max(20_000), sessionId: z.string().min(1), type: z.literal('follow_up') }).strict(),
-  z.object({ id: z.string().min(1).max(128), message: z.string().min(1).max(20_000), index: z.number().int().nonnegative(), sessionId: z.string().min(1), type: z.literal('steer_queued') }).strict(),
+  z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), inputId: z.string().uuid(), type: z.literal('resume_queued') }).strict(),
+  z.object({ id: z.string().min(1).max(128), ...attachmentsShape, message: z.string().trim().max(20_000), sessionId: z.string().min(1), type: z.literal('steer') }).strict(),
+  z.object({ id: z.string().min(1).max(128), ...attachmentsShape, message: z.string().trim().max(20_000), sessionId: z.string().min(1), type: z.literal('follow_up') }).strict(),
+  z.object({ id: z.string().min(1).max(128), inputId: z.string().uuid().optional(), message: z.string().max(20_000), index: z.number().int().nonnegative(), sessionId: z.string().min(1), type: z.literal('steer_queued') }).strict(),
   z.object({ id: z.string().min(1).max(128), provider: z.string().min(1).max(256), modelId: z.string().min(1).max(256), sessionId: z.string().min(1), type: z.literal('set_model') }).strict(),
   z.object({ id: z.string().min(1).max(128), level: z.string().min(1).max(64), sessionId: z.string().min(1), type: z.literal('set_thinking_level') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), customInstructions: z.string().trim().min(1).max(20_000).optional(), type: z.literal('compact') }).strict(),
@@ -72,6 +75,7 @@ export class RuntimeWebSocketBroker {
 
     if (command.data.type === 'watch') return this.watch(socket, state, command.data)
     if (command.data.type === 'unwatch') return this.unwatch(socket, state, command.data)
+    if ('message' in command.data && command.data.type !== 'steer_queued' && !command.data.message.trim() && !('attachmentIds' in command.data && command.data.attachmentIds?.length)) return this.error(socket, command.data.id, 'INVALID_COMMAND', '输入不能为空', command.data.sessionId)
     const watched = state.sessions.get(command.data.sessionId)
     if (!watched) return this.error(socket, command.data.id, 'SESSION_NOT_WATCHED', 'Pi session is not watched', command.data.sessionId)
 
@@ -87,6 +91,11 @@ export class RuntimeWebSocketBroker {
       }
     }
 
+    if (command.data.type === 'resume_queued') {
+      try { await this.runtime.resumeQueued(watched.session, command.data.inputId); return this.ack(socket, command.data.id, command.data.type, command.data.sessionId) }
+      catch (cause) { return this.error(socket, command.data.id, 'QUEUE_RECOVERY_FAILED', cause instanceof Error ? cause.message : '恢复失败', command.data.sessionId) }
+    }
+
     if (command.data.type === 'abort') {
       if (!(await this.runtime.abort(command.data.sessionId))) return this.error(socket, command.data.id, 'SESSION_NOT_RUNNING', 'Pi session is not running', command.data.sessionId)
       return this.ack(socket, command.data.id, command.data.type, command.data.sessionId)
@@ -94,11 +103,11 @@ export class RuntimeWebSocketBroker {
 
     if (command.data.type === 'steer' || command.data.type === 'follow_up' || command.data.type === 'steer_queued') {
       try {
-        const result = await this.runtime.commandWhileRunning(command.data.sessionId, { type: command.data.type, message: command.data.message, ...(command.data.type === 'steer_queued' ? { index: command.data.index } : {}) })
+        const result = await this.runtime.commandWhileRunning(command.data.sessionId, { ...command.data })
         if (!result) return this.error(socket, command.data.id, 'SESSION_NOT_RUNNING', 'Pi session is not running', command.data.sessionId)
         return this.ack(socket, command.data.id, command.data.type, command.data.sessionId)
-      } catch {
-        return this.error(socket, command.data.id, 'COMMAND_FAILED', 'Pi runtime command failed', command.data.sessionId)
+      } catch (cause) {
+        return this.error(socket, command.data.id, cause instanceof AttachmentError ? cause.code : 'COMMAND_FAILED', cause instanceof Error ? cause.message : 'Pi runtime command failed', command.data.sessionId)
       }
     }
 
@@ -146,6 +155,16 @@ export class RuntimeWebSocketBroker {
       }
     }
 
+    if (command.data.attachmentIds?.length) {
+      try {
+        await this.runtime.attachments.prepare(command.data.sessionId, command.data)
+        const receipt = this.runtime.attachments.receipt(command.data.sessionId, command.data)
+        if (receipt) {
+          if (typeof (receipt as { runId?: unknown }).runId === 'string') return this.ack(socket, command.data.id, command.data.type, command.data.sessionId, receipt)
+          return this.error(socket, command.data.id, 'SUBMISSION_RECORDED', '此输入已被接受，请查看队列或会话历史，勿重复发送。', command.data.sessionId)
+        }
+      } catch (cause) { return this.error(socket, command.data.id, cause instanceof AttachmentError ? cause.code : 'ATTACHMENT_FAILED', cause instanceof Error ? cause.message : '附件准备失败', command.data.sessionId) }
+    }
     try {
       const resumed = this.runtime.resume(watched.session)
       if (!resumed) return this.error(socket, command.data.id, 'SESSION_BUSY', 'Pi session is already running', command.data.sessionId)
@@ -154,10 +173,18 @@ export class RuntimeWebSocketBroker {
       if (cause instanceof PiRuntimeCapacityError) return this.error(socket, command.data.id, 'RUNTIME_CAPACITY_EXCEEDED', 'Pi runtime capacity is exhausted', command.data.sessionId)
       return this.error(socket, command.data.id, 'COMMAND_FAILED', 'Pi runtime command failed', command.data.sessionId)
     }
-    const prompt = this.runtime.beginPrompt(watched.session, command.data.message)
-    if (!prompt) return this.error(socket, command.data.id, 'SESSION_BUSY', 'Pi session is already running', command.data.sessionId)
-    this.ack(socket, command.data.id, command.data.type, command.data.sessionId, { runId: prompt.runId })
-    void prompt.settled.catch(() => this.error(socket, command.data.id, 'PROMPT_FAILED', 'Pi session prompt failed', command.data.sessionId))
+    try {
+      const input = { message: command.data.message, ...(command.data.attachmentIds ? { attachmentIds: command.data.attachmentIds, submissionId: command.data.submissionId } : {}) }
+      if (input.attachmentIds?.length) await this.runtime.attachments.prepare(command.data.sessionId, input)
+      const result = await this.runtime.attachments.deliver(command.data.sessionId, input, async () => {
+        const prompt = this.runtime.beginPrompt(watched.session, input.message || '请查看附件。', ...(input.attachmentIds?.length ? [input] : []))
+        if (!prompt) throw new PiRuntimeBusyError()
+        if (input.attachmentIds?.length) await prompt.accepted
+        void prompt.settled.catch(() => this.error(socket, command.data.id, 'PROMPT_FAILED', 'Pi session prompt failed', command.data.sessionId))
+        return { runId: prompt.runId }
+      }, watched.session.sessionFile)
+      this.ack(socket, command.data.id, command.data.type, command.data.sessionId, result)
+    } catch (cause) { this.error(socket, command.data.id, cause instanceof AttachmentError ? cause.code : 'PROMPT_FAILED', cause instanceof Error ? cause.message : '输入失败', command.data.sessionId) }
   }
 
   private async watch(socket: RuntimeSocket, state: SocketState, command: { id: string; resume?: { after: number }; sessionId: string }): Promise<void> {

@@ -768,3 +768,84 @@ it('still publishes model and thinking changes observed during an idle state rea
     expect(statuses.filter((status) => status.lifecycle === 'loading')).toHaveLength(1)
   } finally { await registry.close() }
 })
+
+it('keeps same-text attachments distinct through queue promotion and persists a recoverable queue', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-attachment-queue-'))
+  const host = { ...hostMock(), command: vi.fn().mockResolvedValue({ success: true }) }
+  host.prompt.mockImplementation(() => new Promise(() => {}))
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  const stream = (text: string) => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(Buffer.from(text)); c.close() } })
+  try {
+    await registry.beginPrompt(session, 'first')!.accepted
+    const a = await registry.attachments.upload(stream('one'), session.id, 'one.txt', 'text/plain')
+    const b = await registry.attachments.upload(stream('two'), session.id, 'two.txt', 'text/plain')
+    const first = { type: 'follow_up', message: 'same', attachmentIds: [a.id], submissionId: crypto.randomUUID() }
+    const second = { type: 'follow_up', message: 'same', attachmentIds: [b.id], submissionId: crypto.randomUUID() }
+    await registry.commandWhileRunning(session.id, first)
+    await registry.commandWhileRunning(session.id, second)
+    await registry.commandWhileRunning(session.id, first)
+    expect(registry.attachments.queue(session.id)).toHaveLength(2)
+    host.command.mockRejectedValueOnce(new Error('steer refused'))
+    await expect(registry.commandWhileRunning(session.id, { type: 'steer_queued', inputId: second.submissionId, message: 'same', index: 0 })).rejects.toThrow('refused')
+    expect(registry.attachments.queue(session.id)).toHaveLength(2)
+    await registry.commandWhileRunning(session.id, { type: 'steer_queued', inputId: second.submissionId, message: 'same', index: 0 })
+    expect(host.command.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'steer', message: expect.stringContaining(b.id) })
+    const { capturePiSessionHistory } = await import('@pi-nest/pi-adapter')
+    vi.mocked(capturePiSessionHistory).mockReturnValueOnce({ bytes: 1, revision: 'a'.repeat(64), entries: [{ type: 'message', id: 'steered', parentId: null, timestamp: 'now', message: { role: 'user', timestamp: 1, content: host.command.mock.calls.at(-1)![0].message } }] })
+    host.emit({ type: 'turn_end' })
+    expect(registry.attachments.queue(session.id).map((input) => input.id)).toEqual([first.submissionId])
+    const restarted = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => hostMock() as unknown as PiRuntimeHost })
+    const snapshots: any[] = []
+    try {
+      const unwatch = await restarted.watch(session.id, 'restored', 0, () => {}, () => {}, (snapshot) => snapshots.push(snapshot))
+      expect(snapshots.at(-1).inputQueue.inputs).toMatchObject([{ id: first.submissionId, recoveryRequired: true, attachments: [{ id: a.id }] }])
+      unwatch()
+    } finally { await restarted.close() }
+  } finally { await registry.close(); const { rm } = await import('node:fs/promises'); await rm(directory, { force: true, recursive: true }) }
+})
+
+it('retires a recovered attachment queue item already recorded by Pi instead of replaying it', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-attachment-recovery-'))
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: vi.fn() })
+  const id = crypto.randomUUID()
+  registry.attachments.queue(session.id, [{ id, submissionId: id, message: 'already done' }])
+  const { capturePiSessionHistory } = await import('@pi-nest/pi-adapter')
+  vi.mocked(capturePiSessionHistory).mockReturnValueOnce({ bytes: 1, revision: 'a'.repeat(64), entries: [{ type: 'message', id: 'native', parentId: null, timestamp: 'now', message: { role: 'user', timestamp: 1, content: `already done\n\n<pi-nest-attachments id="${id}">\n[]\n</pi-nest-attachments>` } }] })
+  try {
+    await registry.resumeQueued(session, id)
+    expect(registry.attachments.queue(session.id)).toEqual([])
+  } finally { await registry.close(); const { rm } = await import('node:fs/promises'); await rm(directory, { recursive: true, force: true }) }
+})
+
+it('persists accepted attachment steering until the native user message is observed and restores its full receipt after restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-steering-recovery-'))
+  const host = { ...hostMock(), command: vi.fn().mockResolvedValue({ success: true }) }
+  host.prompt.mockImplementation(() => new Promise(() => {}))
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    await registry.beginPrompt(session, 'first')!.accepted
+    const file = await registry.attachments.upload(new ReadableStream({ start(c) { c.enqueue(Buffer.from('steering file')); c.close() } }), session.id, 'input.txt', 'text/plain')
+    const input = { message: 'change direction', attachmentIds: [file.id], submissionId: crypto.randomUUID() }
+    await registry.commandWhileRunning(session.id, { type: 'steer', ...input })
+    const nativeMessage = host.command.mock.calls.at(-1)![0].message
+    host.emit({ type: 'queue_update', steering: [nativeMessage], followUp: [] })
+    const snapshots: any[] = []
+    const stop = await registry.watch(session.id, 'steering', 0, () => {}, () => {}, (snapshot) => snapshots.push(snapshot))
+    expect(snapshots.at(-1).inputQueue.steering).toEqual(['change direction'])
+    expect(snapshots.at(-1).inputQueue.steeringInputs[0]).toMatchObject({ id: input.submissionId, attachments: [{ id: file.id }] })
+    stop()
+    const restarted = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => hostMock() as unknown as PiRuntimeHost })
+    try {
+      const restored: any[] = []
+      const unwatch = await restarted.watch(session.id, 'restarted', 0, () => {}, () => {}, (snapshot) => restored.push(snapshot))
+      expect(restored.at(-1).inputQueue.inputs).toMatchObject([{ id: input.submissionId, recoveryRequired: true, attachmentIds: [file.id] }])
+      unwatch()
+    } finally { await restarted.close() }
+    host.emit({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: nativeMessage }] } })
+    expect(registry.attachments.steering(session.id)).toHaveLength(1)
+    const { capturePiSessionHistory } = await import('@pi-nest/pi-adapter')
+    vi.mocked(capturePiSessionHistory).mockReturnValueOnce({ bytes: 1, revision: 'a'.repeat(64), entries: [{ type: 'message', id: 'steered', parentId: null, timestamp: 'now', message: { role: 'user', timestamp: 1, content: nativeMessage } }] })
+    host.emit({ type: 'turn_end' })
+    expect(registry.attachments.steering(session.id)).toEqual([])
+  } finally { await registry.close(); const { rm } = await import('node:fs/promises'); await rm(directory, { recursive: true, force: true }) }
+})

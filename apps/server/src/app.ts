@@ -1,3 +1,4 @@
+import { createAttachmentRoutes } from './attachment-routes.js'
 import { createSessionFilePreviewRoutes } from './session-file-preview.js'
 import { serveWebRelease } from './web-release.js'
 import { Hono } from 'hono'
@@ -15,6 +16,7 @@ export function createApp(runtime = new PiRuntimeRegistry(), security = new Runt
     .get('/api/health', (context) => context.json({ status: 'ok' }))
     .route('/api/configuration', createConfigurationRoutes(runtime, security))
     .use('/api/sessions/:sessionId/settings', configurationSecurity(security))
+    .route('/api/attachments', createAttachmentRoutes(runtime.attachments, security, projects))
     .route('/api/projects', createProjectRoutes(projects, security))
     .route('/api', createSessionFilePreviewRoutes(security))
     .route('/api', createSessionRoutes(runtime, projects, security))

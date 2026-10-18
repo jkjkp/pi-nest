@@ -1,7 +1,9 @@
+import { AttachmentStore, AttachmentError } from './attachment-store.js'
+import type { AttachmentInput, PiQueuedInput } from '@pi-nest/contracts'
 import type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntimeStatus, PiRuntimeExtensionUi, PiRuntimeSessionSnapshot } from '@pi-nest/contracts'
 export type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntimeStatus, PiRuntimeExtensionUi, PiRuntimeSessionSnapshot } from '@pi-nest/contracts'
 
-import { PiRpcCommandError } from '@pi-nest/pi-adapter'
+import { capturePiSessionHistory, PiRpcCommandError } from '@pi-nest/pi-adapter'
 
 import { SessionHistorySnapshots } from './session-history-snapshots.js'
 import { randomUUID } from 'node:crypto'
@@ -24,8 +26,7 @@ type UnloadReason = 'capacityEvicted' | 'deleted' | 'failed' | 'idleExpired' | '
 type ActiveTurn = { firstSequence?: number; native?: true; prompt?: string; runId: string; startedAt: string; stopReason?: string; waitingForExtension?: true }
 type RuntimeState = {
   inputQueue?: PiRuntimeSessionSnapshot['inputQueue']
-  // shortcut: Follow-ups live in memory; persist them if server-restart recovery is required.
-  queuedFollowUps?: string[]
+  queuedFollowUps?: PiQueuedInput[]
   promotingInput?: boolean
   activeTurn?: ActiveTurn
   completedRun?: { runId: string; stopReason: string }
@@ -63,6 +64,7 @@ function positiveInteger(value: number, name: string) {
 }
 
 export type PiRuntimeRegistryOptions = {
+  attachmentDirectory?: string
   createHost?: HostFactory
   eventBufferDirectory?: string
   maxLoadedRuntimes?: number
@@ -74,6 +76,7 @@ export type PiRuntimeRegistryOptions = {
 /** Single-process ownership and lifecycle manager for native Pi sessions. */
 export class PiRuntimeRegistry {
   readonly history = new SessionHistorySnapshots()
+  readonly attachments: AttachmentStore
   private readonly createHost: HostFactory
   private admission = Promise.resolve()
   private readonly entries = new Map<string, RegistryEntry>()
@@ -88,6 +91,7 @@ export class PiRuntimeRegistry {
   private usageClock = 0
 
   constructor(options: PiRuntimeRegistryOptions = {}) {
+    this.attachments = new AttachmentStore(options.attachmentDirectory ?? (process.env.VITEST ? join(tmpdir(), `pi-nest-test-attachments-${randomUUID()}`) : undefined))
     this.runtimeStartTimeoutMs = positiveInteger(options.runtimeStartTimeoutMs ?? configuredPositiveInteger('PI_NEST_RUNTIME_START_TIMEOUT_MS', 30_000), 'PI_NEST_RUNTIME_START_TIMEOUT_MS')
     this.maxLoadedRuntimes = positiveInteger(options.maxLoadedRuntimes ?? configuredPositiveInteger('PI_NEST_MAX_LOADED_RUNTIMES', 4), 'PI_NEST_MAX_LOADED_RUNTIMES')
     this.createHost = options.createHost ?? ((session) => new PiRuntimeHost(session, undefined, this.runtimeStartTimeoutMs))
@@ -126,19 +130,28 @@ export class PiRuntimeRegistry {
       if (typeof command.message !== 'string') throw new Error('Invalid follow-up')
       const state = this.stateFor(sessionId)
       state.queuedFollowUps ??= []
-      state.queuedFollowUps.push(command.message)
-      await this.publishInputQueue(sessionId)
-      return { success: true }
+      const input: PiQueuedInput = { id: typeof command.submissionId === 'string' ? command.submissionId : randomUUID(), message: command.message, ...(Array.isArray(command.attachmentIds) ? { attachmentIds: command.attachmentIds as string[], submissionId: command.submissionId as string } : {}) }
+      await this.attachments.prepare(sessionId, input)
+      if (input.attachmentIds?.length) input.attachments = this.attachments.refs(input.attachmentIds, sessionId)
+      return this.attachments.deliver(sessionId, input, async () => {
+        if (!state.queuedFollowUps!.some((queued) => queued.id === input.id)) state.queuedFollowUps!.push(input)
+        try { this.saveQueue(sessionId); await this.publishInputQueue(sessionId) }
+        catch (cause) { state.queuedFollowUps = state.queuedFollowUps!.filter((queued) => queued.id !== input.id); throw cause }
+        return { success: true }
+      }, entry.session.sessionFile, 'follow_up')
     }
     if (command.type === 'steer_queued') {
       const state = this.stateFor(sessionId)
-      const index = Number(command.index) - (state.inputQueue?.followUp.length ?? 0)
+      const index = typeof command.inputId === 'string' ? state.queuedFollowUps?.findIndex((input) => input.id === command.inputId) ?? -1 : Number(command.index) - (state.inputQueue?.followUp.length ?? 0)
       const queue = state.queuedFollowUps
-      if (state.promotingInput || !queue || index < 0 || queue[index] !== command.message) throw new Error('Queued message has already changed')
+      if (state.promotingInput || !queue || index < 0 || queue[index]?.message !== command.message) throw new Error('Queued message has already changed')
       state.promotingInput = true
       try {
-        const response = await entry.host.command({ type: 'steer', message: command.message })
+        const input = queue[index]!
+        const prepared = await this.attachments.prepare(sessionId, input)
+        const response = input.attachmentIds?.length ? await this.sendAttachmentSteering(sessionId, input, entry.host) : await entry.host.command({ type: 'steer', ...prepared })
         queue.splice(index, 1)
+        this.saveQueue(sessionId)
         await this.publishInputQueue(sessionId)
         return response
       } finally {
@@ -146,7 +159,32 @@ export class PiRuntimeRegistry {
         this.drainFollowUp(sessionId)
       }
     }
+    if (command.type === 'steer' && Array.isArray(command.attachmentIds)) {
+      const input = command as AttachmentInput
+      const prepared = await this.attachments.prepare(sessionId, input)
+      return this.attachments.deliver(sessionId, input, () => this.sendAttachmentSteering(sessionId, input, entry.host, prepared), entry.session.sessionFile, 'steer')
+    }
     return entry.host.command(command)
+  }
+
+  private async sendAttachmentSteering(sessionId: string, input: AttachmentInput, host: PiRuntimeHost, prepared?: Awaited<ReturnType<AttachmentStore['prepare']>>) {
+    const payload = prepared ?? await this.attachments.prepare(sessionId, input)
+    const pending: PiQueuedInput = { ...input, id: input.submissionId!, attachments: this.attachments.refs(input.attachmentIds ?? [], sessionId) }
+    const saved = this.attachments.steering(sessionId)
+    if (!saved.some((item) => item.id === pending.id)) this.attachments.steering(sessionId, [...saved, pending])
+    try {
+      const response = await host.command({ type: 'steer', ...payload })
+      if ((response.data as { disposition?: string } | undefined)?.disposition === 'handled') this.attachments.steering(sessionId, this.attachments.steering(sessionId).filter((item) => item.id !== pending.id))
+      return response
+    }
+    catch (cause) {
+      if (!(cause instanceof Error && /connection|timed out|exited/i.test(cause.message))) this.attachments.steering(sessionId, this.attachments.steering(sessionId).filter((item) => item.id !== pending.id))
+      else {
+        const queued = this.stateFor(sessionId).queuedFollowUps?.find((item) => item.id === pending.id)
+        if (queued) { queued.recoveryRequired = true; this.saveQueue(sessionId) }
+      }
+      throw cause
+    }
   }
 
   /** Serializes an idle-only RPC control command with other session mutations. */
@@ -279,7 +317,7 @@ export class PiRuntimeRegistry {
     this.cancelUnload(session.id)
     this.locks.set(session.id, 'mutation')
     return this.projectionsReady.then(() => this.getOrCreate(session))
-      .then((entry) => {
+      .then(async (entry) => {
         this.expiredStreams.delete(session.id)
         this.streamFor(session.id)
         if (!alreadyIdle) this.transition(session.id, 'loading')
@@ -306,7 +344,7 @@ export class PiRuntimeRegistry {
   }
 
   /** Starts a prompt while exposing the RPC-admission boundary to callers that create a session. */
-  beginPrompt(session: PiRuntimeSession, message: string): PiRuntimePrompt | undefined {
+  beginPrompt(session: PiRuntimeSession, message: string, input?: AttachmentInput): PiRuntimePrompt | undefined {
     if (this.settingsUpdating || this.locks.has(session.id)) return undefined
     this.cancelUnload(session.id)
     this.locks.set(session.id, 'prompt')
@@ -322,14 +360,15 @@ export class PiRuntimeRegistry {
       rejectAccepted = reject
     })
     const settled = this.projectionsReady.then(() => this.getOrCreate(session))
-      .then((entry) => {
+      .then(async (entry) => {
         this.expiredStreams.delete(session.id)
         this.streamFor(session.id)
         this.transition(session.id, 'loading')
         this.transition(session.id, 'active')
         this.touch(session.id)
         this.history.pin(session, runId)
-        const prompt = entry.host.beginPrompt(message)
+        const prepared = input ? await this.attachments.prepare(session.id, input) : { message }
+        const prompt = entry.host.beginPrompt(prepared.message, prepared.images)
         void prompt.accepted.then(resolveAccepted, rejectAccepted)
         return prompt.settled
       })
@@ -451,8 +490,11 @@ export class PiRuntimeRegistry {
         lastUsed: ++this.usageClock,
         unsubscribe: host.onEvent((event) => {
           // Tag at native-event receipt, before asynchronous stream persistence can interleave a later prompt.
-          const runId = this.beginNativeTurn(session.id, event)
-          const projectedEvent = event.event.type === 'queue_update' ? { ...event, event: { type: 'queue_update', ...this.inputQueueFor(session.id) } } : event
+          let projectedEvent: PiRuntimeHostEvent
+          try { this.attachments.observeNative(event.event, session); projectedEvent = this.attachments.project(event, session.id) }
+          catch (cause) { this.fail(session.id, cause); return }
+          const runId = this.beginNativeTurn(session.id, projectedEvent)
+          if (event.event.type === 'queue_update') projectedEvent = { ...event, event: { type: 'queue_update', ...this.inputQueueFor(session.id) } }
           void this.streamFor(session.id).stream.publish({ ...projectedEvent, ...(runId ? { runId } : {}) }, async (published) => {
             this.trackActiveTurn(session.id, published)
             this.trackExtensionDialog(session.id, published)
@@ -481,6 +523,12 @@ export class PiRuntimeRegistry {
     }
     if (entry && (reason === 'failed' || reason === 'deleted')) this.history.unpin(entry.session)
     if (reason === 'failed' || reason === 'deleted') await this.extensionState.clearProjection(sessionId)
+    if (reason === 'failed') {
+      const state = this.stateFor(sessionId)
+      const pending = [...(state.queuedFollowUps ?? []), ...this.attachments.steering(sessionId)]
+      state.queuedFollowUps = [...new Map(pending.map((input) => [input.id, { ...input, recoveryRequired: true }])).values()]
+      if (state.queuedFollowUps.length) { this.saveQueue(sessionId); await this.publishInputQueue(sessionId) }
+    }
     if (reason !== 'shutdown') this.transition(sessionId, 'notLoaded')
     if (reason !== 'shutdown' && !options.preserveUnloadDeadline) this.scheduleUnload(sessionId)
     return true
@@ -564,7 +612,9 @@ export class PiRuntimeRegistry {
   private stateFor(sessionId: string) {
     let state = this.states.get(sessionId)
     if (!state) {
-      state = { lifecycle: 'notLoaded', listeners: new Set(), revision: 0, subscribers: new Map(), unloadGeneration: 0, unloadTimer: undefined }
+      const restored = [...this.attachments.queue(sessionId), ...this.attachments.steering(sessionId)]
+      const unique = [...new Map(restored.map((input) => [input.id, input])).values()]
+      state = { queuedFollowUps: unique.map((input) => ({ ...input, recoveryRequired: true })), lifecycle: 'notLoaded', listeners: new Set(), revision: 0, subscribers: new Map(), unloadGeneration: 0, unloadTimer: undefined }
       this.states.set(sessionId, state)
     }
     return state
@@ -651,26 +701,67 @@ export class PiRuntimeRegistry {
 
   private inputQueueFor(sessionId: string) {
     const state = this.stateFor(sessionId)
-    return { steering: state.inputQueue?.steering ?? [], followUp: [...(state.inputQueue?.followUp ?? []), ...(state.queuedFollowUps ?? [])] }
+    const nativeSteering = state.inputQueue?.steering ?? []
+    const pendingSteering = this.attachments.steering(sessionId)
+    return {
+      steering: nativeSteering.map((text) => this.attachments.displayPrompt(text, sessionId) ?? text),
+      followUp: [...(state.inputQueue?.followUp ?? []).map((text) => this.attachments.displayPrompt(text, sessionId) ?? text), ...(state.queuedFollowUps ?? []).map((input) => input.message)],
+      ...((state.queuedFollowUps ?? []).some((input) => input.attachmentIds?.length || input.recoveryRequired) ? { inputs: state.queuedFollowUps?.map((input) => ({ ...input })) } : {}),
+      ...(pendingSteering.length && nativeSteering.length ? { steeringInputs: nativeSteering.map((text, index) => {
+        const saved = pendingSteering.find((input) => input.submissionId && text.includes(input.submissionId))
+        return saved ? { ...saved } : { id: `native-steer:${index}`, message: this.attachments.displayPrompt(text, sessionId) ?? text }
+      }) } : {}),
+    }
   }
 
   private publishInputQueue(sessionId: string) {
     return this.streamFor(sessionId).stream.publish({ sessionId, observedAt: new Date().toISOString(), event: { type: 'queue_update', ...this.inputQueueFor(sessionId) } })
   }
 
+  private saveQueue(sessionId: string) { this.attachments.queue(sessionId, this.stateFor(sessionId).queuedFollowUps ?? []) }
+
+  async resumeQueued(session: PiRuntimeSession, inputId: string) {
+    const queue = this.stateFor(session.id).queuedFollowUps
+    const input = queue?.find((input) => input.id === inputId)
+    if (!input || !input.recoveryRequired) throw new AttachmentError('待确认消息已变化。', 409)
+    const alreadyRecorded = input.submissionId && capturePiSessionHistory({ sessionFile: session.sessionFile, expectedSessionId: session.id, expectedCwd: session.cwd }).entries.some((entry) => {
+      if (entry.type !== 'message' || entry.message.role !== 'user') return false
+      const content = entry.message.content
+      const text = typeof content === 'string' ? content : content.flatMap((block) => block.type === 'text' ? [block.text] : []).join('')
+      return text.includes(`<pi-nest-attachments id="${input.submissionId}">`)
+    })
+    if (alreadyRecorded) {
+      queue!.splice(queue!.indexOf(input), 1)
+      this.attachments.steering(session.id, this.attachments.steering(session.id).filter((item) => item.id !== input.id))
+      this.saveQueue(session.id)
+      await this.publishInputQueue(session.id)
+      return
+    }
+    const prompt = this.beginPrompt(session, input.message, input)
+    if (!prompt) throw new PiRuntimeBusyError()
+    await prompt.accepted
+    queue!.splice(queue!.indexOf(input), 1)
+    this.attachments.steering(session.id, this.attachments.steering(session.id).filter((item) => item.id !== input.id))
+    this.saveQueue(session.id)
+    await this.publishInputQueue(session.id)
+    void prompt.settled.catch(() => undefined)
+  }
+
   private drainFollowUp(sessionId: string) {
     const state = this.stateFor(sessionId)
     const entry = this.entries.get(sessionId)
     if (!entry || state.promotingInput || this.locks.has(sessionId) || state.lifecycle !== 'idle' || state.completedRun?.stopReason === 'aborted' || state.completedRun?.stopReason === 'error') return
-    const message = state.queuedFollowUps?.[0]
-    if (message === undefined) return
-    const prompt = this.beginPrompt(entry.session, message)
+    const input = state.queuedFollowUps?.[0]
+    if (!input || input.recoveryRequired) return
+    const prompt = this.beginPrompt(entry.session, input.message, input)
     if (!prompt) return
     state.queuedFollowUps!.shift()
+    void prompt.accepted.then(() => this.saveQueue(sessionId))
     void this.publishInputQueue(sessionId)
     void prompt.accepted.catch(() => {
       state.queuedFollowUps ??= []
-      state.queuedFollowUps.unshift(message)
+      state.queuedFollowUps.unshift(input)
+      this.saveQueue(sessionId)
       void this.publishInputQueue(sessionId)
     })
     void prompt.settled.catch(() => undefined)
