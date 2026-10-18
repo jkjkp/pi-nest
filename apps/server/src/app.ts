@@ -1,3 +1,4 @@
+import { createSessionFilePreviewRoutes } from './session-file-preview.js'
 import { serveWebRelease } from './web-release.js'
 import { Hono } from 'hono'
 import { configurationSecurity, createConfigurationRoutes } from './configuration-routes.js'
@@ -15,6 +16,7 @@ export function createApp(runtime = new PiRuntimeRegistry(), security = new Runt
     .route('/api/configuration', createConfigurationRoutes(runtime, security))
     .use('/api/sessions/:sessionId/settings', configurationSecurity(security))
     .route('/api/projects', createProjectRoutes(projects, security))
+    .route('/api', createSessionFilePreviewRoutes(security))
     .route('/api', createSessionRoutes(runtime, projects, security))
     .route('/api', createRuntimeRoutes(runtime, security))
   if (process.env.PI_NEST_WEB_RELEASE) serveWebRelease(app, process.env.PI_NEST_WEB_RELEASE)
