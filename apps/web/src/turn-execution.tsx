@@ -1,5 +1,6 @@
+import { ToolResultCard, ToolFilePath } from './tool-result-card.js'
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronRight, FilePenLine, Terminal, Wrench } from 'lucide-react'
+import { ChevronRight, FilePenLine, Wrench } from 'lucide-react'
 
 import { executionPhase, formatActivityDuration, formatElapsedTime, nextExecutionExpanded, turnElapsed, type TurnActivity, type TurnPresentation } from './turn-execution-model.js'
 import { startElapsedClock } from './turn-elapsed-clock.js'
@@ -17,6 +18,23 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
   const [executionFollowLatest, setExecutionFollowLatest] = useState(true)
   const [now, setNow] = useState(() => Date.now())
   const contentId = `turn-execution-${item.id}`
+  const changedFiles = new Set(presentation.activities.flatMap((activity) => activity.kind === 'tool' && activity.result?.status === '完成' && ['edit', 'write'].includes(activity.result.view) && activity.result.path ? [activity.result.path] : activity.kind === 'file_change' ? activity.changes.map((change) => change.path) : []))
+  const failures = presentation.activities.filter((activity) => (activity.kind === 'tool' || activity.kind === 'bash') && activity.status === '失败')
+  const resultTarget = failures[0] ?? presentation.activities.find((activity) => activity.kind === 'tool' && activity.result?.status === '完成' && ['edit', 'write'].includes(activity.result.view) || activity.kind === 'file_change')
+
+  function revealResult() {
+    setUserToggled(true)
+    setExpanded(true)
+    setExecutionFollowLatest(false)
+    requestAnimationFrame(() => {
+      const target = [...(executionViewport.current?.querySelectorAll<HTMLElement>('[data-activity-id]') ?? [])].find((element) => element.dataset.activityId === resultTarget?.id)
+      const details = target?.querySelector('details')
+      if (details) details.open = true
+      target?.scrollIntoView({ block: 'nearest' })
+      const summary = details?.querySelector('summary')
+      summary?.focus({ preventScroll: true })
+    })
+  }
 
   useEffect(() => {
     if (!executionActive) return
@@ -43,6 +61,7 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
 
   return (
     <section className="my-4 text-sm" data-turn-execution="">
+      {(changedFiles.size > 0 || failures.length > 0) && <button type="button" className="mb-2 block text-left text-xs text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-controls={contentId} onClick={revealResult}>{[changedFiles.size > 0 ? `修改 ${changedFiles.size} 个文件` : '', failures.length > 0 ? `${failures.length} 项执行失败` : ''].filter(Boolean).join(' · ')} · 查看结果</button>}
       {presentation.hasExecution ? <button data-execution-toggle="" aria-controls={contentId} aria-expanded={expanded} className="flex w-full items-center gap-1 text-left text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setUserToggled(true); if (!expanded) setExecutionFollowLatest(true); setExpanded((value) => !value) }} type="button">
         <span><span aria-live="polite">{isRunning ? phase : statusText}</span>{isRunning ? ` · ${elapsed}` : null}</span>
         <ChevronRight aria-hidden="true" className={`size-4 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
@@ -53,7 +72,7 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
         <div aria-label="执行过程" className="max-h-[min(38vh,22.5rem)] space-y-3 overflow-y-auto overscroll-contain pr-2" onScroll={() => {
           const viewport = executionViewport.current
           if (viewport) setExecutionFollowLatest(shouldExecutionFollowLatest(viewport.scrollHeight, viewport.scrollTop, viewport.clientHeight))
-        }} ref={executionViewport}>{presentation.activities.map((activity) => <Activity activity={activity} key={activity.id} />)}</div>
+        }} onClickCapture={(event) => { if ((event.target as HTMLElement).closest('summary, button')) setExecutionFollowLatest(false) }} ref={executionViewport}>{presentation.activities.map((activity) => <div data-activity-id={activity.id} key={activity.id}><Activity activity={activity} /></div>)}</div>
         {!executionFollowLatest && <button className="mt-2 text-xs text-muted-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => {
           const viewport = executionViewport.current
           setExecutionFollowLatest(true)
@@ -69,6 +88,7 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
 
 function Activity({ activity }: { activity: TurnActivity }) {
   if (activity.kind === 'thinking' || activity.kind === 'narration') return <p className="whitespace-pre-wrap break-words leading-6 text-muted-foreground">{activity.text}</p>
+  if (activity.kind === 'tool' && activity.result) return <ToolResultCard result={activity.result} label={activity.label} duration={activity.duration === undefined ? undefined : formatActivityDuration(activity.duration)} />
   if (activity.kind === 'tool') return <ActivityLine icon={<Wrench aria-hidden="true" className="size-4" />} label={activity.label} status={`${activity.status}${activity.duration === undefined ? '' : ` · ${formatActivityDuration(activity.duration)}`}`} />
   if (activity.kind === 'bash') return <BashActivity activity={activity} />
   if (activity.kind === 'file_change') return <FileChangeActivity activity={activity} />
@@ -81,16 +101,13 @@ function ActivityLine({ icon, label, status }: { icon: ReactNode; label: string;
 }
 
 function BashActivity({ activity }: { activity: Extract<TurnActivity, { kind: 'bash' }> }) {
-  const status = `${activity.status}${activity.exitCode && activity.exitCode !== 0 ? ` · exit ${activity.exitCode}` : ''}${activity.duration === undefined ? '' : ` · ${formatActivityDuration(activity.duration)}`}`
-  if (!activity.command && !activity.cwd && !activity.stdout && !activity.stderr) return <ActivityLine icon={<Terminal aria-hidden="true" className="size-4" />} label="运行命令" status={status} />
-  return <details className="group"><summary className="cursor-pointer list-none"><ActivityLine icon={<Terminal aria-hidden="true" className="size-4" />} label={activity.command ? `运行 ${activity.command}` : '运行命令'} status={status} /></summary><div className="mt-2 space-y-2 pl-6 text-xs"><Field label="命令" value={activity.command} /><Field label="工作目录" value={activity.cwd} /><Field label="stdout" value={activity.stdout} /><Field label="stderr" value={activity.stderr} /></div></details>
+  return <ToolResultCard label={activity.command ? `运行 ${activity.command}` : '运行命令'} duration={activity.duration === undefined ? undefined : formatActivityDuration(activity.duration)} result={{
+    name: 'bash', view: 'bash', args: { command: activity.command, cwd: activity.cwd }, status: activity.status,
+    output: [activity.stdout, activity.stderr ? `stderr:\n${activity.stderr}` : undefined].filter(Boolean).join('\n'), details: { exitCode: activity.exitCode }, notices: [],
+  }} />
 }
 
 function FileChangeActivity({ activity }: { activity: Extract<TurnActivity, { kind: 'file_change' }> }) {
   if (activity.changes.length === 0) return <ActivityLine icon={<FilePenLine aria-hidden="true" className="size-4" />} label={activity.label} />
-  return <details className="group"><summary className="cursor-pointer list-none"><ActivityLine icon={<FilePenLine aria-hidden="true" className="size-4" />} label={activity.label} /></summary><ul className="mt-2 space-y-1 pl-6 text-xs text-muted-foreground">{activity.changes.map((change, index) => <li className="flex gap-2" key={`${change.path}-${index}`}><span className="min-w-0 break-all">{change.path}</span>{(change.added !== undefined || change.removed !== undefined) && <span className="shrink-0">{change.added === undefined ? '' : `+${change.added}`} {change.removed === undefined ? '' : `-${change.removed}`}</span>}</li>)}</ul></details>
-}
-
-function Field({ label, value }: { label: string; value: string | undefined }) {
-  return value ? <div><p className="text-muted-foreground">{label}</p><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 font-mono">{value}</pre></div> : null
+  return <details className="group"><summary className="cursor-pointer list-none"><ActivityLine icon={<FilePenLine aria-hidden="true" className="size-4" />} label={activity.label} /></summary><ul className="mt-2 space-y-1 pl-6 text-xs text-muted-foreground">{activity.changes.map((change, index) => <li className="flex gap-2" key={`${change.path}-${index}`}><ToolFilePath path={change.path} />{(change.added !== undefined || change.removed !== undefined) && <span className="shrink-0">{change.added === undefined ? '' : `+${change.added}`} {change.removed === undefined ? '' : `-${change.removed}`}</span>}</li>)}</ul></details>
 }

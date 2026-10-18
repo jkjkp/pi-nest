@@ -1,3 +1,5 @@
+import { OpenToolFile } from './tool-file-context.js'
+import { SessionFilePreview } from './session-file-preview.js'
 import { ProjectDialog } from './project-dialog.js'
 import { ProjectHome } from './project-home.js'
 import { SessionForkDialog } from './session-fork-dialog.js'
@@ -7,7 +9,7 @@ import { parseComposerCommand } from './composer-commands.js'
 import { useWorkspaceCommands } from './use-workspace-commands.js'
 import { SessionRenameDialog } from './session-rename-dialog.js'
 import { SessionStatistics } from './session-statistics.js'
-import { type CSSProperties, useEffect, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useState } from 'react'
 import { ArrowDown, CircleX, Folder, LoaderCircle, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 
@@ -144,10 +146,18 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       </footer>
     </div>
   )
-  const inspector = <SessionInspector run={currentRun} session={selectedSession} />
+  const [preview, setPreview] = useState<{ sessionId: string; path: string; line?: number; searchRoot?: string }>()
+  const currentPreview = preview?.sessionId === selectedSessionId ? preview : undefined
+  const openToolFile = useCallback((path: string, line?: number, searchRoot?: string) => {
+    setPreview({ sessionId: selectedSessionId, path, line, searchRoot })
+    if (window.matchMedia('(min-width: 80rem)').matches) setInspectorOpen(true)
+    else if (window.matchMedia('(min-width: 48rem)').matches) setDesktopInspectorSheetOpen(true)
+    else setInspectorSheetOpen(true)
+  }, [selectedSessionId, setInspectorOpen])
+  const inspector = currentPreview ? <SessionFilePreview key={`${selectedSessionId}:${currentPreview.searchRoot}:${currentPreview.path}:${currentPreview.line}`} sessionId={selectedSessionId} path={currentPreview.path} searchRoot={currentPreview.searchRoot} line={currentPreview.line} onClose={() => setPreview(undefined)} /> : <SessionInspector run={currentRun} session={selectedSession} />
 
   return (
-    <main className="relative flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+    <OpenToolFile value={openToolFile}><main className="relative flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
       {creatingProject && <ProjectDialog mode="register" onClose={() => setCreatingProject(false)} onAdded={openProject} />}
       {commandPanels.sessionId === selectedSessionId && commandPanels.fork && <SessionForkDialog key={`fork:${selectedSessionId}`} sessionId={selectedSessionId} onClose={() => setCommandPanels({ sessionId: selectedSessionId, statistics: false })} onCloseAutoFocus={(event) => { event.preventDefault(); requestAnimationFrame(() => promptTextareaRef.current?.focus()) }} onFork={commandPanels.fork} />}
       {commandPanels.sessionId === selectedSessionId && commandPanels.rename && <SessionRenameDialog key={selectedSessionId} session={commandPanels.rename.session} onCloseAutoFocus={(event) => { event.preventDefault(); promptTextareaRef.current?.focus() }} onClose={() => setCommandPanels({ sessionId: selectedSessionId, statistics: false })} onRename={async (id, name) => {
@@ -338,7 +348,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
         </section>
         <aside aria-hidden={isHome || !inspectorOpen} className={`hidden min-h-0 overflow-hidden bg-card/60 xl:block ${!isHome && inspectorOpen ? 'border-l' : 'pointer-events-none'}`} inert={isHome || !inspectorOpen}>{inspector}</aside>
       </div>
-    </main>
+    </main></OpenToolFile>
   )
 }
 

@@ -82,7 +82,7 @@ export async function saveSessionSettings(sessionId: string, settings: Partial<P
 }
 
 export async function configurationRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const bootstrap = await fetch('/api/runtime/bootstrap', { method: 'POST' })
+  const bootstrap = await fetch('/api/runtime/bootstrap', { method: 'POST', signal: init.signal })
   if (!bootstrap.ok) throw new Error('无法验证访问权限')
   const { token } = await bootstrap.json() as { token: string }
   const response = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-pi-nest-token': token, ...init.headers }, cache: 'no-store' })
@@ -134,4 +134,8 @@ export async function addProject(request: { kind: 'open'; cwd: string } | { kind
 export async function selectProjectFolder(cwd?: string) {
   const body = await configurationRequest<{ cwd: string | null }>('/api/projects/select-folder', { method: 'POST', body: JSON.stringify(cwd ? { cwd } : {}) })
   return body.cwd
+}
+
+export function fetchSessionFilePreview(sessionId: string, path: string, signal?: AbortSignal, searchRoot?: string) {
+  return configurationRequest<import('@pi-nest/contracts').PiSessionFilePreview>(`${sessionUrl(sessionId)}/file-preview`, { method: 'POST', body: JSON.stringify({ path, searchRoot }), signal })
 }

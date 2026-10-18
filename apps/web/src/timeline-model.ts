@@ -145,10 +145,11 @@ function pushThinkingMessage(parts: TimelinePart[], event: TimelineEvent, text: 
 }
 
 function pushTool(parts: TimelinePart[], event: TimelineEvent, toolCallId = typeof event.event.toolCallId === 'string' ? event.event.toolCallId : undefined, toolName = typeof event.event.toolName === 'string' ? event.event.toolName : '未知工具', arguments_: Record<string, unknown> | undefined = undefined) {
-  const previous = [...parts].reverse().find((part) => part.kind === 'tool' && part.toolCallId === toolCallId && part.toolName === toolName)
+  const previous = [...parts].reverse().find((part) => part.kind === 'tool' && toolCallId !== undefined && part.toolCallId === toolCallId)
   if (previous?.kind === 'tool') {
     previous.events.push(event)
     if (arguments_) previous.arguments = arguments_
+    if (toolName !== '未知工具') previous.toolName = toolName
     return
   }
   parts.push({ ...(arguments_ ? { arguments: arguments_ } : {}), events: [event], kind: 'tool', toolCallId, toolName })
@@ -256,7 +257,7 @@ function projectEvent(item: TimelineItem, event: TimelineEvent) {
     return pushTool(item.parts, event, toolCallId, toolName)
   }
   if (type === 'message' || type === 'message_end') return diagnostic(item, event, 'unrenderable_message')
-  if (type.startsWith('tool_execution_')) return pushTool(item.parts, event)
+  if (type.startsWith('tool_execution_')) return pushTool(item.parts, event, undefined, undefined, record(event.event.args) ?? record(event.event.arguments))
   if (type.startsWith('bash_execution_')) return pushActivity(item.parts, 'bash', event)
   if (type === 'auto_retry_start' || type === 'auto_retry_end') return pushActivity(item.parts, 'retry', event)
   if (type === 'file_change' || type === 'file_changes' || Array.isArray(event.event.changes)) return pushActivity(item.parts, 'file_change', event)
@@ -416,15 +417,10 @@ export function rawJson(events: TimelineEvent[]) {
 }
 
 export function toolStatus(events: TimelineEvent[]) {
-  const end = events.find((event) => eventType(event) === 'tool_execution_end')
-  if (end) return end.event.isError === true || end.event.error ? '失败' : '完成'
-  const result = events.find((event) => {
-    const message = record(event.event.message)
-    return message?.role === 'toolResult'
-  })
-  if (!result) return '正在执行'
-  const message = record(result.event.message)
-  return message?.isError === true ? '失败' : '完成'
+  const terminal = events.findLast((event) => eventType(event) === 'tool_execution_end' || record(event.event.message)?.role === 'toolResult')
+  if (!terminal) return '正在执行'
+  const result = record(terminal.event.message) ?? record(terminal.event.result)
+  return terminal.event.isError === true || result?.isError === true || terminal.event.error ? '失败' : '完成'
 }
 
 export function duration(events: TimelineEvent[]) {
