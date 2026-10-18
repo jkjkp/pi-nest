@@ -2,6 +2,7 @@
 import { act, useLayoutEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { expect, it, vi } from 'vitest'
+import { TurnFileSummary } from './turn-file-summary.js'
 import { useTimelineViewport } from './use-timeline-viewport.js'
 
 it.each([
@@ -29,10 +30,10 @@ it.each([
   let height = cached ? 1000 : 500
   let top = 0
   let followingLatest = true
-  function View({ sessionId, loaded = true }: { sessionId: string; loaded?: boolean }) {
+  function View({ sessionId, loaded = true, completed = false }: { sessionId: string; loaded?: boolean; completed?: boolean }) {
     const { setMessageScrollArea, followLatest } = useTimelineViewport({ selectedSessionId: sessionId, history: loaded ? { session: { id: sessionId }, entries: [], hasEarlier: false, revision: 'fixture' } : undefined, activeTurn: undefined, isActive: false, inspectorOpen: false, setInspectorOpen: () => {} })
     useLayoutEffect(() => { followingLatest = followLatest })
-    return <div ref={setMessageScrollArea}><div data-slot="scroll-area-viewport" /></div>
+    return <div ref={setMessageScrollArea}><div data-slot="scroll-area-viewport">{completed && <TurnFileSummary state="complete" files={[{ path: '/project/a.ts', displayPath: 'a.ts', outsideProject: false, operations: [], reported: true, status: '已修改' }]} />}</div></div>
   }
   const flush = async () => {
     await act(() => {
@@ -99,6 +100,20 @@ it.each([
     await flush()
     expect(top).toBe(height - 500)
     expect(followingLatest).toBe(true)
+
+    // The completed summary follows only while the reader is still following the bottom.
+    height += 400
+    await act(() => root.render(<View sessionId="B" completed />))
+    await resize()
+    await flush()
+    expect(top).toBe(height - 500)
+    await act(() => viewport.querySelector<HTMLElement>('[data-turn-file-summary]')!.click())
+    const readingTop = top
+    height += 400
+    await resize()
+    await flush()
+    expect(top).toBe(readingTop)
+    expect(followingLatest).toBe(false)
   } finally {
     await act(() => root.unmount())
     container.remove()

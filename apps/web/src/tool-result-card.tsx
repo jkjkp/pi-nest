@@ -5,23 +5,16 @@ import { searchMatches, type ToolResult } from './tool-result-model.js'
 
 import { OpenToolFile } from './tool-file-context.js'
 
-function CopyButton({ text, label = '复制' }: { text: string; label?: string }) {
-  const [status, setStatus] = useState('')
-  return <span className="inline-flex items-center gap-2"><Button type="button" size="sm" variant="ghost" onClick={() => {
-    void Promise.resolve().then(() => navigator.clipboard.writeText(text)).then(() => setStatus('已复制'), () => setStatus('复制失败，请手动选择文本'))
-  }}>{label}</Button><span className="text-xs text-muted-foreground" role="status">{status}</span></span>
-}
-
-export function ToolFilePath({ path, line, searchRoot }: { path: string; line?: number; searchRoot?: string }) {
+export function ToolFilePath({ path, line, searchRoot, label = path }: { path: string; line?: number; searchRoot?: string; label?: string }) {
   const open = useContext(OpenToolFile)
-  return open ? <button type="button" className="break-all text-left text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => open(path, line, searchRoot)} title="查看当前文件（可能与历史内容不同）">{path}{line ? `:${line}` : ''}</button> : <span className="break-all">{path}{line ? `:${line}` : ''}</span>
+  return open ? <button type="button" className="break-all text-left text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => open(path, line, searchRoot)} title="查看当前文件（可能与历史内容不同）">{label}{line ? `:${line}` : ''}</button> : <span className="break-all">{label}{line ? `:${line}` : ''}</span>
 }
 
 function TextResult({ text, diff = false }: { text: string; diff?: boolean }) {
   const [limit, setLimit] = useState(200)
   const clipped = text.slice(0, 100_000)
   const lines = clipped.split('\n')
-  return <div><pre tabIndex={0} aria-label={diff ? '本次调用修改差异' : '工具结果文本'} className="max-h-96 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs leading-6">{lines.slice(0, limit).map((line, index) => <span key={index} className={`block min-h-6 ${diff && line.startsWith('+') && !line.startsWith('+++') ? 'bg-success/10 text-success' : diff && line.startsWith('-') && !line.startsWith('---') ? 'bg-destructive/10 text-destructive' : ''}`}>{line}</span>)}</pre>{lines.length > limit && <Button size="sm" type="button" variant="ghost" onClick={() => setLimit(limit + 200)}>显示更多行（剩余 {lines.length - limit} 行）</Button>}{text.length > clipped.length && <p className="text-xs text-muted-foreground">页面预览仅展示前 100,000 个字符，复制可获取完整记录。</p>}</div>
+  return <div><pre tabIndex={0} aria-label={diff ? '本次调用修改差异' : '工具结果文本'} className="max-h-96 overflow-auto rounded-md border bg-muted/40 p-3 font-mono text-xs leading-6">{lines.slice(0, limit).map((line, index) => <span key={index} className={`block min-h-6 ${diff && line.startsWith('+') && !line.startsWith('+++') ? 'bg-success/10 text-success' : diff && line.startsWith('-') && !line.startsWith('---') ? 'bg-destructive/10 text-destructive' : ''}`}>{line}</span>)}</pre>{lines.length > limit && <Button size="sm" type="button" variant="ghost" onClick={() => setLimit(limit + 200)}>显示更多行（剩余 {lines.length - limit} 行）</Button>}{text.length > clipped.length && <p className="text-xs text-muted-foreground">页面预览仅展示前 100,000 个字符。</p>}</div>
 }
 
 export function ToolResultCard({ result, label, duration }: { result: ToolResult; label: string; duration?: string }) {
@@ -43,11 +36,11 @@ export function ToolResultCard({ result, label, duration }: { result: ToolResult
       {result.path && view !== 'grep' && <div className="text-xs"><ToolFilePath path={result.path} line={typeof result.details.firstChangedLine === 'number' ? result.details.firstChangedLine : view === 'read' && typeof args.offset === 'number' ? args.offset : undefined} /></div>}
       {view === 'read' && <p className="text-xs text-muted-foreground">当时读取的内容 · 第 {typeof args.offset === 'number' ? args.offset : 1} 行起{typeof args.limit === 'number' ? `，请求最多 ${args.limit} 行` : ''}</p>}
       {view === 'grep' && <p className="break-words text-xs text-muted-foreground">搜索范围：{result.path ?? '.'} · 搜索 {typeof args.pattern === 'string' ? args.pattern : ''}{typeof args.glob === 'string' ? ` · ${args.glob}` : ''}</p>}
-      {view === 'bash' && command !== undefined && <section aria-label="命令"><TextResult text={command} /><CopyButton text={command} label="复制命令" /></section>}
+      {view === 'bash' && command !== undefined && <section aria-label="命令"><TextResult text={command} /></section>}
       {typeof args.cwd === 'string' && <p className="break-all text-xs text-muted-foreground">工作目录：{args.cwd}</p>}
-      {view === 'edit' && status === '完成' && diff && <section><TextResult text={diff} diff /><CopyButton text={result.patch || diff} label={result.patch ? '复制补丁' : '复制差异'} /></section>}
-      {view === 'write' && written !== undefined && <section aria-label="提交的写入内容"><p className="mb-2 text-xs text-muted-foreground">{status === '完成' ? '本次已写入的内容' : '提交的写入内容（不代表已写入）'}</p><TextResult text={written} /><CopyButton text={written} label="复制提交内容" /></section>}
-      {matches ? <section aria-label="搜索匹配" className="max-h-96 space-y-3 overflow-auto">{[...grouped].map(([path, rows]) => <div key={path}><ToolFilePath path={path} searchRoot={result.path} /><div className="overflow-auto whitespace-pre font-mono text-xs leading-6">{rows.map((row, index) => <div key={index}><ToolFilePath path={path} searchRoot={result.path} line={row.line} />{' '}{row.text}</div>)}</div></div>)}{matches.length > matchLimit && <Button type="button" size="sm" variant="ghost" onClick={() => setMatchLimit(matchLimit + 200)}>显示更多匹配（剩余 {matches.length - matchLimit} 条）</Button>}<CopyButton text={result.output} label="复制搜索结果" /></section> : result.output && <section aria-label={status === '失败' ? '工具错误与输出' : '工具输出'}><TextResult text={result.output} /><CopyButton text={result.output} label="复制输出" /></section>}
+      {view === 'edit' && status === '完成' && diff && <section><TextResult text={diff} diff /></section>}
+      {view === 'write' && written !== undefined && <section aria-label="提交的写入内容"><p className="mb-2 text-xs text-muted-foreground">{status === '完成' ? '本次已写入的内容' : '提交的写入内容（不代表已写入）'}</p><TextResult text={written} /></section>}
+      {matches ? <section aria-label="搜索匹配" className="max-h-96 space-y-3 overflow-auto">{[...grouped].map(([path, rows]) => <div key={path}><ToolFilePath path={path} searchRoot={result.path} /><div className="overflow-auto whitespace-pre font-mono text-xs leading-6">{rows.map((row, index) => <div key={index}><ToolFilePath path={path} searchRoot={result.path} line={row.line} />{' '}{row.text}</div>)}</div></div>)}{matches.length > matchLimit && <Button type="button" size="sm" variant="ghost" onClick={() => setMatchLimit(matchLimit + 200)}>显示更多匹配（剩余 {matches.length - matchLimit} 条）</Button>}</section> : result.output && <section aria-label={status === '失败' ? '工具错误与输出' : '工具输出'}><TextResult text={result.output} /></section>}
       {status === '完成' && !result.output && !diff && <p className="text-xs text-muted-foreground">工具未返回可展示的文本。</p>}
       {result.notices.map((notice) => <p className="break-all text-xs text-warning" key={notice}>{notice}</p>)}
       <details><summary className="cursor-pointer text-xs text-muted-foreground">调用参数</summary><TextResult text={JSON.stringify(args, null, 2)} /></details>

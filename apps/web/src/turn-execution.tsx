@@ -2,13 +2,13 @@ import { ToolResultCard, ToolFilePath } from './tool-result-card.js'
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronRight, FilePenLine, Wrench } from 'lucide-react'
 
-import { executionPhase, formatActivityDuration, formatElapsedTime, nextExecutionExpanded, turnElapsed, type TurnActivity, type TurnPresentation } from './turn-execution-model.js'
+import { executionPhase, projectTurnFiles, turnFileSummaryState, formatActivityDuration, formatElapsedTime, nextExecutionExpanded, turnElapsed, type TurnActivity, type TurnFileChange, type TurnPresentation } from './turn-execution-model.js'
 import { startElapsedClock } from './turn-elapsed-clock.js'
 import { shouldExecutionFollowLatest } from './turn-execution-scroll.js'
 import type { TimelineItem } from './timeline-model.js'
 import type { PromptStatus } from './session-run-model.js'
 
-export function TurnExecution({ item, isRunning, presentation, runMessage, runStatus }: { item: TimelineItem; isRunning: boolean; presentation: TurnPresentation; runMessage?: string; runStatus?: PromptStatus }) {
+export function TurnExecution({ item, isRunning, presentation, runMessage, runStatus, files = projectTurnFiles(presentation.activities), showFileProgress = !turnFileSummaryState(item, isRunning, runStatus) }: { item: TimelineItem; isRunning: boolean; presentation: TurnPresentation; runMessage?: string; runStatus?: PromptStatus; files?: TurnFileChange[]; showFileProgress?: boolean }) {
   const [expanded, setExpanded] = useState(isRunning)
   const [contentMounted, setContentMounted] = useState(isRunning)
   const [userToggled, setUserToggled] = useState(false)
@@ -18,9 +18,8 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
   const [executionFollowLatest, setExecutionFollowLatest] = useState(true)
   const [now, setNow] = useState(() => Date.now())
   const contentId = `turn-execution-${item.id}`
-  const changedFiles = new Set(presentation.activities.flatMap((activity) => activity.kind === 'tool' && activity.result?.status === '完成' && ['edit', 'write'].includes(activity.result.view) && activity.result.path ? [activity.result.path] : activity.kind === 'file_change' ? activity.changes.map((change) => change.path) : []))
   const failures = presentation.activities.filter((activity) => (activity.kind === 'tool' || activity.kind === 'bash') && activity.status === '失败')
-  const resultTarget = failures[0] ?? presentation.activities.find((activity) => activity.kind === 'tool' && activity.result?.status === '完成' && ['edit', 'write'].includes(activity.result.view) || activity.kind === 'file_change')
+  const resultTarget = failures[0]
 
   function revealResult() {
     setUserToggled(true)
@@ -61,7 +60,8 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
 
   return (
     <section className="my-4 text-sm" data-turn-execution="">
-      {(changedFiles.size > 0 || failures.length > 0) && <button type="button" className="mb-2 block text-left text-xs text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-controls={contentId} onClick={revealResult}>{[changedFiles.size > 0 ? `修改 ${changedFiles.size} 个文件` : '', failures.length > 0 ? `${failures.length} 项执行失败` : ''].filter(Boolean).join(' · ')} · 查看结果</button>}
+      {showFileProgress && files.length > 0 && <p className="mb-2 text-xs text-muted-foreground">已修改 {files.length} 个文件</p>}
+      {failures.length > 0 && <button type="button" className="mb-2 block text-left text-xs text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-controls={contentId} onClick={revealResult}>{failures.length} 项执行失败 · 查看失败</button>}
       {presentation.hasExecution ? <button data-execution-toggle="" aria-controls={contentId} aria-expanded={expanded} className="flex w-full items-center gap-1 text-left text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setUserToggled(true); if (!expanded) setExecutionFollowLatest(true); setExpanded((value) => !value) }} type="button">
         <span><span aria-live="polite">{isRunning ? phase : statusText}</span>{isRunning ? ` · ${elapsed}` : null}</span>
         <ChevronRight aria-hidden="true" className={`size-4 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />

@@ -1,5 +1,5 @@
 import { projectToolResult, type ToolResult } from './tool-result-model.js'
-import type { PromptStatus } from './session-run-model.js'
+import { isRunActive, type PromptStatus } from './session-run-model.js'
 import { duration, type TimelineEvent, type TimelineItem, type TimelinePart } from './timeline-model.js'
 
 export type TurnActivity =
@@ -63,11 +63,12 @@ function toolLabel(part: Extract<TimelinePart, { kind: 'tool' }>) {
 function fileChanges(events: TimelineEvent[]) {
   const changes: FileChange[] = []
   for (const event of events) {
+    if (event.event.isError === true || event.event.error) continue
     const candidates = Array.isArray(event.event.changes) ? event.event.changes : [event.event]
     for (const candidate of candidates) {
       const value = record(candidate)
       const path = typeof value?.path === 'string' ? value.path : typeof value?.filePath === 'string' ? value.filePath : undefined
-      if (path && value) changes.push({ added: typeof value.added === 'number' ? value.added : undefined, path, removed: typeof value.removed === 'number' ? value.removed : undefined })
+      if (path && value && value.isError !== true && !value.error) changes.push({ added: typeof value.added === 'number' ? value.added : undefined, path, removed: typeof value.removed === 'number' ? value.removed : undefined })
     }
   }
   return changes
@@ -173,4 +174,81 @@ export function executionPhase(item: TimelineItem, presentation: TurnPresentatio
   if (typeof type === 'string' && type.startsWith('thinking_')) return type === 'thinking_end' ? '等待模型响应' : '思考中'
   if (typeof type === 'string' && type.startsWith('text_')) return '正在回答'
   return '等待模型响应'
+}
+
+export type TurnFileChange = {
+  path: string
+  displayPath: string
+  outsideProject: boolean
+  operations: Extract<TurnActivity, { kind: 'tool' }>[]
+  reported: boolean
+  status: string
+  changes?: { added: number; removed: number }
+}
+
+function normalizeFilePath(path: string) {
+  const absolute = path.startsWith('/')
+  const segments: string[] = []
+  for (const segment of path.split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..' && segments.length && segments.at(-1) !== '..') segments.pop()
+    else if (segment !== '..' || !absolute) segments.push(segment)
+  }
+  return `${absolute ? '/' : ''}${segments.join('/')}` || '.'
+}
+
+export function projectTurnFiles(activities: TurnActivity[], cwd?: string): TurnFileChange[] {
+  const root = cwd?.startsWith('/') ? normalizeFilePath(cwd).replace(/\/$/, '') : undefined
+  const files = new Map<string, TurnFileChange>()
+  function file(path: string, operationCwd = cwd) {
+    const base = operationCwd?.startsWith('/') ? operationCwd : root && operationCwd ? `${root}/${operationCwd}` : root
+    const resolved = normalizeFilePath(path.startsWith('/') || !base ? path : `${base}/${path}`)
+    let entry = files.get(resolved)
+    if (!entry) {
+      const withinRoot = root !== undefined && resolved.startsWith(`${root}/`)
+      entry = { path: resolved, displayPath: withinRoot ? resolved.slice(root.length + 1) : resolved, outsideProject: root !== undefined && resolved.startsWith('/') && !withinRoot, operations: [], reported: false, status: '已修改' }
+      files.set(resolved, entry)
+    }
+    return entry
+  }
+  for (const activity of activities) {
+    if (activity.kind === 'tool' && activity.result?.path && ['edit', 'write'].includes(activity.result.view)) {
+      const entry = file(activity.result.path, typeof activity.result.args.cwd === 'string' ? activity.result.args.cwd : cwd)
+      const callId = activity.events.flatMap((event) => {
+        const message = record(event.event.message)
+        const id = event.event.toolCallId ?? message?.toolCallId
+        return typeof id === 'string' ? [id] : []
+      })[0]
+      const duplicate = callId && entry.operations.some((operation) => operation.events.some((event) => event.event.toolCallId === callId || record(event.event.message)?.toolCallId === callId))
+      if (!duplicate) entry.operations.push(activity)
+    } else if (activity.kind === 'file_change') {
+      for (const change of activity.changes) file(change.path).reported = true
+    }
+  }
+  return [...files.values()].filter((entry) => {
+    const successes = entry.operations.filter((operation) => operation.result?.status === '完成')
+    if (!successes.length && !entry.reported) return false
+    if (successes.length > 1) entry.status = successes.every((operation) => operation.result?.view === 'edit') ? '多次编辑' : '多次修改'
+    else if (successes.length) entry.status = successes[0]?.result?.view === 'write' ? '已写入' : '已编辑'
+    const lastSuccess = entry.operations.findLastIndex((operation) => operation.result?.status === '完成')
+    const later = entry.operations.slice(lastSuccess + 1)
+    if (later.some((operation) => operation.result?.status === '失败')) entry.status += lastSuccess >= 0 ? ' · 后续操作失败' : ' · 含失败操作'
+    else if (later.length) entry.status += lastSuccess >= 0 ? ' · 后续结果未确认' : ' · 含未确认操作'
+    if (successes.length === 1 && successes[0]?.result?.view === 'edit') entry.changes = successes[0].result.changes
+    return true
+  })
+}
+
+export type TurnFileSummaryState = 'complete' | 'aborted' | 'error'
+
+export function turnFileSummaryState(item: TimelineItem, isRunning: boolean, runStatus?: PromptStatus, hasFollowingTurn = false): TurnFileSummaryState | undefined {
+  if (isRunning || runStatus && isRunActive(runStatus) || item.steering && item.steering.status !== 'applied') return undefined
+  if (runStatus === 'aborted' || runStatus === 'error') return runStatus
+  const lastMessage = item.events.findLast((event) => record(event.event.message)?.role === 'assistant')
+  const stopReason = record(lastMessage?.event.message)?.stopReason
+  const terminal = item.events.findLast((event) => ['agent_settled', 'aborted'].includes(eventType(event)))
+  if (stopReason === 'aborted' || terminal?.event.type === 'aborted' || terminal?.event.aborted === true) return 'aborted'
+  if (stopReason === 'error') return 'error'
+  if (runStatus === 'complete' || item.runtimeTiming?.completedAt || terminal || stopReason === 'stop' || stopReason === 'length' || hasFollowingTurn) return 'complete'
+  return undefined
 }

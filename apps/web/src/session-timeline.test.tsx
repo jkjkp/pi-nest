@@ -167,3 +167,47 @@ describe('SessionTimeline', () => {
 })
 
 function render(node: React.ReactNode) { return renderToStaticMarkup(node) }
+
+function fileHistory(finalAnswer = true) {
+  return { ...history, session: { id: 'session-1', cwd: '/project' }, entries: [
+    { id: 'file-user', parentId: null, timestamp: '2026-10-18T00:00:00Z', type: 'message', raw: { type: 'message', message: { role: 'user', content: 'write a file' } } },
+    { id: 'file-call', parentId: 'file-user', timestamp: '2026-10-18T00:00:01Z', type: 'message', raw: { type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'write', id: 'write-one', arguments: { path: 'result.md', content: 'recorded content' } }], stopReason: 'toolUse' } } },
+    { id: 'file-result', parentId: 'file-call', timestamp: '2026-10-18T00:00:02Z', type: 'message', raw: { type: 'message', message: { role: 'toolResult', toolCallId: 'write-one', toolName: 'write', isError: false, content: [{ type: 'text', text: 'Successfully wrote result.md' }] } } },
+    ...(finalAnswer ? [{ id: 'file-answer', parentId: 'file-result', timestamp: '2026-10-18T00:00:03Z', type: 'message', raw: { type: 'message', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: '正文已经输出完毕。' }] } } }] : []),
+  ] }
+}
+
+it('renders a restored file summary after the final answer instead of inside the execution region', () => {
+  const markup = render(<SessionTimeline error={false} history={fileHistory()} isLoading={false} onRetry={() => undefined} />)
+  const answer = markup.indexOf('正文已经输出完毕。')
+  const summary = markup.indexOf('data-turn-file-summary=""')
+  expect(answer).toBeGreaterThan(0)
+  expect(summary).toBeGreaterThan(answer)
+  expect(markup).toContain('文件变更 · 1 个文件')
+  expect(markup).toContain('result.md')
+  expect(markup).not.toContain('查看结果')
+  expect(markup).not.toContain('recorded content')
+})
+
+it('does not show a final summary during tool execution, final text streaming or input waits', () => {
+  for (const props of [{ isRunning: true }, { runStatus: 'awaiting_input' as const }, { runStatus: 'awaiting_agent' as const }]) {
+    const markup = render(<SessionTimeline error={false} history={fileHistory()} isLoading={false} onRetry={() => undefined} {...props} />)
+    expect(markup).not.toContain('data-turn-file-summary')
+    expect(markup).toContain('已修改 1 个文件')
+  }
+  expect(render(<SessionTimeline error={false} history={fileHistory(false)} isLoading={false} onRetry={() => undefined} />)).not.toContain('data-turn-file-summary')
+})
+
+it('keeps successful modifications visible after an interruption even without a final answer', () => {
+  const markup = render(<SessionTimeline error={false} history={fileHistory(false)} isLoading={false} onRetry={() => undefined} runStatus="aborted" />)
+  expect(markup).toContain('data-turn-file-summary')
+  expect(markup).toContain('任务已中断')
+  expect(markup).toContain('已写入')
+})
+
+it('keeps each summary scoped to its own turn when a later request begins', () => {
+  const next = { ...fileHistory(), entries: [...fileHistory().entries, { id: 'next-user', parentId: 'file-answer', timestamp: '2026-10-18T00:00:05Z', type: 'message', raw: { type: 'message', message: { role: 'user', content: 'read only now' } } }] }
+  const markup = render(<SessionTimeline error={false} history={next} isLoading={false} isRunning onRetry={() => undefined} runStatus="running" />)
+  expect(markup.match(/data-turn-file-summary=""/g)).toHaveLength(1)
+  expect(markup.indexOf('data-turn-file-summary')).toBeLessThan(markup.indexOf('data-turn-id="next-user"'))
+})
