@@ -102,3 +102,15 @@ it('ignores failed structured file-change reports and keeps only successful repo
   const presentation = projectTurnPresentation({ ...item, parts: [{ kind: 'file_change', events }] }, false)
   expect(projectTurnFiles(presentation.activities, '/project').map((file) => file.path)).toEqual(['/project/good.ts'])
 })
+
+it('shows the filename followed by the full path in each changed-file row', async () => {
+  const files = projectTurnFiles([tool('one', 'docs/TODOTask.md', 'write')], '/project')
+  const openFile = vi.fn()
+  await act(async () => root.render(<OpenToolFile value={openFile}><TurnFileSummary files={files} state="complete" /></OpenToolFile>))
+  const row = container.querySelector('li')!
+  const link = row.querySelector('button')!
+  expect(link.textContent).toBe('TODOTask.md')
+  expect(link.nextElementSibling?.textContent).toBe('/project/docs/TODOTask.md')
+  await act(async () => link.click())
+  expect(openFile).toHaveBeenCalledWith('/project/docs/TODOTask.md', undefined, undefined)
+})
