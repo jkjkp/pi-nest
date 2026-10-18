@@ -1,3 +1,7 @@
+export type AttachmentRef = { id: string; kind: 'image' | 'file'; name: string; mediaType: string; size: number; width?: number; height?: number }
+export type AttachmentInput = { message: string; attachmentIds?: string[]; submissionId?: string }
+export type PiQueuedInput = AttachmentInput & { id: string; attachments?: AttachmentRef[]; recoveryRequired?: boolean }
+
 export type PiSessionFilePreview = { path: string; content: string }
 
 export type PiProject = { cwd: string; createdAt: string }
@@ -17,7 +21,7 @@ export type RuntimeFailureKind = 'process_error' | 'process_exit' | 'protocol_er
 export type RuntimeStatus = { completedRun?: PiRuntimeSessionSnapshot['completedRun']; thinkingLevel?: string; model?: { id: string; provider: string }; error?: string; failureKind?: RuntimeFailureKind; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
 export type PiRuntimeExtensionUi = { freshness: 'known' | 'restored' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
 export type PiRuntimeSessionSnapshot = {
-  inputQueue?: { steering: string[]; followUp: string[] }
+  inputQueue?: { steering: string[]; followUp: string[]; inputs?: PiQueuedInput[]; steeringInputs?: PiQueuedInput[] }
   activeTurn?: { prompt?: string; runId: string; startedAt: string; waitingForExtension?: true }
   completedRun?: { runId: string; stopReason: string }
   atSequence: number
@@ -30,8 +34,9 @@ export type PiRuntimeSessionSnapshot = {
 export type RuntimeCommandPayload = { sessionId: string } & (
   | { type: 'watch'; resume?: { after: number } }
   | { type: 'unwatch' | 'resume' | 'abort' | 'get_runtime_state' | 'get_session_stats' | 'get_available_models' | 'get_available_thinking_levels' | 'get_commands' }
-  | { type: 'prompt' | 'steer' | 'follow_up'; message: string }
-  | { type: 'steer_queued'; message: string; index: number }
+  | ({ type: 'prompt' | 'steer' | 'follow_up' } & AttachmentInput)
+  | { type: 'steer_queued'; message: string; index: number; inputId?: string }
+  | { type: 'resume_queued'; inputId: string }
   | { type: 'compact'; customInstructions?: string }
   | { type: 'set_model'; provider: string; modelId: string }
   | { type: 'set_thinking_level'; level: string }
@@ -147,4 +152,4 @@ export type PiModelDiscoveryRequest = { provider: string; connection: { baseUrl:
 export type PiDiscoveredModel = { id: string; name?: string }
 
 export type PiSessionBranchRequest = { kind: 'clone' } | { kind: 'fork'; entryId: string; revision: string }
-export type PiSessionBranchResponse = { session: PiSessionSummary; draft: string }
+export type PiSessionBranchResponse = { session: PiSessionSummary; draft: string; attachments?: AttachmentRef[] }
