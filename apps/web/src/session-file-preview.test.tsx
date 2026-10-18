@@ -4,15 +4,16 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 import { SessionFilePreview } from './session-file-preview.js'
-import { fetchSessionFilePreview } from './workspace-api.js'
+import { useWorkspaceStore } from './workspace-store.js'
+import { fetchSessionFilePreview, fetchSessionImagePreview } from './workspace-api.js'
 
-vi.mock('./workspace-api.js', () => ({ fetchSessionFilePreview: vi.fn() }))
+vi.mock('./workspace-api.js', () => ({ fetchSessionFilePreview: vi.fn(), fetchSessionImagePreview: vi.fn() }))
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 const container = document.createElement('div')
 document.body.append(container)
 const root = createRoot(container)
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-afterEach(async () => { await act(async () => root.render(null)); queryClient.clear(); vi.mocked(fetchSessionFilePreview).mockReset() })
+afterEach(async () => { await act(async () => root.render(null)); queryClient.clear(); vi.mocked(fetchSessionFilePreview).mockReset(); vi.mocked(fetchSessionImagePreview).mockReset(); useWorkspaceStore.setState({ fileReadingPositions: {} }); vi.unstubAllGlobals() })
 
 async function render(path: string, line?: number) {
   await act(async () => root.render(<QueryClientProvider client={queryClient}><SessionFilePreview key={path} sessionId="one" path={path} line={line} onClose={() => undefined} /></QueryClientProvider>))
@@ -51,4 +52,101 @@ it('shows a readable failure and clamps a removed historical line to the current
   await render('short.ts', 800)
   expect(container.textContent).toContain('原行号已超出当前文件')
   expect(container.querySelector('.bg-accent')?.textContent).toContain('two')
+})
+
+async function click(label: string) {
+  const button = [...container.querySelectorAll('button')].find((button) => button.textContent === label)
+  expect(button, label).toBeDefined()
+  await act(async () => button!.click())
+}
+
+it('retains old text when refresh fails, then clamps the reading window after a successful shorter refresh', async () => {
+  vi.mocked(fetchSessionFilePreview).mockResolvedValue({ path: 'refresh.ts', content: Array.from({ length: 700 }, (_, i) => `row ${i + 1}`).join('\n') })
+  await render('refresh.ts')
+  await click('后 200 行')
+  const scroll = container.querySelector('[aria-label="文件文本"]')!
+  await act(async () => { scroll.scrollTop = 100; scroll.dispatchEvent(new Event('scroll', { bubbles: true })) })
+  vi.mocked(fetchSessionFilePreview).mockRejectedValueOnce(new Error('文件暂时无法访问。'))
+  await click('刷新文件')
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('仍显示上次读取的内容')
+  expect(container.querySelector('pre')?.textContent).toContain('row 201')
+  vi.mocked(fetchSessionFilePreview).mockResolvedValueOnce({ path: 'refresh.ts', content: 'short' })
+  await click('重试读取')
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+  expect(container.querySelector('pre')?.textContent).toContain('short')
+  expect(container.textContent).toContain('1–1 / 1')
+})
+
+it('restores the page and scroll position after collapse, and relocates in the same file without refetching', async () => {
+  vi.mocked(fetchSessionFilePreview).mockResolvedValue({ path: 'read.ts', content: Array.from({ length: 1200 }, (_, i) => `row ${i + 1}`).join('\n') })
+  await render('read.ts', 500)
+  await click('后 200 行')
+  const scroll = container.querySelector('[aria-label="文件文本"]')!
+  await act(async () => { scroll.scrollTop = 75; scroll.dispatchEvent(new Event('scroll', { bubbles: true })); root.render(null) })
+  await render('read.ts', 500)
+  expect(container.querySelector('pre')?.textContent).toContain('row 660')
+  expect(container.querySelector('[aria-label="文件文本"]')?.scrollTop).toBe(75)
+  expect(fetchSessionFilePreview).toHaveBeenCalledTimes(1)
+  await act(async () => root.render(<QueryClientProvider client={queryClient}><SessionFilePreview key="read.ts" sessionId="one" path="read.ts" line={900} navigation={1} onClose={() => undefined} /></QueryClientProvider>))
+  expect(container.querySelector('.bg-accent')?.textContent).toContain('row 900')
+  expect(fetchSessionFilePreview).toHaveBeenCalledTimes(1)
+  await click('前 200 行')
+  await click('返回目标行')
+  expect(container.querySelector('.bg-accent')?.textContent).toContain('row 900')
+})
+
+it('validates line jumps, handles an empty file, and reports clipboard failures', async () => {
+  vi.mocked(fetchSessionFilePreview).mockResolvedValue({ path: 'empty', content: '' })
+  await render('empty')
+  expect(container.textContent).toContain('此文件为空')
+  await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('正整数')
+  const clipboard = vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValueOnce(new Error('denied'))
+  await click('复制路径')
+  expect(container.textContent).toContain('复制失败')
+  clipboard.mockRestore()
+})
+
+it('renders Markdown with safe document-relative navigation, suppresses remote images and opens line targets as source', async () => {
+  const openFile = vi.fn()
+  vi.mocked(fetchSessionFilePreview).mockResolvedValue({ path: 'docs/readme.md', content: '# Guide\n\n[Code](../src/a.ts#L8)\n\n![remote](https://example.com/track.png)\n\n<script>alert(1)</script>\n' })
+  await act(async () => root.render(<QueryClientProvider client={queryClient}><SessionFilePreview key="md" sessionId="one" path="docs/readme.md" onOpenFile={openFile} onClose={() => undefined} /></QueryClientProvider>))
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+  expect(container.querySelector('h1')?.textContent).toBe('Guide')
+  expect(container.querySelector('img')).toBeNull()
+  expect(container.querySelector('script')).toBeNull()
+  await click('Code')
+  expect(openFile).toHaveBeenCalledWith('docs/../src/a.ts', 8)
+  await click('源码')
+  expect(container.querySelector('pre')?.textContent).toContain('# Guide')
+  await act(async () => root.render(<QueryClientProvider client={queryClient}><SessionFilePreview key="md" sessionId="one" path="docs/readme.md" line={2} navigation={1} onOpenFile={openFile} onClose={() => undefined} /></QueryClientProvider>))
+  expect(container.querySelector('[aria-label="文件文本"]')).not.toBeNull()
+  expect(container.querySelector('.bg-accent')?.textContent).toContain('2')
+})
+
+it('loads image bytes through the authorized API and releases object URLs on refresh and close', async () => {
+  const create = vi.spyOn(URL, 'createObjectURL').mockReturnValueOnce('blob:first').mockReturnValueOnce('blob:second')
+  const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+  vi.mocked(fetchSessionImagePreview).mockResolvedValue({ path: 'image.png', blob: new Blob(['first'], { type: 'image/png' }) })
+  await render('image.png')
+  expect(fetchSessionFilePreview).not.toHaveBeenCalled()
+  expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:first')
+  const image = container.querySelector('img')!
+  Object.defineProperties(image, { naturalWidth: { value: 640, configurable: true }, naturalHeight: { value: 480, configurable: true } })
+  await act(async () => image.dispatchEvent(new Event('load')))
+  await click('原始尺寸')
+  expect(image.style.width).toBe('640px')
+  const zoomIn = container.querySelector<HTMLButtonElement>('[aria-label="放大图片"]')!
+  await act(async () => zoomIn.click())
+  expect(container.textContent).toContain('125%')
+  vi.mocked(fetchSessionImagePreview).mockResolvedValue({ path: 'image.png', blob: new Blob(['second'], { type: 'image/png' }) })
+  await click('刷新文件')
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+  expect(revoke).toHaveBeenCalledWith('blob:first')
+  await act(async () => image.dispatchEvent(new Event('error')))
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('解码失败')
+  await act(async () => root.render(null))
+  expect(revoke).toHaveBeenCalledWith('blob:second')
+  create.mockRestore(); revoke.mockRestore()
 })

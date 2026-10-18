@@ -81,14 +81,21 @@ export async function saveSessionSettings(sessionId: string, settings: Partial<P
   return body.settings
 }
 
-export async function configurationRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function configurationResponse(path: string, init: RequestInit = {}) {
   const bootstrap = await fetch('/api/runtime/bootstrap', { method: 'POST', signal: init.signal })
   if (!bootstrap.ok) throw new Error('无法验证访问权限')
   const { token } = await bootstrap.json() as { token: string }
   const response = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-pi-nest-token': token, ...init.headers }, cache: 'no-store' })
-  const body = response.status === 204 ? undefined : await response.json()
-  if (!response.ok) throw new Error(typeof body?.error === 'string' ? body.error : '配置请求失败')
-  return body as T
+  if (!response.ok) {
+    const body = await response.json().catch(() => undefined)
+    throw new Error(typeof body?.error === 'string' ? body.error : '请求失败，请重试。')
+  }
+  return response
+}
+
+export async function configurationRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await configurationResponse(path, init)
+  return (response.status === 204 ? undefined : await response.json()) as T
 }
 
 export function fetchPiConfiguration(sessionId?: string) {
@@ -138,4 +145,9 @@ export async function selectProjectFolder(cwd?: string) {
 
 export function fetchSessionFilePreview(sessionId: string, path: string, signal?: AbortSignal, searchRoot?: string) {
   return configurationRequest<import('@pi-nest/contracts').PiSessionFilePreview>(`${sessionUrl(sessionId)}/file-preview`, { method: 'POST', body: JSON.stringify({ path, searchRoot }), signal })
+}
+
+export async function fetchSessionImagePreview(sessionId: string, path: string, signal?: AbortSignal, searchRoot?: string) {
+  const response = await configurationResponse(`${sessionUrl(sessionId)}/file-preview/image`, { method: 'POST', body: JSON.stringify({ path, searchRoot }), signal })
+  return { path: decodeURIComponent(response.headers.get('x-pi-nest-file-path') ?? encodeURIComponent(path)), blob: await response.blob() }
 }

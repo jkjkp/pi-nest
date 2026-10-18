@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 
+import type { FilePreviewSelection, FileReadingPosition } from './file-preview-state.js'
 import type { NavigationOrder } from './navigation-order.js'
 import { activeRuntimeTurn, isRunActive, nativeUserMessage, runtimeMessageIdentity, type PendingInput, type SessionRunSummary } from './session-run-model.js'
 import type { PiRuntimeStatistics, PiRuntimeEvent, PiRuntimeState, RuntimeStatus } from '@pi-nest/contracts'
@@ -19,6 +20,12 @@ export type RuntimeStatisticsState = { data?: PiRuntimeStatistics; error?: strin
 type SessionNotification = { pendingRunId?: string; completedRunId?: string; readRunId?: string }
 
 type WorkspaceState = {
+  filePreviews: Record<string, FilePreviewSelection>
+  fileReadingPositions: Record<string, FileReadingPosition>
+  openFilePreview: (sessionId: string, path: string, line?: number, searchRoot?: string) => void
+  setFilePreviewOpen: (sessionId: string, open: boolean) => void
+  rememberFilePosition: (key: string, position: FileReadingPosition) => void
+  clearFilePreview: (sessionId: string) => void
   sessionNotifications: Record<string, SessionNotification>
   trackPendingRun: (sessionId: string, runId: string) => void
   finishNotification: (sessionId: string, runId: string, unread: boolean, successful: boolean) => void
@@ -71,6 +78,18 @@ type WorkspaceState = {
 
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist((set) => ({
+  filePreviews: {},
+  fileReadingPositions: {},
+  openFilePreview: (sessionId, path, line, searchRoot) => set((state) => ({ filePreviews: { ...state.filePreviews, [sessionId]: { path, line, searchRoot, open: true, navigation: (state.filePreviews[sessionId]?.navigation ?? 0) + 1 } } })),
+  setFilePreviewOpen: (sessionId, open) => set((state) => {
+    const preview = state.filePreviews[sessionId]
+    return preview ? { filePreviews: { ...state.filePreviews, [sessionId]: { ...preview, open } } } : state
+  }),
+  rememberFilePosition: (key, position) => set((state) => ({ fileReadingPositions: { ...state.fileReadingPositions, [key]: position } })),
+  clearFilePreview: (sessionId) => set((state) => ({
+    filePreviews: Object.fromEntries(Object.entries(state.filePreviews).filter(([id]) => id !== sessionId)),
+    fileReadingPositions: Object.fromEntries(Object.entries(state.fileReadingPositions).filter(([key]) => JSON.parse(key)[0] !== sessionId)),
+  })),
   sessionNotifications: {},
   trackPendingRun: (sessionId, runId) => set((state) => {
     const current = state.sessionNotifications[sessionId] ?? {}

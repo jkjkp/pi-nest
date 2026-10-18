@@ -1,3 +1,4 @@
+import { filePreviewKey } from './file-preview-state.js'
 import { FilePreviewResizeHandle } from './file-preview-resize-handle.js'
 import { OpenToolFile } from './tool-file-context.js'
 import { SessionFilePreview } from './session-file-preview.js'
@@ -54,24 +55,29 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const runtimeStatistics = useWorkspaceStore((state) => state.runtimeStatistics[selectedSessionId])
   const runtimeLoading = runtimeStates[selectedSessionId]?.lifecycle === 'loading'
   const watchReady = useWorkspaceStore((state) => state.watchStates[selectedSessionId] === 'ready')
-  const inspectorOpen = useWorkspaceStore((state) => state.inspectorOpen)
-  const inspectorWidth = useWorkspaceStore((state) => state.inspectorWidth)
-  const setInspectorWidth = useWorkspaceStore((state) => state.setInspectorWidth)
+  const currentPreview = useWorkspaceStore((state) => state.filePreviews[selectedSessionId])
+  const previewOpen = currentPreview?.open ?? false
+  const openFilePreview = useWorkspaceStore((state) => state.openFilePreview)
+  const setFilePreviewOpen = useWorkspaceStore((state) => state.setFilePreviewOpen)
+  const setPreviewOpen = useCallback((open: boolean) => setFilePreviewOpen(selectedSessionId, open), [selectedSessionId, setFilePreviewOpen])
+  const previewOpener = useRef(new Map<string, HTMLElement>())
+  const previewToggle = useRef<HTMLButtonElement>(null)
+  const [widePreview, setWidePreview] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 80rem)').matches)
+  const previewWidth = useWorkspaceStore((state) => state.inspectorWidth)
+  const setPreviewWidth = useWorkspaceStore((state) => state.setInspectorWidth)
   const workspaceGrid = useRef<HTMLDivElement>(null)
   const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
-  const setInspectorOpen = useWorkspaceStore((state) => state.setInspectorOpen)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
   const [creatingProject, setCreatingProject] = useState(false)
   const [modelSelector, setModelSelector] = useState<{ sessionId?: string; open: boolean }>({ open: false })
   const modelSelectorOpen = modelSelector.sessionId === selectedSessionId && modelSelector.open
   const setModelSelectorOpen = (open: boolean) => setModelSelector({ sessionId: selectedSessionId, open })
-  const [fileSheetOpen, setFileSheetOpen] = useState(false)
   const {
     setComposer, showScrollToBottom, scrollToBottom, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
-    scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector,
+    scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector: togglePreview,
     rememberReadingPosition, registerTimelineScroll,
-  } = useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId: currentRun?.turns.findLast((turn) => turn.steering)?.id, isActive, inspectorOpen, setInspectorOpen })
+  } = useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId: currentRun?.turns.findLast((turn) => turn.steering)?.id, isActive, inspectorOpen: previewOpen && widePreview, setInspectorOpen: setPreviewOpen })
   const promptTextareaRef = useComposerTextarea(prompt)
   const promptHistory = useComposerHistory(
     selectedSessionId || (isDraft ? `draft:${draftProject?.key}` : ''),
@@ -105,13 +111,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   useEffect(() => {
     const media = window.matchMedia('(min-width: 80rem)')
-    const closeSheetOnDesktop = () => {
-      if (!media.matches) return
-      setFileSheetOpen(false)
-    }
-    closeSheetOnDesktop()
-    media.addEventListener('change', closeSheetOnDesktop)
-    return () => media.removeEventListener('change', closeSheetOnDesktop)
+    const updatePresentation = () => setWidePreview(media.matches)
+    updatePresentation()
+    media.addEventListener('change', updatePresentation)
+    return () => media.removeEventListener('change', updatePresentation)
   }, [])
 
   const navigation = (
@@ -147,14 +150,20 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       </footer>
     </div>
   )
-  const [preview, setPreview] = useState<{ sessionId: string; path: string; line?: number; searchRoot?: string }>()
-  const currentPreview = preview?.sessionId === selectedSessionId ? preview : undefined
   const openToolFile = useCallback((path: string, line?: number, searchRoot?: string) => {
-    setPreview({ sessionId: selectedSessionId, path, line, searchRoot })
-    if (window.matchMedia('(min-width: 80rem)').matches) setInspectorOpen(true)
-    else setFileSheetOpen(true)
-  }, [selectedSessionId, setInspectorOpen])
-  const filePreview = currentPreview ? <SessionFilePreview key={`${selectedSessionId}:${currentPreview.searchRoot}:${currentPreview.path}:${currentPreview.line}`} sessionId={selectedSessionId} path={currentPreview.path} searchRoot={currentPreview.searchRoot} line={currentPreview.line} onClose={() => { setPreview(undefined); setFileSheetOpen(false); setInspectorOpen(false) }} /> : null
+    if (document.activeElement instanceof HTMLElement) previewOpener.current.set(selectedSessionId, document.activeElement)
+    openFilePreview(selectedSessionId, path, line, searchRoot)
+  }, [selectedSessionId, openFilePreview])
+  function restorePreviewFocus() {
+    const opener = previewOpener.current.get(selectedSessionId)
+    if (opener?.isConnected) opener.focus({ preventScroll: true })
+    else previewToggle.current?.focus({ preventScroll: true })
+  }
+  function collapsePreview() {
+    setPreviewOpen(false)
+    if (widePreview) restorePreviewFocus()
+  }
+  const filePreview = currentPreview && previewOpen ? <SessionFilePreview key={filePreviewKey(selectedSessionId, currentPreview.path, currentPreview.searchRoot)} sessionId={selectedSessionId} path={currentPreview.path} searchRoot={currentPreview.searchRoot} line={currentPreview.line} navigation={currentPreview.navigation} onClose={collapsePreview} onOpenFile={(path, line) => openFilePreview(selectedSessionId, path, line)} /> : null
 
   return (
     <OpenToolFile value={openToolFile}><main className="relative flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -181,18 +190,21 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           <h1 className="truncate text-sm font-semibold tracking-tight" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
         </div>
       </header>
-      <Sheet open={fileSheetOpen && Boolean(currentPreview)} onOpenChange={setFileSheetOpen}>
-        <SheetContent className="p-0" side="right">
+      {!widePreview && <Sheet open={previewOpen && Boolean(currentPreview)} onOpenChange={setPreviewOpen}>
+        <SheetContent className="w-full p-0 sm:w-[min(40rem,100vw)] [&>button:last-child]:hidden" side="right" onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          if (!window.matchMedia('(min-width: 80rem)').matches) restorePreviewFocus()
+        }}>
           <SheetTitle className="sr-only">文件预览</SheetTitle>
           <SheetDescription className="sr-only">查看当前项目内的文件内容。</SheetDescription>
           {filePreview}
         </SheetContent>
-      </Sheet>
+      </Sheet>}
 
       <div
         className="workspace-grid grid min-h-0 flex-1"
         ref={workspaceGrid}
-        style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': !isHome && currentPreview && inspectorOpen ? `${Number.isFinite(inspectorWidth) ? inspectorWidth : 300}px` : '0px' } as CSSProperties}
+        style={{ '--inspector-width': `${previewWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': !isHome && currentPreview && previewOpen ? `min(${Number.isFinite(previewWidth) ? previewWidth : 300}px, calc((100% - var(--navigation-width)) / 2))` : '0px' } as CSSProperties}
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
         <section className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
@@ -202,10 +214,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               <h1 className="min-w-0 truncate text-base font-semibold" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
               {selectedSession && <span className="inline-flex size-4 shrink-0" role={runtimeLoading ? 'status' : undefined} aria-label={runtimeLoading ? '正在加载 Pi 运行时' : undefined}>{runtimeLoading && <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />}</span>}
             </div>
-            {currentPreview && <Button aria-label={inspectorOpen ? '收起文件预览' : '打开文件预览'} onClick={() => {
-              if (window.matchMedia('(min-width: 80rem)').matches) toggleInspector()
-              else setFileSheetOpen(true)
-            }} size="icon-sm" type="button" variant="ghost"><PanelRight aria-hidden="true" /></Button>}
+            {currentPreview && <Button ref={previewToggle} aria-label={previewOpen ? '收起文件预览' : '打开文件预览'} aria-expanded={previewOpen} onClick={togglePreview} size="icon-sm" type="button" variant="ghost"><PanelRight aria-hidden="true" /></Button>}
             {selectedSessionId && <SessionInspector key={selectedSessionId} run={currentRun} session={displaySession} />}
           </header>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
@@ -333,9 +342,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </div>
           </div>}
         </section>
-        <aside aria-hidden={isHome || !currentPreview || !inspectorOpen} className={`relative hidden min-h-0 min-w-0 bg-card/60 xl:block ${!isHome && currentPreview && inspectorOpen ? 'border-l' : 'pointer-events-none'}`} inert={isHome || !currentPreview || !inspectorOpen}>
-          {!isHome && currentPreview && inspectorOpen && <FilePreviewResizeHandle containerRef={workspaceGrid} navigationWidth={navigationWidth} width={inspectorWidth} onWidthChange={setInspectorWidth} />}
-          <div className="h-full min-h-0 overflow-hidden">{filePreview}</div>
+        <aside aria-hidden={isHome || !currentPreview || !previewOpen} className={`relative hidden min-h-0 min-w-0 bg-card/60 xl:block ${!isHome && currentPreview && previewOpen ? 'border-l' : 'pointer-events-none'}`} inert={isHome || !currentPreview || !previewOpen}>
+          {!isHome && currentPreview && previewOpen && <FilePreviewResizeHandle containerRef={workspaceGrid} navigationWidth={navigationWidth} width={previewWidth} onWidthChange={setPreviewWidth} />}
+          <div className="h-full min-h-0 overflow-hidden">{widePreview && filePreview}</div>
         </aside>
       </div>
     </main></OpenToolFile>

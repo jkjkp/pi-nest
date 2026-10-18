@@ -20,6 +20,8 @@ function language(className: string | undefined) {
   return className?.match(/(?:^|\s)language-([^\s]+)/)?.[1]?.toLowerCase()
 }
 
+const LocalLinkContext = createContext<((href: string) => void) | undefined>(undefined)
+
 const StreamingContext = createContext(false)
 
 function MarkdownPre({ children }: ComponentProps<'pre'>) {
@@ -36,7 +38,9 @@ function MarkdownPre({ children }: ComponentProps<'pre'>) {
 }
 
 function MarkdownLink({ children, href }: ComponentProps<'a'>) {
+  const openLocalLink = useContext(LocalLinkContext)
   const url = href ? safeUrl(href) : undefined
+  if (!url && href && openLocalLink) return <button type="button" className="text-primary underline underline-offset-4 text-left" onClick={() => openLocalLink(href)}>{children}</button>
   return url ? <a className="text-primary underline underline-offset-4" href={url} rel="noopener noreferrer" target="_blank">{children}</a> : <>{children}</>
 }
 
@@ -64,14 +68,14 @@ const markdownComponents: Components = {
   ul: ({ children, className }) => <ul className={`my-3 list-disc space-y-1 pl-6 ${className ?? ''}`}>{children}</ul>,
 }
 
-export const AssistantMarkdown = memo(function AssistantMarkdown({ isStreaming, source }: { isStreaming: boolean; source: string }) {
+export const AssistantMarkdown = memo(function AssistantMarkdown({ isStreaming, source, onOpenLocalLink }: { isStreaming: boolean; source: string; onOpenLocalLink?: (href: string) => void }) {
   return (
-    <StreamingContext.Provider value={isStreaming}>
+    <LocalLinkContext value={onOpenLocalLink}><StreamingContext.Provider value={isStreaming}>
       <div className="min-w-0 [overflow-wrap:anywhere] [&_.contains-task-list]:list-none [&_.contains-task-list]:pl-2">
-        <ReactMarkdown allowedElements={allowedElements} components={markdownComponents} remarkPlugins={[remarkGfm]} skipHtml unwrapDisallowed urlTransform={safeUrl}>
+        <ReactMarkdown allowedElements={allowedElements} components={markdownComponents} remarkPlugins={[remarkGfm]} skipHtml unwrapDisallowed urlTransform={(url) => safeUrl(url) ?? (onOpenLocalLink && url && !/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(url) ? url : undefined)}>
           {source}
         </ReactMarkdown>
       </div>
-    </StreamingContext.Provider>
+    </StreamingContext.Provider></LocalLinkContext>
   )
 })

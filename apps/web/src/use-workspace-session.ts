@@ -377,6 +377,8 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     try {
       await deleteSession(sessionId)
       useWorkspaceStore.getState().removeSessionNotification(sessionId)
+      useWorkspaceStore.getState().clearFilePreview(sessionId)
+      queryClient.removeQueries({ queryKey: ['session-file-preview', sessionId] })
       queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => current?.filter((session) => session.id !== sessionId))
       if (selectedSessionIdRef.current === sessionId) {
         const next = projects.flatMap((project) => project.sessions).find((session) => session.id !== sessionId)
