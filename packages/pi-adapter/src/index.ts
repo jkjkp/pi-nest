@@ -27,3 +27,5 @@ export type { PiSessionBranchOptions, PiSessionBranchResult } from './branch-ses
 
 export { capturePiSessionHistory, historyFromSnapshot, turnIndexFromSnapshot } from './read-session-history.js'
 export type { PiSessionHistorySnapshot } from './read-session-history.js'
+export { preparePiImage } from './attachment-images.js'
+export type { PiInputImage } from './attachment-images.js'

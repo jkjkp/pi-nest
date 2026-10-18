@@ -8,7 +8,7 @@ import { PiSessionHistoryRevisionError, PiSessionHistorySourceChangedError } fro
 
 export class PiSessionBranchTargetError extends Error {}
 export type PiSessionBranchOptions = PiSessionMutationOptions & ({ kind: 'clone' } | { kind: 'fork'; entryId: string; revision: string })
-export type PiSessionBranchResult = { session: PiCreatedSession & { name?: string; firstMessage?: string }; draft: string }
+export type PiSessionBranchResult = { session: PiCreatedSession & { name?: string; firstMessage?: string }; draft: string; draftContent?: unknown; entries?: unknown }
 
 function fingerprint(bytes: Buffer) { return createHash('sha256').update(bytes).digest('hex') }
 function messageText(content: unknown) {
@@ -35,11 +35,13 @@ export function branchPiSession(options: PiSessionBranchOptions): PiSessionBranc
     const branch = manager.getBranch()
     let target = manager.getLeafId()
     let draft = ''
+    let draftContent: unknown
     if (options.kind === 'fork') {
       const entry = branch.find((entry) => entry.id === options.entryId)
       if (!entry || entry.type !== 'message' || entry.message.role !== 'user') throw new PiSessionBranchTargetError('请选择当前分支的一条用户消息。')
       target = entry.parentId
       draft = messageText(entry.message.content)
+      draftContent = entry.message.content
     } else if (!target || !branch.some((entry) => entry.type === 'message' && entry.message.role === 'user')) {
       throw new PiSessionBranchTargetError('当前会话没有可复制的对话。')
     }
@@ -61,6 +63,8 @@ export function branchPiSession(options: PiSessionBranchOptions): PiSessionBranc
     return {
       session: { id: header.id, cwd: header.cwd, createdAt: header.timestamp, sessionFile: targetFile, name: manager.getSessionName(), firstMessage: first?.type === 'message' && first.message.role === 'user' ? messageText(first.message.content).replace(/\s+/g, ' ').trim().slice(0, 120) || undefined : undefined },
       draft,
+      ...(draftContent ? { draftContent } : {}),
+      entries,
     }
   } finally {
     if (!committed && createdFile) rmSync(createdFile, { force: true })

@@ -88,3 +88,16 @@ it('removes the new session if the source changes during creation', () => {
   expect(() => branchPiSession({ ...request, kind: 'clone' })).toThrow('changed while reading history')
   expect(readdirSync(join(directory, 'sessions'))).toEqual(files)
 })
+
+it('forks image-bearing native input into a complete draft while clone preserves its image bytes', () => {
+  const content = [{ type: 'text' as const, text: 'look' }, { type: 'image' as const, data: 'image-bytes', mimeType: 'image/png' }]
+  const id = source.appendMessage({ role: 'user', content, timestamp: Date.now() })
+  const original = readFileSync(source.getSessionFile()!)
+  const fork = branchPiSession({ ...options(), kind: 'fork', entryId: id })
+  expect(fork.draftContent).toEqual(content)
+  expect(fork.draft).toBe('look')
+  expect(SessionManager.open(fork.session.sessionFile).getBranch()).toEqual([])
+  const clone = branchPiSession({ ...options(), kind: 'clone' })
+  expect(JSON.stringify(SessionManager.open(clone.session.sessionFile).getBranch())).toContain('image-bytes')
+  expect(readFileSync(source.getSessionFile()!)).toEqual(original)
+})
