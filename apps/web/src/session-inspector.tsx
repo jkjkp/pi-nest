@@ -1,6 +1,8 @@
 import { type ReactNode } from 'react'
-import { CircleAlert } from 'lucide-react'
+import { CircleAlert, Info, X } from 'lucide-react'
 
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogTrigger, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 
 import { isRunActive, type SessionRunSummary } from './session-run-model.js'
@@ -11,11 +13,14 @@ export function SessionInspector({ run, session }: { run: SessionRunSummary | un
   const fields = runInspectorFields(run)
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="border-b px-4 py-4">
-        <h2 className="text-sm font-semibold">会话检查器</h2>
-        <p className="mt-1 text-xs text-muted-foreground">运行摘要与安全元信息</p>
-      </div>
+    <Dialog>
+      <DialogTrigger asChild><Button aria-label="打开会话检查器" title="会话检查器" size="icon-sm" variant="ghost"><Info aria-hidden="true" /></Button></DialogTrigger>
+      <DialogContent className="flex h-[min(40rem,calc(100dvh-2rem))] flex-col overflow-hidden p-0">
+      <header className="relative shrink-0 border-b py-4 pr-14 pl-4">
+        <DialogTitle>会话检查器</DialogTitle>
+        <DialogDescription>运行摘要与安全元信息</DialogDescription>
+        <DialogClose asChild><Button aria-label="关闭会话检查器" className="absolute top-3 right-3" size="icon-sm" variant="ghost"><X aria-hidden="true" /></Button></DialogClose>
+      </header>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-6 p-4 text-sm">
           <section aria-labelledby="inspector-runtime-heading" className="space-y-3">
@@ -52,7 +57,8 @@ export function SessionInspector({ run, session }: { run: SessionRunSummary | un
           </section>
         </div>
       </ScrollArea>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

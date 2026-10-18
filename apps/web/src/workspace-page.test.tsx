@@ -131,3 +131,14 @@ it('allows command discovery when an idle watched session already has a model fr
   expect(composer.canQuery).toBe(true)
   queryClient.clear()
 })
+
+it('keeps session information behind one dialog button without reserving a sidebar column', () => {
+  useWorkspaceStore.setState({ inspectorOpen: true, runs: {}, runtimeStates: {}, watchStates: {}, hiddenProjectCwds: {} })
+  const queryClient = new QueryClient()
+  queryClient.setQueryData(['sessions'], [{ id: 'session-info', cwd: '/fixture' }])
+  const markup = renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-info']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
+  expect(markup.match(/aria-label="打开会话检查器"/g)).toHaveLength(1)
+  expect(markup).toContain('--side-panel-width:0px')
+  expect(markup).not.toContain('本工作台原生事件')
+  queryClient.clear()
+})

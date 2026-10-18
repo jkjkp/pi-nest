@@ -63,8 +63,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const [modelSelector, setModelSelector] = useState<{ sessionId?: string; open: boolean }>({ open: false })
   const modelSelectorOpen = modelSelector.sessionId === selectedSessionId && modelSelector.open
   const setModelSelectorOpen = (open: boolean) => setModelSelector({ sessionId: selectedSessionId, open })
-  const [inspectorSheetOpen, setInspectorSheetOpen] = useState(false)
-  const [desktopInspectorSheetOpen, setDesktopInspectorSheetOpen] = useState(false)
+  const [fileSheetOpen, setFileSheetOpen] = useState(false)
   const {
     setComposer, showScrollToBottom, scrollToBottom, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
     scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector,
@@ -105,8 +104,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     const media = window.matchMedia('(min-width: 80rem)')
     const closeSheetOnDesktop = () => {
       if (!media.matches) return
-      setInspectorSheetOpen(false)
-      setDesktopInspectorSheetOpen(false)
+      setFileSheetOpen(false)
     }
     closeSheetOnDesktop()
     media.addEventListener('change', closeSheetOnDesktop)
@@ -151,10 +149,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const openToolFile = useCallback((path: string, line?: number, searchRoot?: string) => {
     setPreview({ sessionId: selectedSessionId, path, line, searchRoot })
     if (window.matchMedia('(min-width: 80rem)').matches) setInspectorOpen(true)
-    else if (window.matchMedia('(min-width: 48rem)').matches) setDesktopInspectorSheetOpen(true)
-    else setInspectorSheetOpen(true)
+    else setFileSheetOpen(true)
   }, [selectedSessionId, setInspectorOpen])
-  const inspector = currentPreview ? <SessionFilePreview key={`${selectedSessionId}:${currentPreview.searchRoot}:${currentPreview.path}:${currentPreview.line}`} sessionId={selectedSessionId} path={currentPreview.path} searchRoot={currentPreview.searchRoot} line={currentPreview.line} onClose={() => setPreview(undefined)} /> : <SessionInspector run={currentRun} session={selectedSession} />
+  const filePreview = currentPreview ? <SessionFilePreview key={`${selectedSessionId}:${currentPreview.searchRoot}:${currentPreview.path}:${currentPreview.line}`} sessionId={selectedSessionId} path={currentPreview.path} searchRoot={currentPreview.searchRoot} line={currentPreview.line} onClose={() => { setPreview(undefined); setFileSheetOpen(false); setInspectorOpen(false) }} /> : null
 
   return (
     <OpenToolFile value={openToolFile}><main className="relative flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -180,47 +177,32 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">PN</span>
           <h1 className="truncate text-sm font-semibold tracking-tight" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
         </div>
-        {!isHome && <div className="ml-auto flex items-center gap-1">
-          <Sheet open={inspectorSheetOpen} onOpenChange={setInspectorSheetOpen}>
-            <SheetTrigger asChild>
-              <Button aria-label="打开会话检查器" className="xl:hidden" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
-            </SheetTrigger>
-            <SheetContent className="p-0" side="right">
-              <SheetTitle className="sr-only">会话检查器</SheetTitle>
-              <SheetDescription className="sr-only">当前会话的运行摘要与元信息。</SheetDescription>
-              {inspector}
-            </SheetContent>
-          </Sheet>
-          <Button aria-label={inspectorOpen ? '收起会话检查器' : '展开会话检查器'} className="hidden xl:inline-flex" onClick={toggleInspector} onPointerDown={(event) => event.preventDefault()} size="icon-sm" type="button" variant="ghost"><PanelRight aria-hidden="true" /></Button>
-        </div>}
       </header>
-
-      {!isHome && <div className="pointer-events-none absolute inset-x-0 top-0 z-20 hidden h-14 items-center justify-end px-3 sm:px-4 md:flex">
-        <Sheet open={desktopInspectorSheetOpen} onOpenChange={setDesktopInspectorSheetOpen}>
-          <SheetTrigger asChild>
-            <Button aria-label="打开会话检查器" className="pointer-events-auto xl:hidden" size="icon-sm" variant="ghost"><PanelRight aria-hidden="true" /></Button>
-          </SheetTrigger>
-          <SheetContent className="p-0" side="right">
-            <SheetTitle className="sr-only">会话检查器</SheetTitle>
-            <SheetDescription className="sr-only">当前会话的运行摘要与元信息。</SheetDescription>
-            {inspector}
-          </SheetContent>
-        </Sheet>
-        <Button aria-label={inspectorOpen ? '收起会话检查器' : '展开会话检查器'} className="pointer-events-auto hidden xl:inline-flex" onClick={toggleInspector} onPointerDown={(event) => event.preventDefault()} size="icon-sm" type="button" variant="ghost"><PanelRight aria-hidden="true" /></Button>
-      </div>}
+      <Sheet open={fileSheetOpen && Boolean(currentPreview)} onOpenChange={setFileSheetOpen}>
+        <SheetContent className="p-0" side="right">
+          <SheetTitle className="sr-only">文件预览</SheetTitle>
+          <SheetDescription className="sr-only">查看当前项目内的文件内容。</SheetDescription>
+          {filePreview}
+        </SheetContent>
+      </Sheet>
 
       <div
         className="workspace-grid grid min-h-0 flex-1"
-        style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': !isHome && inspectorOpen ? `${inspectorWidth}px` : '0px' } as CSSProperties}
+        style={{ '--inspector-width': `${inspectorWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': !isHome && currentPreview && inspectorOpen ? `${inspectorWidth}px` : '0px' } as CSSProperties}
       >
         <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
         <section className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
-          <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-background/95 py-2 pr-16 pl-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
+          <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-background/95 py-2 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {(selectedSession || draftProject) && <Folder aria-hidden="true" className="size-[18px] shrink-0 text-muted-foreground" />}
               <h1 className="min-w-0 truncate text-base font-semibold" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
               {selectedSession && <span className="inline-flex size-4 shrink-0" role={runtimeLoading ? 'status' : undefined} aria-label={runtimeLoading ? '正在加载 Pi 运行时' : undefined}>{runtimeLoading && <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />}</span>}
             </div>
+            {currentPreview && <Button aria-label={inspectorOpen ? '收起文件预览' : '打开文件预览'} onClick={() => {
+              if (window.matchMedia('(min-width: 80rem)').matches) toggleInspector()
+              else setFileSheetOpen(true)
+            }} size="icon-sm" type="button" variant="ghost"><PanelRight aria-hidden="true" /></Button>}
+            {selectedSessionId && <SessionInspector key={selectedSessionId} run={currentRun} session={displaySession} />}
           </header>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="timeline-scroll h-full">
@@ -346,7 +328,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </div>
           </div>}
         </section>
-        <aside aria-hidden={isHome || !inspectorOpen} className={`hidden min-h-0 overflow-hidden bg-card/60 xl:block ${!isHome && inspectorOpen ? 'border-l' : 'pointer-events-none'}`} inert={isHome || !inspectorOpen}>{inspector}</aside>
+        <aside aria-hidden={isHome || !currentPreview || !inspectorOpen} className={`hidden min-h-0 overflow-hidden bg-card/60 xl:block ${!isHome && currentPreview && inspectorOpen ? 'border-l' : 'pointer-events-none'}`} inert={isHome || !currentPreview || !inspectorOpen}>{filePreview}</aside>
       </div>
     </main></OpenToolFile>
   )

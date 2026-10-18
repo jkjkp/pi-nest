@@ -6,6 +6,10 @@ function Dialog(props: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />
 }
 
+function DialogTrigger(props: React.ComponentProps<typeof DialogPrimitive.Trigger>) {
+  return <DialogPrimitive.Trigger {...props} />
+}
+
 function DialogContent({ className, ...props }: React.ComponentProps<typeof DialogPrimitive.Content>) {
   return (
     <DialogPrimitive.Portal>
@@ -33,4 +37,4 @@ function DialogClose(props: React.ComponentProps<typeof DialogPrimitive.Close>) 
   return <DialogPrimitive.Close {...props} />
 }
 
-export { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle }
+export { Dialog, DialogTrigger, DialogClose, DialogContent, DialogDescription, DialogTitle }
