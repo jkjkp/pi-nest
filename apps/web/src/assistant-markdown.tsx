@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 
 import { MermaidDiagram } from './mermaid-diagram.js'
 
-const allowedElements = ['a', 'br', 'code', 'li', 'ol', 'p', 'pre', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul']
+const allowedElements = ['a', 'blockquote', 'br', 'code', 'li', 'ol', 'p', 'pre', 'strong', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'ul']
 
 function safeUrl(value: string) {
   try {
@@ -42,6 +42,7 @@ function MarkdownLink({ children, href }: ComponentProps<'a'>) {
 function markdownComponents(isStreaming: boolean): Components {
   return {
     a: MarkdownLink,
+    blockquote: ({ children }) => <blockquote className="my-3 border-l-4 border-border pl-4 text-muted-foreground">{children}</blockquote>,
     code: (props) => <MarkdownCode {...props} isStreaming={isStreaming} />,
     ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-6">{children}</ol>,
     p: ({ children }) => <p className="my-3 first:mt-0 last:mb-0">{children}</p>,

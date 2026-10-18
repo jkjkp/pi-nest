@@ -29,6 +29,29 @@ describe('AssistantMarkdown', () => {
     expect(renderToStaticMarkup(<AssistantMarkdown isStreaming={false} source={source} />)).toContain('正在生成 Mermaid 图表')
   })
 
+  it.each([true, false])('renders multi-paragraph and nested quotes with supported inline content (streaming: %s)', (isStreaming) => {
+    const source = '> first **bold** [link](https://example.com)\n>\n> second paragraph\n>\n> > nested quote\n>\n> - quoted item\n\noutside quote'
+    const markup = renderToStaticMarkup(<AssistantMarkdown isStreaming={isStreaming} source={source} />)
+
+    expect(markup.match(/<blockquote\b/g)).toHaveLength(2)
+    expect(markup).toContain('second paragraph</p>')
+    expect(markup).toContain('nested quote</p>')
+    expect(markup).toContain('<strong')
+    expect(markup).toContain('href="https://example.com"')
+    expect(markup).toContain('<li>quoted item</li>')
+    expect(markup.lastIndexOf('</blockquote>')).toBeLessThan(markup.indexOf('outside quote'))
+  })
+
+  it('keeps greater-than signs in code and escaped text out of quote blocks', () => {
+    const source = '`> inline code`\n\n```text\n> code block\n```\n\n\\> escaped text'
+    const markup = renderToStaticMarkup(<AssistantMarkdown isStreaming={false} source={source} />)
+
+    expect(markup).not.toContain('<blockquote')
+    expect(markup).toContain('&gt; inline code')
+    expect(markup).toContain('&gt; code block')
+    expect(markup).toContain('&gt; escaped text')
+  })
+
   it('allows only safe outbound link protocols and rejects oversized Mermaid source', () => {
     const markup = renderToStaticMarkup(<AssistantMarkdown isStreaming={false} source={'[web](https://example.com) [mail](mailto:test@example.com) [bad](javascript:alert(1)) [local](/local)'} />)
 
