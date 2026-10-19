@@ -11,11 +11,13 @@ export function resizeComposerTextarea(textarea: HTMLTextAreaElement, maxHeight 
   const borderHeight = pixels(style.borderTopWidth) + pixels(style.borderBottomWidth)
   const minimumHeight = pixels(style.lineHeight) + pixels(style.paddingTop) + pixels(style.paddingBottom) + borderHeight
 
+  const scrollTop = textarea.scrollTop
   textarea.style.height = 'auto'
   const contentHeight = textarea.scrollHeight + borderHeight
   const height = Math.min(maxHeight, Math.max(minimumHeight, contentHeight))
   textarea.style.height = `${height}px`
   textarea.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden'
+  textarea.scrollTop = scrollTop
 }
 
 export function useComposerTextarea(value: string, maxHeight = COMPOSER_TEXTAREA_MAX_HEIGHT) {
