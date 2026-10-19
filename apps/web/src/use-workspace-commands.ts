@@ -7,7 +7,7 @@ import { useWorkspaceStore } from './workspace-store.js'
 type CompactNotice = { message: string; running?: boolean; cancelling?: boolean; error?: boolean }
 
 type Workspace = ReturnType<typeof useWorkspaceSession>
-type CommandUi = { fork: (onFork: (entryId: string, revision: string) => Promise<void>) => void; model: () => void; rename: (onSaved: () => void) => void; statistics: () => void; settings: () => void }
+type CommandUi = { fork: (onFork: (entryId: string, revision: string) => Promise<void>) => void; rename: (onSaved: () => void) => void; statistics: () => void; settings: () => void }
 
 export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionRunController, ui: CommandUi) {
   const currentSession = useRef(workspace.selectedSessionId)
@@ -53,7 +53,7 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
     const sessionId = workspace.selectedSessionId
     if (pending.current.has(sessionId)) return true
     const parsed = parseComposerCommand(text)
-    if (!parsed || parsed.name === 'thinking') return false
+    if (!parsed) return false
     const command = parsed
     setCompactNotices((current) => {
       if (!current[sessionId]) return current
@@ -72,7 +72,7 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
       try {
         if (workspace.isDraft || !workspace.selectedSession) throw new Error('请先进入已有会话，再执行命令。')
         if (['session', 'copy', 'settings', 'fork', 'clone'].includes(command.name) && command.argument) throw new Error(`用法：/${command.name}（无需参数）`)
-        if (['model', 'compact', 'name', 'fork', 'clone'].includes(command.name)) {
+        if (['compact', 'name', 'fork', 'clone'].includes(command.name)) {
           if (workspace.isActive || workspace.runtimeStates[sessionId]?.lifecycle === 'active') throw new Error('请等待当前任务结束后再执行此命令。')
           if (workspace.mutatingSessionId === sessionId || ['loading', 'switching'].includes(workspace.modelStatus) || ['loading', 'switching'].includes(workspace.thinkingStatus) || workspace.runtimeStates[sessionId]?.lifecycle === 'loading') throw new Error('正在处理会话操作，请稍后重试。')
         }
@@ -80,17 +80,6 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
         setBusySessions([...pending.current])
         report(`正在执行 /${command.name}…`)
         switch (command.name) {
-          case 'model': {
-            if (!command.argument) { ui.model(); complete('已打开模型选择器'); break }
-            const models = await workspace.openModels()
-            if (currentSession.current !== sessionId) return
-            if (!models) throw new Error('模型列表读取失败，请重试。')
-            const model = models.find((model) => `${model.provider}/${model.id}` === command.argument)
-            if (!model) throw new Error('未找到指定模型，请使用 /model 选择，或填写完整的 provider/modelId。')
-            if (!await workspace.changeModel(model.provider, model.id)) throw new Error('模型切换失败，请重试。')
-            complete(`已切换模型：${model.provider}/${model.id}`)
-            break
-          }
           case 'compact': {
             compacting.current.add(sessionId)
             setNotice(undefined)

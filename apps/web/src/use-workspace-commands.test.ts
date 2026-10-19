@@ -37,7 +37,7 @@ function setup(text: string) {
     historyQuery: { isPending: false, isError: false }, history: { entries: [{ type: 'message', timestamp: '2026-10-16', raw: { message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'hidden' }, { type: 'text', text: '**Answer**' }] } } }] },
   } as unknown as ReturnType<typeof useWorkspaceSession>
   const sessionRuns = { compact: vi.fn().mockResolvedValue(true), cancelCompact: vi.fn().mockResolvedValue(undefined), getSessionStatistics: vi.fn().mockResolvedValue(undefined) } as unknown as SessionRunController
-  const ui = { fork: vi.fn(), model: vi.fn(), rename: vi.fn(), statistics: vi.fn(), settings: vi.fn() }
+  const ui = { fork: vi.fn(), rename: vi.fn(), statistics: vi.fn(), settings: vi.fn() }
   function Render() { return useWorkspaceCommands(workspace, sessionRuns, ui) }
   function render() {
     hooks.index = 0; hooks.layouts = []
@@ -48,22 +48,12 @@ function setup(text: string) {
   return { workspace, sessionRuns, ui, render, submit: () => render().submit(text), draft: () => useWorkspaceStore.getState().drafts.one }
 }
 
-it.each([['/model', 'model'], ['/session', 'statistics'], ['/settings', 'settings']] as const)('opens the existing UI for %s without a model prompt', async (text, action) => {
+it.each([['/session', 'statistics'], ['/settings', 'settings']] as const)('opens the existing UI for %s without a model prompt', async (text, action) => {
   const context = setup(text)
   expect(context.submit()).toBe(true)
   await tick()
   expect(context.ui[action]).toHaveBeenCalledOnce()
   expect(context.draft()).toBe('')
-})
-it('matches a full provider/model id including slashes and reports invalid models', async () => {
-  const context = setup('/model fixture/model/with/slash')
-  context.submit(); await tick()
-  expect(context.workspace.changeModel).toHaveBeenCalledWith('fixture', 'model/with/slash')
-  expect(context.draft()).toBe('')
-  useWorkspaceStore.getState().setDraft('one', '/model missing')
-  context.render().submit('/model missing'); await tick()
-  expect(context.render().notice?.error).toBe(true)
-  expect(context.draft()).toBe('/model missing')
 })
 it('passes compaction instructions, blocks duplicate commands and preserves new input', async () => {
   const context = setup('/compact 保留接口设计')
@@ -121,9 +111,9 @@ it('copies raw assistant text, reports clipboard failures and never copies think
   expect(context.draft()).toBe('/copy')
 })
 it('rejects mutation commands during generation while allowing read-only actions', async () => {
-  const context = setup('/model fixture/model/with/slash')
+  const context = setup('/compact')
   context.workspace.isActive = true
-  for (const text of ['/model', '/compact', '/name Test']) {
+  for (const text of ['/compact', '/name Test']) {
     context.render().submit(text); await tick()
     expect(context.render().notice?.error).toBe(true)
   }
@@ -133,13 +123,15 @@ it('rejects mutation commands during generation while allowing read-only actions
   context.render().submit('/session')
   expect(context.ui.statistics).toHaveBeenCalledOnce()
 })
-it('rejects extra parameters and draft commands, leaving ordinary prompts and thinking to the existing handler', async () => {
+it('rejects extra parameters and draft commands, leaving ordinary prompts and removed commands unhandled', async () => {
   const context = setup('/copy unexpected')
   context.submit(); await tick()
   expect(context.render().notice?.message).toContain('无需参数')
   expect(context.render().submit('你好 /model')).toBe(false)
   expect(context.render().submit('/modelx')).toBe(false)
-  expect(context.render().submit('/thinking high')).toBe(false)
+  for (const text of ['/model', '/model fixture/model', '/thinking', '/thinking high']) expect(context.render().submit(text)).toBe(false)
+  expect(context.workspace.openModels).not.toHaveBeenCalled()
+  expect(context.workspace.changeModel).not.toHaveBeenCalled()
   context.workspace.isDraft = true
   context.render().submit('/settings'); await tick()
   expect(context.ui.settings).not.toHaveBeenCalled()

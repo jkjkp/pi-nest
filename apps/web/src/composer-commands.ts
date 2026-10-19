@@ -3,8 +3,6 @@ import type { RuntimeTurn } from './session-run-model.js'
 import type { PiRuntimeCommand } from '@pi-nest/contracts'
 
 export const composerCommands = [
-  { name: 'thinking', description: '调整思考等级 · /thinking [level]' },
-  { name: 'model', description: '选择模型 · /model [provider/modelId]' },
   { name: 'compact', description: '压缩上下文 · /compact [说明]' },
   { name: 'name', description: '重命名会话 · /name [名称]' },
   { name: 'session', description: '查看会话用量与上下文' },

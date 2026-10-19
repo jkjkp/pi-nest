@@ -8,7 +8,6 @@ import { timelineItems } from './timeline-model.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import type { PiProject, PiSessionInitialSettings, PiSessionBranchRequest, PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
-import { thinkingCommand } from './thinking-command.js'
 import { stripAnsiLine } from './ansi-text.js'
 import { activeRuntimeTurn, isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
@@ -254,16 +253,6 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     if (attachmentDraft.items.length && (attachmentDraft.busy || prompt.trimStart().startsWith('/'))) {
       const error = attachmentDraft.busy ? '请等待附件上传完成，或移除失败的附件。' : '带附件时暂不支持命令，请先移除附件。'
       if (isDraft) setDraftError(error); else setControlError(error)
-      return
-    }
-    const command = thinkingCommand(prompt)
-    if (command) {
-      if (isDraft || !selectedSessionId) { setDraftError('请先进入已有会话，再调整思考等级。'); return }
-      if (isActive) { setControlError('生成结束后可调整思考等级。'); return }
-      if (modelOperation.current?.sessionId === selectedSessionId) { setControlError('正在处理会话设置，请稍后重试。'); return }
-      setThinkingOpen(true)
-      if (command.level) void changeThinkingLevel(command.level).then((changed) => { if (changed) setDraft(selectedSessionId, '') })
-      else { setDraft(selectedSessionId, ''); void openThinking() }
       return
     }
     if (modelOperation.current?.sessionId === selectedSessionId) return

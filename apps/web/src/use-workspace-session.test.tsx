@@ -89,18 +89,17 @@ it('validates Pi levels and uses the confirmed value instead of the requested on
   queryClient.clear()
 })
 
-it('does not submit thinking commands as model prompts or queued inputs', async () => {
-  const { workspace, controller, queryClient } = thinkingProbe('/thinking high')
+it.each(['/thinking', '/thinking high', '/model', '/model fixture/model'])('submits %s as text without switching settings', (prompt) => {
+  const { workspace, controller, queryClient } = thinkingProbe(prompt)
   workspace.submitPrompt()
-  await vi.waitFor(() => expect(controller.setThinkingLevel).toHaveBeenCalledWith('session-1', 'high'))
-  expect(controller.start).not.toHaveBeenCalled()
-  expect(controller.steer).not.toHaveBeenCalled()
-  expect(controller.followUp).not.toHaveBeenCalled()
+  expect(controller.start).toHaveBeenCalledWith(expect.objectContaining({ prompt, sessionId: 'session-1' }))
+  expect(controller.setThinkingLevel).not.toHaveBeenCalled()
+  expect(controller.getAvailableThinkingLevels).not.toHaveBeenCalled()
   queryClient.clear()
 })
 
 it('rejects duplicate thinking changes and preserves input when Pi fails', async () => {
-  const { workspace, controller, queryClient } = thinkingProbe('/thinking high')
+  const { workspace, controller, queryClient } = thinkingProbe('保留草稿')
   let reject!: (error: Error) => void
   vi.mocked(controller.setThinkingLevel).mockImplementation(() => new Promise<void>((_resolve, fail) => { reject = fail }))
   const first = workspace.changeThinkingLevel('high')
@@ -108,19 +107,16 @@ it('rejects duplicate thinking changes and preserves input when Pi fails', async
   expect(await workspace.changeThinkingLevel('medium')).toBe(false)
   reject(new Error('Pi rejected thinking change'))
   expect(await first).toBe(false)
-  expect(useWorkspaceStore.getState().drafts['session-1']).toBe('/thinking high')
+  expect(useWorkspaceStore.getState().drafts['session-1']).toBe('保留草稿')
   queryClient.clear()
 })
 
-it('blocks thinking commands during generation without queuing or clearing input', async () => {
-  const { workspace, controller, queryClient } = thinkingProbe('/thinking high', true)
-  workspace.submitPrompt()
+it('blocks thinking changes during generation without clearing the draft', async () => {
+  const { workspace, controller, queryClient } = thinkingProbe('保留草稿', true)
   expect(await workspace.changeThinkingLevel('high')).toBe(false)
   expect(controller.resumeRuntime).not.toHaveBeenCalled()
   expect(controller.setThinkingLevel).not.toHaveBeenCalled()
-  expect(controller.steer).not.toHaveBeenCalled()
-  expect(controller.followUp).not.toHaveBeenCalled()
-  expect(useWorkspaceStore.getState().drafts['session-1']).toBe('/thinking high')
+  expect(useWorkspaceStore.getState().drafts['session-1']).toBe('保留草稿')
   queryClient.clear()
 })
 

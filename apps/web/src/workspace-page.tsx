@@ -66,7 +66,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   if (commandPanels.sessionId !== selectedSessionId) setCommandPanels({ sessionId: selectedSessionId, statistics: false })
   const commands = useWorkspaceCommands(session, sessionRuns, {
     fork: (onFork) => setCommandPanels({ sessionId: selectedSessionId, statistics: false, fork: onFork }),
-    model: () => { setModelSelectorOpen(true); void openModels() },
     rename: (onSaved) => { if (selectedSession) setCommandPanels({ sessionId: selectedSessionId, statistics: false, rename: { session: selectedSession, onSaved } }) },
     statistics: () => setCommandPanels({ sessionId: selectedSessionId, statistics: true }),
     settings: () => { void navigate(`/settings?session=${encodeURIComponent(selectedSessionId)}`) },

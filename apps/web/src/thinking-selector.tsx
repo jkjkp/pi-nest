@@ -3,7 +3,7 @@ import { Brain, Check, ChevronDown, RefreshCw } from 'lucide-react'
 import { Dialog, Popover, Portal } from 'radix-ui'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
-import { thinkingLabel } from './thinking-command.js'
+import { thinkingLabel } from './thinking-label.js'
 
 type Props = {
   open: boolean

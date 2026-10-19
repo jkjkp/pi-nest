@@ -60,7 +60,7 @@ it.each(['/cl', '/clo', '/clon', '/clone', ' /cl'])('executes the selected clone
 })
 
 it.each([
-  ['/cl', 'Tab'], ['你好 /cl', 'Enter'], ['/clone 参数', 'Enter'], ['/model', 'Enter'],
+  ['/cl', 'Tab'], ['你好 /cl', 'Enter'], ['/clone 参数', 'Enter'], ['/session', 'Enter'],
 ])('only completes %s with %s', (value, key) => {
   const context = setup(value)
   if (value === '/clone 参数') {
@@ -71,6 +71,15 @@ it.each([
   expect(context.key(key).preventDefault).toHaveBeenCalledOnce()
   expect(context.execute).not.toHaveBeenCalled()
   expect(context.downstream).not.toHaveBeenCalled()
+})
+
+it.each(['/model', '/thinking'])('does not suggest or complete the removed %s command', (value) => {
+  const context = setup(value)
+  expect(renderToStaticMarkup(context.render())).not.toContain('role="option"')
+  expect(context.key('Enter').preventDefault).not.toHaveBeenCalled()
+  expect(context.downstream).toHaveBeenCalledOnce()
+  expect(context.execute).not.toHaveBeenCalled()
+  expect(context.value()).toBe(value)
 })
 
 it('does not execute clone while confirming IME input', () => {
