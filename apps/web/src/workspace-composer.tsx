@@ -1,4 +1,4 @@
-import { useImperativeHandle, useState, type ReactNode, type RefObject } from 'react'
+import { useEffect, useImperativeHandle, useState, type ReactNode, type RefObject } from 'react'
 import { ListChecks, ListPlus, LoaderCircle, Puzzle, Send, Square, Terminal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -46,6 +46,17 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
     (value) => isDraft ? setDraftPrompt(value) : selectedSessionId && setDraft(selectedSessionId, value),
     promptTextareaRef,
   )
+  useEffect(() => {
+    if (!commands.notice?.running || commands.notice.cancelling) return
+    function onEscape(event: KeyboardEvent) {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.repeat) return
+      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return
+      event.preventDefault()
+      void commands.cancelCompact()
+    }
+    window.addEventListener('keydown', onEscape)
+    return () => window.removeEventListener('keydown', onEscape)
+  }, [commands])
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-transparent px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6" ref={setComposer} data-slot="composer">
       <div className="conversation-stage">
@@ -75,6 +86,7 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
             else if (selectedSessionId) setDraft(selectedSessionId, value)
           }}
           onKeyDown={(event) => {
+            if (commands.busy && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); return }
             if (promptHistory.onKeyDown(event)) return
             if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.nativeEvent.isComposing) return
 

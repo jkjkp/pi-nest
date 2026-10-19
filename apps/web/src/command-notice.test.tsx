@@ -16,3 +16,12 @@ it('keeps progress and other command feedback inline', () => {
   expect(markup).toContain('<p role="status"')
   expect(markup).not.toContain('fixed')
 })
+
+it('uses text sweep feedback without a redundant cancel button for compaction', () => {
+  const markup = renderToStaticMarkup(<CommandNotice notice={{ message: '压缩上下文… (Esc 取消)', running: true }} />)
+  expect(markup).toContain('command-running')
+  expect(markup).toContain('role="status"')
+  expect(markup).toContain('压缩上下文… (Esc 取消)')
+  expect(markup).not.toContain('<button')
+  expect(markup).not.toContain('animate-spin')
+})

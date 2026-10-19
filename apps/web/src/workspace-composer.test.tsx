@@ -24,7 +24,7 @@ beforeEach(() => {
       retryHistory: vi.fn(), setPendingJump: vi.fn(),
       attachmentDraft: { items: [], add: vi.fn(), busy: false } as unknown as Props['state']['attachmentDraft'],
     },
-    commands: { busy: false, notice: undefined, submit: vi.fn(() => false) },
+    commands: { cancelCompact: vi.fn(), busy: false, notice: undefined, submit: vi.fn(() => false) },
     sessionRuns: { getCommands: vi.fn(async () => []) } as unknown as SessionRunController,
     textareaRef: createRef(), setComposer: vi.fn(), onSubmit: vi.fn(), onAbort: vi.fn(),
     controls: <span>model controls</span>, canQuery: false, settingsBusy: false, onError: vi.fn(),
@@ -93,4 +93,19 @@ it('keeps the submitting and stopping states named when only their spinner is vi
   await render()
   expect(container.querySelector('[role="status"][aria-label="正在停止"]')).not.toBeNull()
   expect(container.querySelector('[aria-label="停止生成"]')).toBeNull()
+})
+
+it('cancels compaction with Escape and blocks sending while busy', async () => {
+  props.commands = { ...props.commands, busy: true, notice: { message: '压缩上下文… (Esc 取消)', running: true } }
+  await render()
+  expect(container.querySelector('.command-running')?.textContent).toBe('压缩上下文… (Esc 取消)')
+  await act(() => container.querySelector('textarea')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
+  expect(props.onSubmit).not.toHaveBeenCalled()
+  await act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })))
+  expect(props.commands.cancelCompact).toHaveBeenCalledOnce()
+  const dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog'); document.body.append(dialog)
+  await act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })))
+  expect(props.commands.cancelCompact).toHaveBeenCalledOnce()
+  dialog.remove()
+  expect([...container.querySelectorAll('button')].some((button) => button.textContent === '取消')).toBe(false)
 })

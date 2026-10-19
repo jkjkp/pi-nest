@@ -25,7 +25,8 @@ vi.mock('./workspace-store.js', async (importOriginal) => {
 
 const sessionRuns = {
   resumeQueued: async () => undefined, adopt: () => undefined,
-  compact: async () => undefined,
+  compact: async () => true,
+  cancelCompact: async () => undefined,
   followUp: async () => undefined,
   getCommands: async () => [],
   getAvailableModels: async () => [],

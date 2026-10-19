@@ -16,7 +16,8 @@ type ActiveRun = { awaitingRunId: boolean; runId: string | undefined; stopReason
 
 export type SessionRunController = {
   adopt: (options: StartSessionRunOptions) => void
-  compact: (sessionId: string, customInstructions?: string) => Promise<void>
+  compact: (sessionId: string, customInstructions?: string) => Promise<boolean>
+  cancelCompact: (sessionId: string) => Promise<void>
   followUp: (sessionId: string, message: string, input?: InputAttachments) => Promise<void>
   getCommands: (sessionId: string) => Promise<PiRuntimeCommand[]>
   getAvailableModels: (sessionId: string) => Promise<PiRuntimeModel[]>
@@ -59,6 +60,7 @@ function isExtensionDialog(event: PiRuntimeEvent) {
 }
 
 export function createSessionRunController({ invalidateHistory, runtime }: SessionRunControllerOptions): SessionRunController {
+  const compactions = new Map<string, { cancelled: boolean; started: boolean }>()
   const activeRuns = new Map<string, ActiveRun>()
   const awaitingAgentTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const statisticsRequests = new Map<string, number>()
@@ -374,7 +376,33 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
         checkAwaitingAgent(options.sessionId, undefined)
       }
     },
-    compact: async (sessionId, customInstructions) => { await resumeRuntime(sessionId); await runtime.compact(sessionId, customInstructions); await invalidateHistory(sessionId); await getSessionStatistics(sessionId) },
+    compact: async (sessionId, customInstructions) => {
+      const operation = { cancelled: false, started: false }
+      compactions.set(sessionId, operation)
+      let aborted = false
+      const unsubscribe = runtime.onPiEvent((event) => {
+        if (event.sessionId === sessionId && event.event.type === 'compaction_end' && event.event.aborted === true) aborted = true
+      })
+      try {
+        await resumeRuntime(sessionId)
+        if (operation.cancelled) return false
+        operation.started = true
+        try { await runtime.compact(sessionId, customInstructions) }
+        catch (cause) { if (aborted) return false; throw cause }
+        operation.started = false
+        try { await invalidateHistory(sessionId) }
+        catch { /* The history query reports refresh errors; compaction has already succeeded. */ }
+        await getSessionStatistics(sessionId)
+        return true
+      } finally { unsubscribe(); compactions.delete(sessionId) }
+    },
+    cancelCompact: async (sessionId) => {
+      const operation = compactions.get(sessionId)
+      if (!operation || operation.cancelled) return
+      operation.cancelled = true
+      try { if (operation.started) await runtime.abort(sessionId) }
+      catch (cause) { operation.cancelled = false; throw cause }
+    },
     followUp: (sessionId, message, input) => submitRunningInput(sessionId, message, 'follow_up', input),
     getCommands: async (sessionId) => (await runtime.getCommands(sessionId)).commands,
     getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,

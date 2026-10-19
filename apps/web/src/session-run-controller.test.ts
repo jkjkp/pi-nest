@@ -752,3 +752,38 @@ it('restores attachment-bearing steering and follow-up receipts from a fresh wat
   runtime.snapshot({ sessionId: 'active', runtime: { lifecycle: 'active', revision: 1 }, activeTurn: { runId: 'run', prompt: 'original', startedAt: '2026-10-18T00:00:00Z' }, inputQueue: { steering: ['same'], followUp: ['same'], steeringInputs: [{ id: 'steering-id', message: 'same', attachmentIds: [ref.id], attachments: [ref] }], inputs: [{ id: 'follow-up-id', message: 'same', attachmentIds: [ref.id], attachments: [ref] }] } })
   expect(useWorkspaceStore.getState().runs.active?.pendingInputs?.map((input) => ({ id: input.id, mode: input.mode, attachments: input.attachments }))).toEqual([{ id: 'steering-id', mode: 'steer', attachments: [ref] }, { id: 'follow-up-id', mode: 'follow_up', attachments: [ref] }])
 })
+
+it('cancels native compaction and waits for its aborted result', async () => {
+  const runtime = runtimeMock()
+  let reject!: (cause: Error) => void
+  runtime.compact.mockReturnValueOnce(new Promise((_, fail) => { reject = fail }))
+  const controller = createSessionRunController({ runtime: runtime as never, invalidateHistory: vi.fn() })
+  const result = controller.compact('session-a')
+  await tick()
+  await controller.cancelCompact('session-a')
+  expect(runtime.abort).toHaveBeenCalledExactlyOnceWith('session-a')
+  runtime.emit({ event: { type: 'compaction_end', aborted: true }, sessionId: 'session-a', sequence: 1, observedAt: 'now' })
+  reject(new Error('Compaction cancelled'))
+  await expect(result).resolves.toBe(false)
+})
+it('cancels during runtime preparation without starting compaction', async () => {
+  const runtime = runtimeMock()
+  let ready!: () => void
+  runtime.resumeRuntime.mockReturnValueOnce(new Promise<void>((resolve) => { ready = resolve }))
+  const controller = createSessionRunController({ runtime: runtime as never, invalidateHistory: vi.fn() })
+  const result = controller.compact('session-a')
+  await tick()
+  await controller.cancelCompact('session-a')
+  ready()
+  await expect(result).resolves.toBe(false)
+  expect(runtime.compact).not.toHaveBeenCalled()
+  expect(runtime.abort).not.toHaveBeenCalled()
+})
+
+it('keeps a successful compaction successful when refreshing history fails', async () => {
+  const runtime = runtimeMock()
+  const invalidateHistory = vi.fn().mockRejectedValue(new Error('History refresh failed'))
+  const controller = createSessionRunController({ invalidateHistory, runtime: runtime as never })
+  await expect(controller.compact('session-a')).resolves.toBe(true)
+  expect(runtime.getSessionStatistics).toHaveBeenCalledWith('session-a')
+})

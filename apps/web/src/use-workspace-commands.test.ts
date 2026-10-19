@@ -36,7 +36,7 @@ function setup(text: string) {
     openModels: vi.fn().mockResolvedValue([{ provider: 'fixture', id: 'model/with/slash' }]), changeModel: vi.fn().mockResolvedValue(true), handleRename: vi.fn().mockResolvedValue(undefined),
     historyQuery: { isPending: false, isError: false }, history: { entries: [{ type: 'message', timestamp: '2026-10-16', raw: { message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'hidden' }, { type: 'text', text: '**Answer**' }] } } }] },
   } as unknown as ReturnType<typeof useWorkspaceSession>
-  const sessionRuns = { compact: vi.fn().mockResolvedValue(undefined), getSessionStatistics: vi.fn().mockResolvedValue(undefined) } as unknown as SessionRunController
+  const sessionRuns = { compact: vi.fn().mockResolvedValue(true), cancelCompact: vi.fn().mockResolvedValue(undefined), getSessionStatistics: vi.fn().mockResolvedValue(undefined) } as unknown as SessionRunController
   const ui = { fork: vi.fn(), model: vi.fn(), rename: vi.fn(), statistics: vi.fn(), settings: vi.fn() }
   function Render() { return useWorkspaceCommands(workspace, sessionRuns, ui) }
   function render() {
@@ -68,9 +68,11 @@ it('matches a full provider/model id including slashes and reports invalid model
 it('passes compaction instructions, blocks duplicate commands and preserves new input', async () => {
   const context = setup('/compact 保留接口设计')
   let release!: () => void
-  vi.mocked(context.sessionRuns.compact).mockReturnValue(new Promise((resolve) => { release = resolve }))
+  vi.mocked(context.sessionRuns.compact).mockReturnValue(new Promise((resolve) => { release = () => resolve(true) }))
   context.submit()
   expect(context.render().busy).toBe(true)
+  expect(context.draft()).toBe('')
+  expect(context.render().notice).toMatchObject({ message: '压缩上下文… (Esc 取消)', running: true })
   context.submit()
   expect(context.sessionRuns.compact).toHaveBeenCalledOnce()
   expect(context.sessionRuns.compact).toHaveBeenCalledWith('one', '保留接口设计')
@@ -86,13 +88,13 @@ it('keeps failed commands and does not clear a draft after switching sessions', 
   expect(context.draft()).toBe('/compact')
   expect(context.render().notice?.message).toBe('Cannot compact')
   let release!: () => void
-  vi.mocked(context.sessionRuns.compact).mockReturnValueOnce(new Promise((resolve) => { release = resolve }))
+  vi.mocked(context.sessionRuns.compact).mockReturnValueOnce(new Promise((resolve) => { release = () => resolve(true) }))
   context.submit()
   context.workspace.selectedSessionId = 'two'
   useWorkspaceStore.getState().setDraft('two', '另一会话')
   context.render()
   release(); await tick()
-  expect(context.draft()).toBe('/compact')
+  expect(context.draft()).toBe('')
   expect(useWorkspaceStore.getState().drafts.two).toBe('另一会话')
   expect(context.render().notice).toBeUndefined()
 })
@@ -215,4 +217,64 @@ it('does not navigate or clear input when branch creation fails or another sessi
   release({ session: { id: 'child' }, draft: '' }); await tick()
   expect(context.workspace.selectSession).not.toHaveBeenCalled()
   expect(context.draft()).toBe('/clone')
+})
+
+it('keeps compaction progress across session switches and reports cancellation', async () => {
+  const context = setup('/compact')
+  let finish!: (value: boolean) => void
+  vi.mocked(context.sessionRuns.compact).mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+  context.submit()
+  context.workspace.selectedSessionId = 'two'
+  expect(context.render().notice).toBeUndefined()
+  context.workspace.selectedSessionId = 'one'
+  expect(context.render().notice?.running).toBe(true)
+  await context.render().cancelCompact()
+  expect(context.sessionRuns.cancelCompact).toHaveBeenCalledExactlyOnceWith('one')
+  expect(context.render().notice?.cancelling).toBe(true)
+  finish(false); await tick()
+  expect(context.render().notice).toEqual({ message: '已取消上下文压缩' })
+  expect(context.draft()).toBe('')
+})
+it('preserves new input on failure and expires compaction completion feedback', async () => {
+  vi.useFakeTimers()
+  const context = setup('/compact')
+  let reject!: (cause: Error) => void
+  vi.mocked(context.sessionRuns.compact).mockReturnValueOnce(new Promise((_, fail) => { reject = fail }))
+  context.submit()
+  useWorkspaceStore.getState().setDraft('one', '新输入')
+  reject(new Error('Failed')); await tick()
+  expect(context.draft()).toBe('新输入')
+  expect(context.render().notice).toMatchObject({ error: true, message: 'Failed' })
+  vi.advanceTimersByTime(2000)
+  expect(context.render().notice).toBeUndefined()
+  context.submit(); await tick()
+  expect(context.render().notice?.message).toBe('上下文压缩完成')
+  vi.advanceTimersByTime(3000)
+  expect(context.render().notice).toBeUndefined()
+})
+it('allows retrying a failed cancellation without losing the active compaction', async () => {
+  const context = setup('/compact')
+  let finish!: (value: boolean) => void
+  vi.mocked(context.sessionRuns.compact).mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+  vi.mocked(context.sessionRuns.cancelCompact).mockRejectedValueOnce(new Error('Connection lost'))
+  context.submit()
+  await context.render().cancelCompact()
+  expect(context.render().busy).toBe(true)
+  expect(context.render().notice).toMatchObject({ running: true, message: '取消失败：Connection lost（Esc 重试）' })
+  await context.render().cancelCompact()
+  expect(context.sessionRuns.cancelCompact).toHaveBeenCalledTimes(2)
+  finish(false); await tick()
+  expect(context.render().notice?.message).toBe('已取消上下文压缩')
+})
+
+it('clears a stale compact command restored during successful compaction', async () => {
+  const context = setup('/compact ')
+  let finish!: (value: boolean) => void
+  vi.mocked(context.sessionRuns.compact).mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+  context.submit()
+  expect(context.draft()).toBe('')
+  useWorkspaceStore.getState().setDraft('one', '/compact ')
+  finish(true); await tick()
+  expect(context.draft()).toBe('')
+  expect(context.render().notice?.message).toBe('上下文压缩完成')
 })

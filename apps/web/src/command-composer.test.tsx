@@ -188,3 +188,10 @@ it('does not claim no match before the native commands are available', () => {
   expect(markup).not.toContain('没有匹配的命令')
   expect(markup).toContain('正在读取命令')
 })
+
+it.each(['/com', '/compact'])('executes compact on one Enter for %s', (value) => {
+  const context = setup(value)
+  context.key('Enter')
+  expect(context.execute).toHaveBeenCalledExactlyOnceWith('/compact ')
+  expect(context.downstream).not.toHaveBeenCalled()
+})

@@ -4,14 +4,19 @@ import type { SessionRunController } from './session-run-controller.js'
 import type { useWorkspaceSession } from './use-workspace-session.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
+type CompactNotice = { message: string; running?: boolean; cancelling?: boolean; error?: boolean }
+
 type Workspace = ReturnType<typeof useWorkspaceSession>
 type CommandUi = { fork: (onFork: (entryId: string, revision: string) => Promise<void>) => void; model: () => void; rename: (onSaved: () => void) => void; statistics: () => void; settings: () => void }
 
 export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionRunController, ui: CommandUi) {
   const currentSession = useRef(workspace.selectedSessionId)
+  const compacting = useRef(new Set<string>())
+  const cancelling = useRef(new Set<string>())
+  const [compactNotices, setCompactNotices] = useState<Partial<Record<string, CompactNotice>>>({})
   const pending = useRef(new Set<string>())
   const [busySessions, setBusySessions] = useState<string[]>([])
-  const [notice, setNotice] = useState<{ sessionId: string; message: string; error?: boolean }>()
+  const [notice, setNotice] = useState<CompactNotice & { sessionId: string }>()
   useLayoutEffect(() => { currentSession.current = workspace.selectedSessionId }, [workspace.selectedSessionId])
   useEffect(() => {
     if (!notice?.error) return
@@ -21,12 +26,39 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
     return () => clearTimeout(timer)
   }, [notice, workspace.selectedSessionId])
 
+  const compactNotice = compactNotices[workspace.selectedSessionId]
+  useEffect(() => {
+    if (!compactNotice || compactNotice.running) return
+    const sessionId = workspace.selectedSessionId
+    const timer = setTimeout(() => setCompactNotices((current) => {
+      if (current[sessionId] !== compactNotice) return current
+      const next = { ...current }; delete next[sessionId]; return next
+    }), compactNotice.error ? 2000 : 3000)
+    return () => clearTimeout(timer)
+  }, [compactNotice, workspace.selectedSessionId])
+
+  async function cancelCompact() {
+    const sessionId = workspace.selectedSessionId
+    if (!compacting.current.has(sessionId) || cancelling.current.has(sessionId)) return
+    cancelling.current.add(sessionId)
+    setCompactNotices((current) => ({ ...current, [sessionId]: { message: '正在取消压缩…', running: true, cancelling: true } }))
+    try { await sessionRuns.cancelCompact(sessionId) }
+    catch (cause) {
+      if (compacting.current.has(sessionId)) setCompactNotices((current) => ({ ...current, [sessionId]: { message: `取消失败：${cause instanceof Error ? cause.message : '请重试'}（Esc 重试）`, running: true } }))
+      cancelling.current.delete(sessionId)
+    }
+  }
+
   function submit(text: string) {
     const sessionId = workspace.selectedSessionId
     if (pending.current.has(sessionId)) return true
     const parsed = parseComposerCommand(text)
     if (!parsed || parsed.name === 'thinking') return false
     const command = parsed
+    setCompactNotices((current) => {
+      if (!current[sessionId]) return current
+      const next = { ...current }; delete next[sessionId]; return next
+    })
     function report(message: string, error = false) {
       if (currentSession.current === sessionId) setNotice({ sessionId, message, error })
     }
@@ -59,10 +91,18 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
             complete(`已切换模型：${model.provider}/${model.id}`)
             break
           }
-          case 'compact':
-            await sessionRuns.compact(sessionId, command.argument || undefined)
-            complete('上下文压缩完成')
+          case 'compact': {
+            compacting.current.add(sessionId)
+            setNotice(undefined)
+            const store = useWorkspaceStore.getState()
+            if (store.drafts[sessionId] === text) store.setDraft(sessionId, '')
+            setCompactNotices((current) => ({ ...current, [sessionId]: { message: '压缩上下文… (Esc 取消)', running: true } }))
+            const completed = await sessionRuns.compact(sessionId, command.argument || undefined)
+            const current = useWorkspaceStore.getState()
+            if (completed !== false && current.drafts[sessionId] === text) current.setDraft(sessionId, '')
+            setCompactNotices((current) => ({ ...current, [sessionId]: { message: completed === false ? '已取消上下文压缩' : '上下文压缩完成' } }))
             break
+          }
           case 'name':
             if (!command.argument) { ui.rename(() => complete('会话已重命名')); report('请在对话框中设置会话名称'); break }
             if (command.argument.length > 120) throw new Error('会话名称不能超过 120 个字符。')
@@ -105,12 +145,22 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
             ui.settings()
             break
         }
-      } catch (cause) { report(cause instanceof Error ? cause.message : '命令执行失败，请重试。', true) }
-      finally { pending.current.delete(sessionId); setBusySessions([...pending.current]) }
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : '命令执行失败，请重试。'
+        if (compacting.current.has(sessionId)) {
+          const store = useWorkspaceStore.getState()
+          if (!store.drafts[sessionId]) store.setDraft(sessionId, text)
+          setCompactNotices((current) => ({ ...current, [sessionId]: { message, error: true } }))
+        } else report(message, true)
+      } finally {
+        compacting.current.delete(sessionId)
+        cancelling.current.delete(sessionId)
+        pending.current.delete(sessionId); setBusySessions([...pending.current])
+      }
     }
     void execute()
     return true
   }
 
-  return { submit, busy: busySessions.includes(workspace.selectedSessionId), notice: notice?.sessionId === workspace.selectedSessionId ? notice : undefined }
+  return { submit, cancelCompact, busy: busySessions.includes(workspace.selectedSessionId), notice: compactNotice ?? (notice?.sessionId === workspace.selectedSessionId ? notice : undefined) }
 }
