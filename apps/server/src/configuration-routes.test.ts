@@ -57,3 +57,17 @@ it('validates discovery requests and never persists or reloads runtimes when lis
   const failed = await routes().request('/models/discover', { method: 'POST', headers, body: JSON.stringify(request) })
   expect(await failed.text()).not.toContain('secret-key')
 })
+
+it('reads draft configuration only for known projects and rejects ambiguous targets', async () => {
+  const projects = { has: vi.fn((cwd: string) => cwd === '/registered') }
+  const route = createConfigurationRoutes({} as PiRuntimeRegistry, security, projects as unknown as import('./project-registry.js').ProjectRegistry)
+  expect((await route.request('/?project=%2Fregistered', { headers })).status).toBe(200)
+  expect(api.readPiConfiguration).toHaveBeenLastCalledWith('/registered')
+  expect((await route.request('/?project=%2Ftrusted', { headers })).status).toBe(200)
+  expect(api.readPiConfiguration).toHaveBeenLastCalledWith('/trusted')
+  api.readPiConfiguration.mockClear()
+  expect((await route.request('/?project=%2Fprivate', { headers })).status).toBe(404)
+  expect((await route.request('/?project=%2Ftrusted&session=known', { headers })).status).toBe(400)
+  expect((await route.request('/?project=%2Ftrusted')).status).toBe(403)
+  expect(api.readPiConfiguration).not.toHaveBeenCalled()
+})

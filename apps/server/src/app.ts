@@ -14,7 +14,7 @@ import { createSessionRoutes } from './session-routes.js'
 export function createApp(runtime = new PiRuntimeRegistry(), security = new RuntimeSecurity(), projects = new ProjectRegistry()) {
   const app = new Hono()
     .get('/api/health', (context) => context.json({ status: 'ok' }))
-    .route('/api/configuration', createConfigurationRoutes(runtime, security))
+    .route('/api/configuration', createConfigurationRoutes(runtime, security, projects))
     .use('/api/sessions/:sessionId/settings', configurationSecurity(security))
     .route('/api/attachments', createAttachmentRoutes(runtime.attachments, security, projects))
     .route('/api/projects', createProjectRoutes(projects, security))

@@ -6,6 +6,7 @@ import { discoverPiModels, diagnosePiMcp, listPiSessions, PiConfigurationConflic
 import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
 import type { RuntimeSecurity } from './runtime-security.js'
 import { configurationUpdateSchema } from './configuration-schema.js'
+import { ProjectRegistry } from './project-registry.js'
 
 export function configurationSecurity(security: RuntimeSecurity): MiddlewareHandler {
   return async (context, next) => {
@@ -16,7 +17,7 @@ export function configurationSecurity(security: RuntimeSecurity): MiddlewareHand
   }
 }
 
-export function createConfigurationRoutes(runtime: PiRuntimeRegistry, security: RuntimeSecurity) {
+export function createConfigurationRoutes(runtime: PiRuntimeRegistry, security: RuntimeSecurity, projects = new ProjectRegistry()) {
   const routes = new Hono().use('*', configurationSecurity(security))
   routes.use('*', bodyLimit({ maxSize: 1_000_000 }))
   async function cwdFor(sessionId?: string) {
@@ -27,7 +28,10 @@ export function createConfigurationRoutes(runtime: PiRuntimeRegistry, security: 
   return routes
     .get('/', async (context) => {
       try {
-        const cwd = await cwdFor(context.req.query('session'))
+        const project = context.req.query('project')
+        if (project && context.req.query('session')) return context.json({ error: '请选择项目或会话之一' }, 400)
+        if (project && !(await listPiSessions()).some((session) => session.cwd === project) && !projects.has(project)) return context.json({ error: '找不到项目' }, 404)
+        const cwd = project || await cwdFor(context.req.query('session'))
         if (!cwd) return context.json({ error: '找不到项目会话' }, 404)
         return context.json(await readPiConfiguration(cwd))
       } catch { return context.json({ error: '无法读取 Pi 配置，请检查原生配置文件格式' }, 500) }

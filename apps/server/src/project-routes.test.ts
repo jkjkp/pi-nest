@@ -78,7 +78,7 @@ it('secures folder operations and allows the first Pi prompt only in an explicit
   const session = await app.request('/api/sessions', { method: 'POST', headers, body })
   expect(session.status).toBe(201)
   expect(adapter.createPiSession).toHaveBeenCalledExactlyOnceWith(project.cwd)
-  expect(runtime.beginPrompt).toHaveBeenCalledWith(expect.objectContaining({ cwd: project.cwd }), 'first question')
+  expect(runtime.beginPrompt).toHaveBeenCalledWith(expect.objectContaining({ cwd: project.cwd }), 'first question', undefined, undefined)
   const unregistered = JSON.stringify({ cwd: directory, prompt: 'question' })
   expect((await app.request('/api/sessions', { method: 'POST', headers, body: unregistered })).status).toBe(404)
 })

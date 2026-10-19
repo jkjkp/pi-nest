@@ -33,6 +33,10 @@ const createSessionSchema = z.object({
   attachmentIds: z.array(z.string().regex(/^(?:[a-f0-9-]{36}|[a-f0-9]{64})$/)).min(1).max(8).optional(),
   submissionId: z.string().uuid().optional(),
   draftId: z.string().uuid().optional(),
+  initialSettings: z.object({
+    model: z.object({ provider: z.string().trim().min(1).max(512), id: z.string().trim().min(1).max(512) }).strict().optional(),
+    thinkingLevel: z.string().min(1).max(128).optional(),
+  }).strict().optional(),
 }).strict()
 
 const branchSessionSchema = z.discriminatedUnion('kind', [
@@ -103,7 +107,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
 
       const input = { message: parsed.data.prompt, ...(parsed.data.attachmentIds ? { attachmentIds: parsed.data.attachmentIds, submissionId: parsed.data.submissionId } : {}) }
       const draftScope = `draft:${parsed.data.draftId}:${parsed.data.cwd}`
-      if (input.attachmentIds?.length && (!security.acceptsOrigin(context.req.header('origin')) || !security.acceptsToken(context.req.header('x-pi-nest-token')))) return context.json({ error: '附件访问被拒绝' }, 403)
+      if ((input.attachmentIds?.length || parsed.data.initialSettings) && (!security.acceptsOrigin(context.req.header('origin')) || !security.acceptsToken(context.req.header('x-pi-nest-token')))) return context.json({ error: '会话创建访问被拒绝' }, 403)
       let created: ReturnType<typeof createPiSession> | undefined
       let busy = false
       try {
@@ -111,7 +115,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
         const result = await runtime.attachments.deliver(draftScope, input, async () => {
           created = createPiSession(parsed.data.cwd)
           runtime.attachments.transfer(input, draftScope, created.id)
-          const prompt = runtime.beginPrompt(created, parsed.data.prompt || '请查看附件。', ...(input.attachmentIds?.length ? [input] : []))
+          const prompt = runtime.beginPrompt(created, parsed.data.prompt || '请查看附件。', input.attachmentIds?.length ? input : undefined, parsed.data.initialSettings)
           if (!prompt) {
             busy = true
             throw new Error('Pi runtime is busy')

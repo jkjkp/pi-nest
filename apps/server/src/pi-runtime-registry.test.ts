@@ -849,3 +849,36 @@ it('persists accepted attachment steering until the native user message is obser
     expect(registry.attachments.steering(session.id)).toEqual([])
   } finally { await registry.close(); const { rm } = await import('node:fs/promises'); await rm(directory, { recursive: true, force: true }) }
 })
+
+it('applies first-prompt settings under the prompt lock before sending any prompt', async () => {
+  const host = { ...hostMock(), command: vi.fn(async (command: Record<string, unknown>) => ({ data: command.type === 'get_available_thinking_levels' ? { levels: ['off', 'high'] } : {} })) }
+  const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    const prompt = registry.beginPrompt(session, 'first', undefined, { model: { provider: 'test', id: 'reasoning' }, thinkingLevel: 'high' })!
+    expect(registry.beginPrompt(session, 'duplicate')).toBeUndefined()
+    await prompt.accepted
+    await prompt.settled
+    expect(host.command.mock.calls.map(([command]) => command)).toEqual([
+      { type: 'set_model', provider: 'test', modelId: 'reasoning' },
+      { type: 'get_available_thinking_levels' },
+      { type: 'set_thinking_level', level: 'high' },
+    ])
+    expect(host.command.mock.invocationCallOrder.at(-1)).toBeLessThan(host.beginPrompt.mock.invocationCallOrder[0]!)
+    expect(host.beginPrompt).toHaveBeenCalledWith('first', undefined)
+  } finally { await registry.close() }
+})
+
+it.each(['unsupported-level', 'model-error'])('never sends the first prompt when initial configuration fails: %s', async (failure) => {
+  const host = { ...hostMock(), command: vi.fn(async (_command: Record<string, unknown>) => {
+    if (failure === 'model-error') throw new PiRpcCommandError('Model not found')
+    return { data: { levels: ['off'] } }
+  }) }
+  const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    const prompt = registry.beginPrompt(session, 'first', undefined, { model: { provider: 'test', id: 'reasoning' }, thinkingLevel: 'high' })!
+    await expect(prompt.accepted).rejects.toThrow()
+    await expect(prompt.settled).rejects.toThrow()
+    expect(host.beginPrompt).not.toHaveBeenCalled()
+    expect(host.command.mock.calls.some(([command]) => (command as { type: string }).type === 'set_thinking_level')).toBe(false)
+  } finally { await registry.close() }
+})

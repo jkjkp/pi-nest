@@ -166,8 +166,21 @@ describe('Pi Nest API', () => {
 
     expect(response.status).toBe(201)
     expect(createPiSession).toHaveBeenCalledWith('/working')
-    expect(runtime.beginPrompt).toHaveBeenCalledWith({ createdAt: '2026-10-13T00:00:00.000Z', cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' }, 'First prompt')
+    expect(runtime.beginPrompt).toHaveBeenCalledWith({ createdAt: '2026-10-13T00:00:00.000Z', cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' }, 'First prompt', undefined, undefined)
     await expect(response.json()).resolves.toMatchObject({ session: { createdAt: '2026-10-13T00:00:00.000Z', cwd: '/working', firstMessage: 'First prompt', id: 'created-session' } })
+  })
+
+  it('validates and passes draft selections into first-prompt initialization', async () => {
+    const security = new RuntimeSecurity('http://localhost:5173')
+    const route = createApp(runtime as unknown as PiRuntimeRegistry, security)
+    const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }
+    const initialSettings = { model: { provider: 'test', id: 'reasoning' }, thinkingLevel: 'high' }
+    const body = JSON.stringify({ cwd: '/working', prompt: 'First prompt', initialSettings })
+    expect((await route.request('/api/sessions', { method: 'POST', headers: { 'content-type': 'application/json' }, body })).status).toBe(403)
+    runtime.beginPrompt.mockReturnValue({ accepted: Promise.resolve(), settled: new Promise(() => undefined) })
+    expect((await route.request('/api/sessions', { method: 'POST', headers, body })).status).toBe(201)
+    expect(runtime.beginPrompt).toHaveBeenCalledWith(expect.objectContaining({ id: 'created-session' }), 'First prompt', undefined, initialSettings)
+    expect((await route.request('/api/sessions', { method: 'POST', headers, body: JSON.stringify({ cwd: '/working', prompt: 'first', initialSettings: { model: { id: '' } } }) })).status).toBe(400)
   })
 
   it('rolls back an unadmitted first prompt without exposing an empty session', async () => {

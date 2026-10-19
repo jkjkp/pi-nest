@@ -1,5 +1,5 @@
 import { AttachmentStore, AttachmentError } from './attachment-store.js'
-import type { AttachmentInput, PiQueuedInput } from '@pi-nest/contracts'
+import type { AttachmentInput, PiQueuedInput, PiSessionInitialSettings } from '@pi-nest/contracts'
 import type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntimeStatus, PiRuntimeExtensionUi, PiRuntimeSessionSnapshot } from '@pi-nest/contracts'
 export type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntimeStatus, PiRuntimeExtensionUi, PiRuntimeSessionSnapshot } from '@pi-nest/contracts'
 
@@ -344,7 +344,7 @@ export class PiRuntimeRegistry {
   }
 
   /** Starts a prompt while exposing the RPC-admission boundary to callers that create a session. */
-  beginPrompt(session: PiRuntimeSession, message: string, input?: AttachmentInput): PiRuntimePrompt | undefined {
+  beginPrompt(session: PiRuntimeSession, message: string, input?: AttachmentInput, initialSettings?: PiSessionInitialSettings): PiRuntimePrompt | undefined {
     if (this.settingsUpdating || this.locks.has(session.id)) return undefined
     this.cancelUnload(session.id)
     this.locks.set(session.id, 'prompt')
@@ -366,6 +366,16 @@ export class PiRuntimeRegistry {
         this.transition(session.id, 'loading')
         this.transition(session.id, 'active')
         this.touch(session.id)
+        if (initialSettings) {
+          await entry.host.start()
+          if (initialSettings.model) await entry.host.command({ type: 'set_model', provider: initialSettings.model.provider, modelId: initialSettings.model.id })
+          if (initialSettings.thinkingLevel !== undefined) {
+            const response = await entry.host.command({ type: 'get_available_thinking_levels' })
+            const levels = (response.data as { levels?: unknown } | undefined)?.levels
+            if (!Array.isArray(levels) || !levels.includes(initialSettings.thinkingLevel)) throw new Error('所选模型不支持该思考等级，请重新选择。')
+            await entry.host.command({ type: 'set_thinking_level', level: initialSettings.thinkingLevel })
+          }
+        }
         this.history.pin(session, runId)
         const prepared = input ? await this.attachments.prepare(session.id, input) : { message }
         const prompt = entry.host.beginPrompt(prepared.message, prepared.images)
