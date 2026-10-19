@@ -290,3 +290,14 @@ it('validates and forwards optional compaction instructions without exposing nat
   }
   expect(registry.commandWhenIdle).not.toHaveBeenCalled()
 })
+
+it('reports abort failures so compaction cancellation can be retried', async () => {
+  const registry = runtime()
+  registry.abort.mockRejectedValueOnce(new Error('RPC unavailable'))
+  const broker = new RuntimeWebSocketBroker(registry as never)
+  const client = socket()
+  broker.open(client)
+  await broker.message(client, JSON.stringify({ id: 'w', sessionId: 'session-1', type: 'watch' }))
+  await broker.message(client, JSON.stringify({ id: 'cancel', sessionId: 'session-1', type: 'abort' }))
+  expect(client.sent).toContainEqual({ type: 'error', id: 'cancel', sessionId: 'session-1', code: 'COMMAND_FAILED', message: '取消失败，请重试。' })
+})

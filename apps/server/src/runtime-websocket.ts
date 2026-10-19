@@ -97,8 +97,10 @@ export class RuntimeWebSocketBroker {
     }
 
     if (command.data.type === 'abort') {
-      if (!(await this.runtime.abort(command.data.sessionId))) return this.error(socket, command.data.id, 'SESSION_NOT_RUNNING', 'Pi session is not running', command.data.sessionId)
-      return this.ack(socket, command.data.id, command.data.type, command.data.sessionId)
+      try {
+        if (!(await this.runtime.abort(command.data.sessionId))) return this.error(socket, command.data.id, 'SESSION_NOT_RUNNING', 'Pi session is not running', command.data.sessionId)
+        return this.ack(socket, command.data.id, command.data.type, command.data.sessionId)
+      } catch { return this.error(socket, command.data.id, 'COMMAND_FAILED', '取消失败，请重试。', command.data.sessionId) }
     }
 
     if (command.data.type === 'steer' || command.data.type === 'follow_up' || command.data.type === 'steer_queued') {

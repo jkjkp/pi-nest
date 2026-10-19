@@ -82,6 +82,7 @@ export class PiRuntimeRegistry {
   private readonly entries = new Map<string, RegistryEntry>()
   private readonly eventBufferDirectory: Promise<string>
   private readonly expiredStreams = new Set<string>()
+  private readonly compacting = new Set<string>()
   private readonly locks = new Map<string, Lock>()
   private readonly extensionState: RuntimeExtensionState
   private readonly projectionsReady: Promise<void>
@@ -198,7 +199,10 @@ export class PiRuntimeRegistry {
     this.locks.set(session.id, 'mutation')
     if (!readOnly) this.transition(session.id, 'loading')
     return this.projectionsReady.then(() => this.getOrCreate(session))
-      .then((entry) => entry.host.command(command))
+      .then((entry) => {
+        if (command.type === 'compact') this.compacting.add(session.id)
+        return entry.host.command(command)
+      })
       .then((result) => {
         const host = this.entries.get(session.id)?.host
         const metadataChanged = host?.currentModel?.id !== previousModel?.id || host?.currentModel?.provider !== previousModel?.provider || host?.currentThinkingLevel !== previousThinking
@@ -217,6 +221,7 @@ export class PiRuntimeRegistry {
         throw cause
       })
       .finally(() => {
+        this.compacting.delete(session.id)
         this.locks.delete(session.id)
         this.scheduleUnload(session.id)
       })
@@ -410,7 +415,7 @@ export class PiRuntimeRegistry {
   }
 
   async abort(sessionId: string) {
-    if (!this.isPromptActive(sessionId)) return false
+    if (!this.isPromptActive(sessionId) && !this.compacting.has(sessionId)) return false
     const activeTurn = this.stateFor(sessionId).activeTurn
     const previous = activeTurn?.stopReason
     if (activeTurn) activeTurn.stopReason = 'aborted'

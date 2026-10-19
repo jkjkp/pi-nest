@@ -882,3 +882,19 @@ it.each(['unsupported-level', 'model-error'])('never sends the first prompt when
     expect(host.command.mock.calls.some(([command]) => (command as { type: string }).type === 'set_thinking_level')).toBe(false)
   } finally { await registry.close() }
 })
+
+it('allows abort during manual compaction and cleans up after completion', async () => {
+  const control = deferred<Record<string, unknown>>()
+  const host = { ...hostMock(), command: vi.fn(() => control.promise) }
+  const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    await registry.resume(session)
+    const compact = registry.commandWhenIdle(session, { type: 'compact' })!
+    await vi.waitFor(() => expect(host.command).toHaveBeenCalledWith({ type: 'compact' }))
+    expect(await registry.abort(session.id)).toBe(true)
+    expect(host.abort).toHaveBeenCalledOnce()
+    control.resolve({ success: true })
+    await compact
+    expect(await registry.abort(session.id)).toBe(false)
+  } finally { await registry.close() }
+})
