@@ -6,7 +6,3 @@ export type TimelineScrollController = {
   capture: () => Omit<TimelineReadingPosition, 'atBottom'> | undefined
   restore: (position: TimelineReadingPosition) => 'pending' | 'restored' | 'missing'
 }
-
-export function prependedScrollTop(beforeScrollHeight: number, beforeScrollTop: number, afterScrollHeight: number) {
-  return beforeScrollTop + afterScrollHeight - beforeScrollHeight
-}

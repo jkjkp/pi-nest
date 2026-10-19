@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { SessionTimeline } from './session-timeline.js'
-import { prependedScrollTop } from './timeline-pagination.js'
 import { promptOverflows } from './user-prompt-state.js'
 
 const history = {
@@ -158,11 +157,6 @@ describe('SessionTimeline', () => {
     expect(promptOverflows(224, 224)).toBe(false)
     expect(promptOverflows(226, 224)).toBe(true)
   })
-
-  it('keeps the visible content anchored after prepending an earlier history page', () => {
-    expect(prependedScrollTop(1_200, 320, 2_050)).toBe(1_170)
-  })
-
 
 })
 

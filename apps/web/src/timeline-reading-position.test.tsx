@@ -91,12 +91,12 @@ it('remembers independent reading anchors, restores after measurement, and yield
     await read(340)
 
     // The saved record may initially be outside the virtualized DOM.
-    virtual.hiddenIndex = 3
+    virtual.hiddenIndex = 2
     await render('A', false)
     await flush()
     await render('A')
     await flush()
-    expect(virtual.scrollToIndex).toHaveBeenCalledWith(3, { align: 'start', behavior: 'auto' })
+    expect(virtual.scrollToIndex).toHaveBeenCalledWith(2, { align: 'start', behavior: 'auto' })
     virtual.hiddenIndex = -1
     await render('A')
     await flush()

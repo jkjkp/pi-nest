@@ -66,6 +66,63 @@ it('does not force the user back to the bottom after scrolling up', () => {
   } finally { test.cleanup() }
 })
 
+it.each([false, true])('keeps slow upward scrolling paused through completion (collapse: %s)', (collapse) => {
+  const test = setup()
+  try {
+    test.hook.setFollowingLatest(false)
+    test.hook.setFollowingLatest(true)
+    test.hook.followFinalAnswer()
+    if (collapse) test.transition('transitionrun')
+    test.wheel()
+    test.viewport.scrollTop = 480
+    test.scroll()
+    test.viewport.scrollHeight = 1020
+    test.resize()
+    test.viewport.scrollTop = 460
+    test.scroll()
+    if (collapse) test.transition('transitionend')
+    test.scrollEnd()
+    test.flush()
+    test.flush()
+    expect(test.viewport.scrollTop).toBe(460)
+    expect(hooks.setters[0]).toHaveBeenLastCalledWith(false)
+    test.hook.followFinalAnswer()
+    test.flush()
+    expect(test.viewport.scrollTop).toBe(460)
+  } finally { test.cleanup() }
+})
+
+it('resumes following when the reader scrolls down into the bottom band', () => {
+  const test = setup()
+  try {
+    test.wheel()
+    test.viewport.scrollTop = 400
+    test.scroll()
+    test.viewport.scrollTop = 460
+    test.scroll()
+    expect(hooks.setters[0]).toHaveBeenLastCalledWith(true)
+    test.viewport.scrollHeight = 1100
+    test.resize()
+    test.flush()
+    expect(test.viewport.scrollTop).toBe(600)
+  } finally { test.cleanup() }
+})
+
+it('honors upward input when streaming height changes before the scroll callback', () => {
+  const test = setup()
+  try {
+    test.hook.setFollowingLatest(false)
+    test.hook.setFollowingLatest(true)
+    test.wheel()
+    test.viewport.scrollTop = 350
+    test.viewport.scrollHeight = 1100
+    test.scroll()
+    test.flush()
+    expect(test.viewport.scrollTop).toBe(350)
+    expect(hooks.setters[0]).toHaveBeenLastCalledWith(false)
+  } finally { test.cleanup() }
+})
+
 it('follows a steering bubble only while the user is following the latest messages', () => {
   const test = setup('steering-1')
   try {

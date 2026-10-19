@@ -103,7 +103,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
     if (!selectedSessionId || !followLatestRef.current || !scrollViewport) return
     pendingFinalAnswer.current = turnId
     scheduleScroll(() => {
-      if (!followLatestRef.current || executionIsTransitioning()) return
+      if (!followLatestRef.current || navigationInProgress.current || executionIsTransitioning()) return
       const answer = [...(messageScrollAreaRef.current?.querySelectorAll<HTMLElement>('[data-final-answer-turn-id]') ?? [])].find((element) => element.dataset.finalAnswerTurnId === turnId)
       if (!answer) return
       pendingFinalAnswer.current = undefined
@@ -163,7 +163,8 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
     if (!selectedSessionId || !scrollViewport) return
     let previousScrollHeight = scrollViewport.scrollHeight
     let previousViewportHeight = scrollViewport.clientHeight
-    const updateFollowLatest = () => {
+    let previousScrollTop = scrollViewport.scrollTop
+    const updateFollowLatest = (scrollingDown = false) => {
       if (returningToBottom.current) return
       if (restoringPosition.current) { restoreReadingPosition(); return }
       const resized = previousScrollHeight !== scrollViewport.scrollHeight || previousViewportHeight !== scrollViewport.clientHeight
@@ -177,7 +178,8 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
         followFinalAnswer()
         return
       }
-      const next = shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, navigationInProgress.current)
+      // Only downward scrolling may resume a follow that the reader interrupted.
+      const next = (followLatestRef.current || (scrollingDown && !resized)) && shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, navigationInProgress.current)
       const show = !shouldFollowLatest(scrollViewport.scrollHeight, scrollViewport.scrollTop, scrollViewport.clientHeight, false)
       if (showScrollToBottomRef.current !== show) {
         showScrollToBottomRef.current = show
@@ -194,7 +196,9 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       updateFollowLatest()
     }
     const handleScroll = () => {
-      updateFollowLatest()
+      const scrollingDown = scrollViewport.scrollTop > previousScrollTop
+      previousScrollTop = scrollViewport.scrollTop
+      updateFollowLatest(scrollingDown)
       rememberReadingPosition()
       if (!navigationInProgress.current || returningToBottom.current) return
       clearTimeout(navigationFallback.current)
@@ -202,21 +206,18 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
     }
     const interruptNavigation = (event: Event) => {
       if (event.type === 'keydown' && event instanceof KeyboardEvent && !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) return
-      if (initialPositioning.current) setFollowingLatest(false)
-      restoringPosition.current = undefined
+      setFollowingLatest(false)
+      pendingFinalAnswer.current = undefined
+      if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current)
+      scrollFrame.current = undefined
       if (!returningToBottom.current) return
       clearTimeout(navigationFallback.current)
       cancelReturnToBottom()
-      setFollowingLatest(false)
       scrollViewport.scrollTo({ top: scrollViewport.scrollTop, behavior: 'instant' })
     }
     const pauseExecutionFollow = (event: Event) => {
       if (!(event.target instanceof Element) || !event.target.closest('[data-execution-toggle]')) return
       interruptNavigation(event)
-      setFollowingLatest(false)
-      pendingFinalAnswer.current = undefined
-      if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current)
-      scrollFrame.current = undefined
     }
     const handleExecutionTransition = (event: TransitionEvent) => {
       if (!(event.target instanceof Element) || !event.target.classList.contains('execution-collapse') || event.propertyName !== 'grid-template-rows') return
@@ -297,7 +298,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
     const key = activeTurn ? `${selectedSessionId}:${activeTurn.startedAt}` : undefined
     if (!isActive || !key || !scrollViewport || positionedTurn.current === key || !followLatestRef.current || navigationInProgress.current) return
     positionedTurn.current = key
-    scheduleScroll(() => { scrollViewport.scrollTop = scrollViewport.scrollHeight })
+    scheduleScroll(() => { if (followLatestRef.current && !navigationInProgress.current) scrollViewport.scrollTop = scrollViewport.scrollHeight })
   }, [activeTurn, isActive, scrollViewport, selectedSessionId, scheduleScroll])
 
   useLayoutEffect(() => {
