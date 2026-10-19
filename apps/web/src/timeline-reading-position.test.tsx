@@ -48,7 +48,7 @@ it('remembers independent reading anchors, restores after measurement, and yield
       session: { id: sessionId }, revision: 'fixture', hasEarlier: false,
       entries: Array.from({ length: 8 }, (_, index) => ({ id: `${sessionId}${index + 1}`, parentId: null, timestamp: '2026-10-17T00:00:00Z', type: 'message', raw: { type: 'message', message: { role: 'user', content: `Question ${index + 1}` } } })).filter((entry) => !(removed && entry.id === 'A3')),
     } : undefined
-    const viewport = useTimelineViewport({ selectedSessionId: sessionId, history, activeTurn: undefined, isActive: false, inspectorOpen: false, setInspectorOpen: () => {} })
+    const viewport = useTimelineViewport({ selectedSessionId: sessionId, history, activeTurn: undefined, isActive: false })
     const { setMessageScrollArea } = viewport
     useLayoutEffect(() => { hook = viewport })
     const setArea = useCallback((node: HTMLDivElement | null) => {

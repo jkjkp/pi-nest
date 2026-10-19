@@ -10,11 +10,9 @@ type TimelineViewportOptions = {
   activeTurn: RuntimeTurn | undefined
   latestSteeringId?: string
   isActive: boolean
-  inspectorOpen: boolean
-  setInspectorOpen: (open: boolean) => void
 }
 
-export function useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId, isActive, inspectorOpen, setInspectorOpen }: TimelineViewportOptions) {
+export function useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId, isActive }: TimelineViewportOptions) {
   const [followLatest, setFollowLatest] = useState(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [railOverlay, setRailOverlay] = useState<HTMLElement | null>(null)
@@ -28,7 +26,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
   const navigationFallback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const followLatestRef = useRef(followLatest)
   const showScrollToBottomRef = useRef(showScrollToBottom)
-  const inspectorToggleScrollTop = useRef<number | undefined>(undefined)
+  const layoutScrollTop = useRef<number | undefined>(undefined)
   const positionedTurn = useRef<string | undefined>(undefined)
   const previouslyScrolledSessionId = useRef(selectedSessionId)
   const scrollFrame = useRef<number | undefined>(undefined)
@@ -275,7 +273,7 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       clearTimeout(navigationFallback.current)
       navigationInProgress.current = false
       returningToBottom.current = false
-      inspectorToggleScrollTop.current = undefined
+      layoutScrollTop.current = undefined
       const saved = readingPositions.current.get(selectedSessionId)
       setFollowingLatest(saved?.atBottom ?? true)
       initialPositioning.current = saved?.atBottom ?? true
@@ -307,22 +305,20 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
     scheduleScroll(() => { if (followLatestRef.current) scrollViewport.scrollTop = scrollViewport.scrollHeight })
   }, [latestSteeringId, scrollViewport, scheduleScroll])
 
-  useLayoutEffect(() => {
-    if (inspectorToggleScrollTop.current === undefined || !scrollViewport) return
-    scrollViewport.scrollTo({ top: inspectorToggleScrollTop.current })
-    inspectorToggleScrollTop.current = undefined
-  }, [inspectorOpen, scrollViewport])
-
-  function toggleInspector() {
-    inspectorToggleScrollTop.current = scrollViewport?.scrollTop
-    setInspectorOpen(!inspectorOpen)
-  }
+  const rememberLayoutPosition = useCallback(() => {
+    layoutScrollTop.current = scrollViewport?.scrollTop
+  }, [scrollViewport])
+  const restoreLayoutPosition = useCallback(() => {
+    if (layoutScrollTop.current === undefined || !scrollViewport) return
+    scrollViewport.scrollTo({ top: layoutScrollTop.current })
+    layoutScrollTop.current = undefined
+  }, [scrollViewport])
 
   const scrollToBottom = useCallback(() => {
     if (!scrollViewport) return
     cancelReturnToBottom()
     clearTimeout(navigationFallback.current)
-    inspectorToggleScrollTop.current = undefined
+    layoutScrollTop.current = undefined
     pendingFinalAnswer.current = undefined
     setFollowingLatest(false)
     const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'
@@ -347,5 +343,5 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
     if (alignment === 'end') requestAnimationFrame(() => scrollViewport.scrollTo({ behavior, top: scrollViewport.scrollHeight }))
   }, [scrollViewport, setFollowingLatest, cancelReturnToBottom])
 
-  return { setComposer, showScrollToBottom, scrollToBottom, followLatest, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot, scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector, rememberReadingPosition, registerTimelineScroll }
+  return { setComposer, showScrollToBottom, scrollToBottom, followLatest, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot, scrollToFinalAnswer, followFinalAnswer, jumpToTurn, rememberLayoutPosition, restoreLayoutPosition, rememberReadingPosition, registerTimelineScroll }
 }

@@ -31,7 +31,7 @@ function setup(latestSteeringId?: string, selectedSessionId = 'A') {
   vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback } observe() {} disconnect() {} })
   hooks.state = 0; hooks.setters = []; hooks.viewport = viewport; hooks.effects = []; hooks.layouts = []
   // oxlint-disable-next-line react-hooks/rules-of-hooks -- Exercise the hook with mocked React effects and scroll geometry.
-  const hook = useTimelineViewport({ selectedSessionId, history: undefined, activeTurn: undefined, latestSteeringId, isActive: false, inspectorOpen: false, setInspectorOpen: vi.fn() })
+  const hook = useTimelineViewport({ selectedSessionId, history: undefined, activeTurn: undefined, latestSteeringId, isActive: false })
   const cleanups = hooks.effects.map((effect) => effect())
   return { hook, viewport, frames, panel, transition: (type: string) => listeners.get(type)?.({ type, target: panel, propertyName: 'grid-template-rows' }), click: () => listeners.get('click')?.({ target: panel }), resize: () => resize(), wheel: () => listeners.get('wheel')?.({ type: 'wheel' }), scroll: () => listeners.get('scroll')?.(), scrollEnd: () => listeners.get('scrollend')?.(), cleanup: () => { for (const cleanup of cleanups) cleanup?.() }, flush: () => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback(0)) } }
 }
@@ -69,7 +69,7 @@ it('does not force the user back to the bottom after scrolling up', () => {
 it('follows a steering bubble only while the user is following the latest messages', () => {
   const test = setup('steering-1')
   try {
-    const steeringLayout = hooks.layouts.at(-2)!
+    const steeringLayout = hooks.layouts.at(-1)!
     steeringLayout()
     test.flush()
     expect(test.viewport.scrollTop).toBe(test.viewport.scrollHeight)
@@ -249,5 +249,19 @@ it('does not scroll a long project home to the bottom as its list loads', () => 
     test.flush()
     expect(test.viewport.scrollTop).toBe(0)
     expect(test.frames.size).toBe(0)
+  } finally { test.cleanup() }
+})
+
+it('restores a layout position without owning or changing panel state', () => {
+  const test = setup()
+  try {
+    test.viewport.scrollTop = 120
+    test.hook.rememberLayoutPosition()
+    test.viewport.scrollTop = 240
+    test.hook.restoreLayoutPosition()
+    expect(test.viewport.scrollTop).toBe(120)
+    test.viewport.scrollTop = 300
+    test.hook.restoreLayoutPosition()
+    expect(test.viewport.scrollTop).toBe(300)
   } finally { test.cleanup() }
 })

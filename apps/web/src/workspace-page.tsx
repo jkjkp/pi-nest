@@ -1,43 +1,33 @@
+import { useWorkspaceFilePreview } from './use-workspace-file-preview.js'
+import { WorkspaceLayout } from './workspace-layout.js'
+import { WorkspaceNavigation } from './workspace-navigation.js'
+import { WorkspaceComposer } from './workspace-composer.js'
+import { WorkspaceFilePreview, WorkspaceFilePreviewToggle } from './workspace-file-preview.js'
 import { attachmentDrop } from './attachment-draft.js'
-import { AttachmentPicker, ComposerAttachments } from './attachment-ui.js'
-import { filePreviewKey } from './file-preview-state.js'
-import { FilePreviewResizeHandle } from './file-preview-resize-handle.js'
 import { OpenToolFile } from './tool-file-context.js'
-import { SessionFilePreview } from './session-file-preview.js'
 import { ProjectDialog } from './project-dialog.js'
 import { ProjectHome } from './project-home.js'
 import { SessionForkDialog } from './session-fork-dialog.js'
-import { CommandNotice } from './command-notice.js'
 import { RenderErrorBoundary } from './render-error-boundary.js'
-import { parseComposerCommand } from './composer-commands.js'
 import { useWorkspaceCommands } from './use-workspace-commands.js'
 import { SessionRenameDialog } from './session-rename-dialog.js'
 import { SessionStatistics } from './session-statistics.js'
-import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowDown, CircleX, Folder, LoaderCircle, Menu, PanelRight, Send, Settings, Square } from 'lucide-react'
-import { Link, useNavigate } from 'react-router'
+import { useRef, useState } from 'react'
+import { ArrowDown, CircleX, Folder, LoaderCircle } from 'lucide-react'
+import { useNavigate } from 'react-router'
 
 import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
-import { CommandComposer } from './command-composer.js'
 
-import { resizeComposerTextarea, useComposerTextarea } from './composer-textarea.js'
-import { useComposerHistory } from './composer-history.js'
-import { timelineItems } from './timeline-model.js'
 import { ThinkingSelector } from './thinking-selector.js'
 import { ModelSelector } from './model-selector.js'
 import { SessionInspector } from './session-inspector.js'
-import { SessionNavigation } from './session-navigation.js'
 import type { SessionRunController } from './session-run-controller.js'
 import { SessionTimeline } from './session-timeline.js'
-import { ExtensionUiInline } from './runtime-extension-ui.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { useWorkspaceSession } from './use-workspace-session.js'
 import { useTimelineViewport } from './use-timeline-viewport.js'
 import { sessionDisplayName, sessionStatusLabel } from './workspace.js'
-import type { PendingInput } from './session-run-model.js'
 
 export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunController }) {
   const session = useWorkspaceSession(sessionRuns)
@@ -58,37 +48,18 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const runtimeStatistics = useWorkspaceStore((state) => state.runtimeStatistics[selectedSessionId])
   const runtimeLoading = runtimeStates[selectedSessionId]?.lifecycle === 'loading'
   const watchReady = useWorkspaceStore((state) => state.watchStates[selectedSessionId] === 'ready')
-  const currentPreview = useWorkspaceStore((state) => state.filePreviews[selectedSessionId])
-  const previewOpen = currentPreview?.open ?? false
-  const openFilePreview = useWorkspaceStore((state) => state.openFilePreview)
-  const setFilePreviewOpen = useWorkspaceStore((state) => state.setFilePreviewOpen)
-  const setPreviewOpen = useCallback((open: boolean) => setFilePreviewOpen(selectedSessionId, open), [selectedSessionId, setFilePreviewOpen])
-  const previewOpener = useRef(new Map<string, HTMLElement>())
-  const previewToggle = useRef<HTMLButtonElement>(null)
-  const [widePreview, setWidePreview] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 80rem)').matches)
-  const previewWidth = useWorkspaceStore((state) => state.inspectorWidth)
-  const setPreviewWidth = useWorkspaceStore((state) => state.setInspectorWidth)
   const workspaceGrid = useRef<HTMLDivElement>(null)
-  const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
-  const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
-  const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
   const [creatingProject, setCreatingProject] = useState(false)
   const [modelSelector, setModelSelector] = useState<{ sessionId?: string; open: boolean }>({ open: false })
   const modelSelectorOpen = modelSelector.sessionId === selectedSessionId && modelSelector.open
   const setModelSelectorOpen = (open: boolean) => setModelSelector({ sessionId: selectedSessionId, open })
   const {
     setComposer, showScrollToBottom, scrollToBottom, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
-    scrollToFinalAnswer, followFinalAnswer, jumpToTurn, toggleInspector: togglePreview,
+    scrollToFinalAnswer, followFinalAnswer, jumpToTurn, rememberLayoutPosition, restoreLayoutPosition,
     rememberReadingPosition, registerTimelineScroll,
-  } = useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId: currentRun?.turns.findLast((turn) => turn.steering)?.id, isActive, inspectorOpen: previewOpen && widePreview, setInspectorOpen: setPreviewOpen })
-  const promptTextareaRef = useComposerTextarea(prompt)
-  const promptHistory = useComposerHistory(
-    selectedSessionId || (isDraft ? `draft:${draftProject?.key}` : ''),
-    isDraft ? [] : timelineItems(history?.entries, currentRun?.turns ?? [], currentRun?.systemEvents ?? []),
-    prompt,
-    (value) => isDraft ? setDraftPrompt(value) : selectedSessionId && setDraft(selectedSessionId, value),
-    promptTextareaRef,
-  )
+  } = useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId: currentRun?.turns.findLast((turn) => turn.steering)?.id, isActive })
+  const preview = useWorkspaceFilePreview(selectedSessionId, rememberLayoutPosition, restoreLayoutPosition)
+  const promptTextareaRef = useRef<HTMLTextAreaElement>(null)
 
   const [commandPanels, setCommandPanels] = useState<{ sessionId: string; statistics: boolean; fork?: (entryId: string, revision: string) => Promise<void>; rename?: { session: NonNullable<typeof selectedSession>; onSaved: () => void } }>({ sessionId: selectedSessionId, statistics: false })
   if (commandPanels.sessionId !== selectedSessionId) setCommandPanels({ sessionId: selectedSessionId, statistics: false })
@@ -112,64 +83,36 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     session.submitPrompt(mode)
   }
 
-  useEffect(() => {
-    const media = window.matchMedia('(min-width: 80rem)')
-    const updatePresentation = () => setWidePreview(media.matches)
-    updatePresentation()
-    media.addEventListener('change', updatePresentation)
-    return () => media.removeEventListener('change', updatePresentation)
-  }, [])
-
   const navigation = (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1">
-        <SessionNavigation
-          collapsedProjectKeys={collapsedProjectKeys}
-          error={sessionsQuery.error}
-          isLoading={sessionsQuery.isPending}
-          mutationSessionId={mutatingSessionId}
-          onDelete={handleDelete}
-          onAddProject={() => setCreatingProject(true)}
-          onNewConversation={startDraft}
-          onProjectOrderChange={(projectOrder) => setNavigationOrder({ ...navigationOrder, projectOrder })}
-          onRemoveProject={removeProject}
-          onRename={handleRename}
-          onRevealProject={revealProjectInFinder}
-          onSelect={selectSession}
-          onSessionOrderChange={(projectKey, sessionOrder) =>
-            setNavigationOrder({
-              ...navigationOrder,
-              sessionOrderByProject: { ...navigationOrder.sessionOrderByProject, [projectKey]: sessionOrder },
-            })
-          }
-          onToggleProject={setProjectCollapsed}
-          projects={projects}
-          runs={runs}
-          selectedSessionId={selectedSessionId}
-        />
-      </div>
-      <footer className="shrink-0 space-y-1 border-t p-3">
-        <Button asChild className="w-full justify-start" size="sm" variant="ghost"><Link to={selectedSession ? `/settings?session=${encodeURIComponent(selectedSession.id)}` : '/settings'} onClick={() => setNavigationOpen(false)}><Settings aria-hidden="true" />设置</Link></Button>
-      </footer>
-    </div>
+    <WorkspaceNavigation
+      collapsedProjectKeys={collapsedProjectKeys}
+      error={sessionsQuery.error}
+      isLoading={sessionsQuery.isPending}
+      mutationSessionId={mutatingSessionId}
+      onDelete={handleDelete}
+      onAddProject={() => setCreatingProject(true)}
+      onNewConversation={startDraft}
+      onProjectOrderChange={(projectOrder) => setNavigationOrder({ ...navigationOrder, projectOrder })}
+      onRemoveProject={removeProject}
+      onRename={handleRename}
+      onRevealProject={revealProjectInFinder}
+      onSelect={selectSession}
+      onSessionOrderChange={(projectKey, sessionOrder) =>
+        setNavigationOrder({
+          ...navigationOrder,
+          sessionOrderByProject: { ...navigationOrder.sessionOrderByProject, [projectKey]: sessionOrder },
+        })
+      }
+      onToggleProject={setProjectCollapsed}
+      projects={projects}
+      runs={runs}
+      selectedSessionId={selectedSessionId}
+      settingsHref={selectedSession ? `/settings?session=${encodeURIComponent(selectedSession.id)}` : '/settings'}
+    />
   )
-  const openToolFile = useCallback((path: string, line?: number, searchRoot?: string) => {
-    if (document.activeElement instanceof HTMLElement) previewOpener.current.set(selectedSessionId, document.activeElement)
-    openFilePreview(selectedSessionId, path, line, searchRoot)
-  }, [selectedSessionId, openFilePreview])
-  function restorePreviewFocus() {
-    const opener = previewOpener.current.get(selectedSessionId)
-    if (opener?.isConnected) opener.focus({ preventScroll: true })
-    else previewToggle.current?.focus({ preventScroll: true })
-  }
-  function collapsePreview() {
-    setPreviewOpen(false)
-    if (widePreview) restorePreviewFocus()
-  }
-  const filePreview = currentPreview && previewOpen ? <SessionFilePreview key={filePreviewKey(selectedSessionId, currentPreview.path, currentPreview.searchRoot)} sessionId={selectedSessionId} path={currentPreview.path} searchRoot={currentPreview.searchRoot} line={currentPreview.line} navigation={currentPreview.navigation} onClose={collapsePreview} onOpenFile={(path, line) => openFilePreview(selectedSessionId, path, line)} /> : null
 
   return (
-    <OpenToolFile value={openToolFile}><main className="relative flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+    <OpenToolFile value={preview.openFile}>
       {creatingProject && <ProjectDialog mode="register" onClose={() => setCreatingProject(false)} onAdded={openProject} />}
       {commandPanels.sessionId === selectedSessionId && commandPanels.fork && <SessionForkDialog key={`fork:${selectedSessionId}`} sessionId={selectedSessionId} onClose={() => setCommandPanels({ sessionId: selectedSessionId, statistics: false })} onCloseAutoFocus={(event) => { event.preventDefault(); requestAnimationFrame(() => promptTextareaRef.current?.focus()) }} onFork={commandPanels.fork} />}
       {commandPanels.sessionId === selectedSessionId && commandPanels.rename && <SessionRenameDialog key={selectedSessionId} session={commandPanels.rename.session} onCloseAutoFocus={(event) => { event.preventDefault(); promptTextareaRef.current?.focus() }} onClose={() => setCommandPanels({ sessionId: selectedSessionId, statistics: false })} onRename={async (id, name) => {
@@ -177,39 +120,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
         await handleRename(id, name)
         commandPanels.rename?.onSaved()
       }} />}
-      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-card px-3 sm:px-4 md:hidden">
-        <div className="flex min-w-0 items-center gap-2">
-          <Sheet open={navigationOpen} onOpenChange={setNavigationOpen}>
-            <SheetTrigger asChild>
-              <Button aria-label="打开会话导航" className="md:hidden" size="icon-sm" variant="ghost"><Menu aria-hidden="true" /></Button>
-            </SheetTrigger>
-            <SheetContent className="p-0" side="left">
-              <SheetTitle className="sr-only">会话导航</SheetTitle>
-              <SheetDescription className="sr-only">选择要查看的 Pi 原生会话。</SheetDescription>
-              {navigation}
-            </SheetContent>
-          </Sheet>
-          <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">PN</span>
-          <h1 className="truncate text-sm font-semibold tracking-tight" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
-        </div>
-      </header>
-      {!widePreview && <Sheet open={previewOpen && Boolean(currentPreview)} onOpenChange={setPreviewOpen}>
-        <SheetContent className="w-full p-0 sm:w-[min(40rem,100vw)] [&>button:last-child]:hidden" side="right" onCloseAutoFocus={(event) => {
-          event.preventDefault()
-          if (!window.matchMedia('(min-width: 80rem)').matches) restorePreviewFocus()
-        }}>
-          <SheetTitle className="sr-only">文件预览</SheetTitle>
-          <SheetDescription className="sr-only">查看当前项目内的文件内容。</SheetDescription>
-          {filePreview}
-        </SheetContent>
-      </Sheet>}
-
-      <div
-        className="workspace-grid grid min-h-0 flex-1"
-        ref={workspaceGrid}
-        style={{ '--inspector-width': `${previewWidth}px`, '--navigation-width': `${navigationWidth}px`, '--side-panel-width': !isHome && currentPreview && previewOpen ? `min(${Number.isFinite(previewWidth) ? previewWidth : 300}px, calc((100% - var(--navigation-width)) / 2))` : '0px' } as CSSProperties}
-      >
-        <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
+      <WorkspaceLayout title={sessionTitle} titleTooltip={displaySession ? sessionDisplayName(displaySession) : undefined}
+        navigation={navigation} containerRef={workspaceGrid} previewOpen={!isHome && Boolean(preview.selection) && preview.open}
+        preview={<WorkspaceFilePreview preview={preview} isHome={isHome} containerRef={workspaceGrid} />}>
         <section onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={(event) => { try { attachmentDrop(event, attachmentDraft.add) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '附件无法添加') } }} className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
           <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-background/95 py-2 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -217,7 +130,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               <h1 className="min-w-0 truncate text-base font-semibold" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
               {selectedSession && <span className="inline-flex size-4 shrink-0" role={runtimeLoading ? 'status' : undefined} aria-label={runtimeLoading ? '正在加载 Pi 运行时' : undefined}>{runtimeLoading && <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />}</span>}
             </div>
-            {currentPreview && <Button ref={previewToggle} aria-label={previewOpen ? '收起文件预览' : '打开文件预览'} aria-expanded={previewOpen} onClick={togglePreview} size="icon-sm" type="button" variant="ghost"><PanelRight aria-hidden="true" /></Button>}
+            <WorkspaceFilePreviewToggle available={Boolean(preview.selection)} open={preview.open} onToggle={preview.toggle} buttonRef={preview.toggleRef} />
             {selectedSessionId && <SessionInspector key={selectedSessionId} run={currentRun} session={displaySession} />}
           </header>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
@@ -289,83 +202,23 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               {selectedSession && !isDraft && showScrollToBottom && <div className="conversation-stage absolute inset-x-0 bottom-[calc(var(--composer-height)+0.75rem)] px-4 sm:px-6"><div className="conversation-stage-content flex justify-center"><Button aria-label="滚动到对话底部" className="pointer-events-auto size-11 rounded-full border bg-background/95 shadow-md sm:size-9" onClick={scrollToBottom} onPointerDown={(event) => event.preventDefault()} size="icon" variant="outline"><ArrowDown aria-hidden="true" className="size-5" /></Button></div></div>}
             </div>
           </div>
-          {!isHome && <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-transparent px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6" ref={setComposer} data-slot="composer">
-            <div className="conversation-stage">
-              <div className="conversation-stage-content">
-                <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) setPendingJump({ sessionId: selectedSessionId, turnId: planTurnId }) }} onRetryPlan={retryHistory} /></div>
-                <PendingInputs inputs={(currentRun?.pendingInputs ?? []).filter((input) => !currentRun?.turns.some((turn) => (turn.steering?.queuedInputId === input.id || input.submissionId && turn.submissionId === input.submissionId && turn.steering) && turn.steering?.status !== 'failed'))} key={selectedSessionId} onResume={(inputId) => { void sessionRuns.resumeQueued(selectedSessionId, inputId).catch((cause) => setAttachmentError(cause.message)) }} onSteer={steerQueued} disabled={submittingInput || status !== 'running'} />
-                <ComposerAttachments draft={attachmentDraft} />
-                {attachmentError && <p role="alert" className="pointer-events-auto mb-2 text-xs text-destructive">{attachmentError}<Button variant="ghost" size="sm" onClick={() => setAttachmentError(undefined)}>关闭</Button></p>}
-                <CommandNotice notice={commands.notice} />
-                <div data-slot="message-composer" className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-[#303030] sm:px-6">
-              <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
-              <CommandComposer
-                onExecuteCommand={(value) => { if (attachmentDraft.items.length) setAttachmentError('带附件时暂不支持命令，请先移除附件。'); else commands.submit(value) }}
-                key={selectedSessionId || `draft:${draftProject?.key}`}
-                sessionId={isDraft ? '' : selectedSessionId}
-                sessionRuns={sessionRuns}
-                canQuery={!commands.busy && watchReady && !isActive && runtimeStates[selectedSessionId]?.lifecycle === 'idle' && modelStatus !== 'loading' && modelStatus !== 'switching' && thinkingStatus !== 'loading' && thinkingStatus !== 'switching'}
-                className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
-                disabled={(!selectedSession && !isDraft) || creatingDraft}
-                id="prompt"
-                onPaste={(event) => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); try { attachmentDraft.add(files) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '粘贴失败') } } }}
-                maxLength={20_000}
-                onFocus={(event) => resizeComposerTextarea(event.currentTarget)}
-                onValueChange={(value) => {
-                  promptHistory.reset()
-                  if (isDraft) setDraftPrompt(value)
-                  else if (selectedSessionId) setDraft(selectedSessionId, value)
-                }}
-                onKeyDown={(event) => {
-                  if (promptHistory.onKeyDown(event)) return
-                  if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.nativeEvent.isComposing) return
-
-                  event.preventDefault()
-                  submitPrompt(event.ctrlKey ? 'steer' : 'follow_up')
-                }}
-                placeholder={isDraft ? '随心输入…' : status === 'running' ? 'Enter 排队，Ctrl + Enter 引导，Shift + Enter 换行' : 'Enter 发送，Shift + Enter 换行'}
-                textareaRef={promptTextareaRef}
-                rows={1}
-                style={{ lineHeight: '1.75rem' }}
-                value={prompt}
-              />
-              <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-2">
-                <AttachmentPicker draft={attachmentDraft} onError={setAttachmentError} />
-                {planStatus && <DropdownMenu><DropdownMenuTrigger asChild><Button aria-label="查看 Plan 模式详情" className="h-auto px-0 py-0 text-xs text-muted-foreground" size="sm" type="button" variant="ghost">{planStatus}</Button></DropdownMenuTrigger><DropdownMenuContent align="start" side="top" className="max-w-xs"><p className="px-2 py-1.5 text-sm font-medium">Plan mode</p><p className="px-2 pb-2 text-xs text-muted-foreground">{planPolicy ?? '当前阶段未提供工具列表。'}</p></DropdownMenuContent></DropdownMenu>}
-                {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
-                <div className="ml-auto flex max-w-full items-center gap-2">
+          {!isHome && <WorkspaceComposer
+            state={{ creatingDraft, attachmentDraft, selectedSessionId, selectedSession, isDraft, draftProject, prompt, currentRun, history,
+              setDraft, setDraftPrompt, status, isActive, submittingInput, steerQueued, planStatus, planPolicy,
+              extensionStatus, planTurnId, retryHistory, setPendingJump }}
+            commands={commands} sessionRuns={sessionRuns} textareaRef={promptTextareaRef} setComposer={setComposer}
+            onSubmit={submitPrompt} onAbort={() => { void abortPrompt() }} error={attachmentError} onError={setAttachmentError}
+            settingsBusy={modelStatus === 'loading' || modelStatus === 'switching' || thinkingStatus === 'loading' || thinkingStatus === 'switching'}
+            canQuery={!commands.busy && watchReady && !isActive && runtimeStates[selectedSessionId]?.lifecycle === 'idle' && modelStatus !== 'loading' && modelStatus !== 'switching' && thinkingStatus !== 'loading' && thinkingStatus !== 'switching'}
+            controls={<>
                   {selectedSession && <SessionStatistics key={`statistics:${selectedSessionId}`} open={commandPanels.sessionId === selectedSessionId && commandPanels.statistics} onOpenChange={(statistics) => setCommandPanels((panels) => ({ ...panels, sessionId: selectedSessionId, statistics }))} details={runtimeStatistics} onRetry={() => void sessionRuns.getSessionStatistics(selectedSessionId)} />}
 
                   <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen} key={`model:${selectedSessionId}`} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={!selectedSession} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />
                   <ThinkingSelector key={`thinking:${selectedSessionId}`} open={thinkingOpen} onOpenChange={setThinkingOpen} current={currentThinkingLevel} levels={thinkingLevels} status={thinkingStatus} error={thinkingError} failure={thinkingFailure} disabled={!selectedSession || modelStatus === 'loading' || modelStatus === 'switching'} isActive={isActive} onLoad={() => void openThinking()} onRetry={() => void openThinking(true)} onSelect={changeThinkingLevel} />
-                  {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void abortPrompt()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
-                  {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
-                  {status === 'running' && (prompt.trim().length > 0 || attachmentDraft.items.length > 0) && <Button className="rounded-full" disabled={submittingInput || commands.busy || attachmentDraft.busy} onClick={() => submitPrompt()} title={parseComposerCommand(prompt) ? '执行输入的命令' : '当前任务完成后执行'} type="button">{submittingInput ? '提交中…' : parseComposerCommand(prompt) ? '执行命令' : '排队'}</Button>}
-                  {!isActive && (
-                    <Button aria-label="发送提示词" className="rounded-full" disabled={commands.busy || (!selectedSession && !isDraft) || creatingDraft || modelStatus === 'loading' || modelStatus === 'switching' || thinkingStatus === 'loading' || thinkingStatus === 'switching' || attachmentDraft.busy || (prompt.trim().length === 0 && attachmentDraft.items.length === 0)} onClick={() => submitPrompt()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
-                  )}
-                </div>
-                </div>
-                </div>
-              </div>
-            </div>
-          </div>}
+            </>}
+          />}
         </section>
-        <aside aria-hidden={isHome || !currentPreview || !previewOpen} className={`relative hidden min-h-0 min-w-0 bg-card/60 xl:block ${!isHome && currentPreview && previewOpen ? 'border-l' : 'pointer-events-none'}`} inert={isHome || !currentPreview || !previewOpen}>
-          {!isHome && currentPreview && previewOpen && <FilePreviewResizeHandle containerRef={workspaceGrid} navigationWidth={navigationWidth} width={previewWidth} onWidthChange={setPreviewWidth} />}
-          <div className="h-full min-h-0 overflow-hidden">{widePreview && filePreview}</div>
-        </aside>
-      </div>
-    </main></OpenToolFile>
+      </WorkspaceLayout>
+    </OpenToolFile>
   )
-}
-
-export function PendingInputs({ inputs, onSteer, onResume, disabled = false }: { inputs: PendingInput[]; onResume?: (inputId: string) => void; onSteer?: (inputId: string) => void; disabled?: boolean }) {
-  const [expanded, setExpanded] = useState(false)
-  const pending = inputs.filter((input) => input.mode === 'follow_up' || input.mode === 'steer' && input.attachments?.length)
-  if (pending.length === 0) return null
-  return <section aria-label="待处理消息" aria-live="polite" className="pointer-events-auto mb-2 rounded-xl border bg-background/95 px-3 py-2 text-xs">
-    <ul className="max-h-32 space-y-1 overflow-y-auto">{(expanded ? pending : pending.slice(0, 2)).map((input) => <li className="flex min-w-0 items-center gap-2" key={input.id}><span className="shrink-0 text-muted-foreground">{input.submitting ? '正在提交' : input.mode === 'steer' ? '引导待生效' : '已排队'}</span><span className={expanded ? 'min-w-0 flex-1 whitespace-pre-wrap break-words' : 'min-w-0 flex-1 truncate'} title={input.message}>{input.message}{input.attachments?.length ? ` · ${input.attachments.length} 个附件` : ''}</span>{input.recoveryRequired && onResume ? <Button type="button" size="sm" variant="outline" onClick={() => onResume(input.id)}>确认继续</Button> : input.mode === 'follow_up' && onSteer && <Button className="h-auto shrink-0 px-2 py-1 text-xs" disabled={disabled || input.submitting} onClick={() => onSteer(input.id)} type="button" variant="ghost">引导</Button>}</li>)}</ul>
-    {pending.length > 2 && <Button className="mt-1 h-auto p-0 text-xs text-muted-foreground" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} type="button" variant="ghost">{expanded ? '收起' : `还有 ${pending.length - 2} 条`}</Button>}
-  </section>
 }

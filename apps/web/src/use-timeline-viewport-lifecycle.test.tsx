@@ -31,7 +31,7 @@ it.each([
   let top = 0
   let followingLatest = true
   function View({ sessionId, loaded = true, completed = false }: { sessionId: string; loaded?: boolean; completed?: boolean }) {
-    const { setMessageScrollArea, followLatest } = useTimelineViewport({ selectedSessionId: sessionId, history: loaded ? { session: { id: sessionId }, entries: [], hasEarlier: false, revision: 'fixture' } : undefined, activeTurn: undefined, isActive: false, inspectorOpen: false, setInspectorOpen: () => {} })
+    const { setMessageScrollArea, followLatest } = useTimelineViewport({ selectedSessionId: sessionId, history: loaded ? { session: { id: sessionId }, entries: [], hasEarlier: false, revision: 'fixture' } : undefined, activeTurn: undefined, isActive: false })
     useLayoutEffect(() => { followingLatest = followLatest })
     return <div ref={setMessageScrollArea}><div data-slot="scroll-area-viewport">{completed && <TurnFileSummary state="complete" files={[{ path: '/project/a.ts', displayPath: 'a.ts', outsideProject: false, operations: [], reported: true, status: '已修改' }]} />}</div></div>
   }

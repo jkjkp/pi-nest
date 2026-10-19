@@ -4,7 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 
-import { PendingInputs, WorkspacePage } from './workspace-page.js'
+import { WorkspacePage } from './workspace-page.js'
+import { PendingInputs } from './workspace-composer.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
 const composer = vi.hoisted(() => ({ canQuery: false }))
