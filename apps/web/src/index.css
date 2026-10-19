@@ -164,6 +164,22 @@ textarea {
   }
 }
 
+@keyframes command-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .command-running {
+    color: transparent;
+    background-image: linear-gradient(90deg, var(--muted-foreground) 44%, var(--foreground) 50%, var(--muted-foreground) 56%);
+    background-size: 250% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    animation: command-sweep 2s linear infinite;
+  }
+}
+
 .navigation-title[data-overflow="true"] {
   mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 20px), transparent 100%);
 }

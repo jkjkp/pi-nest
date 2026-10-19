@@ -88,3 +88,21 @@ it('removes the latest hint while preserving pause and resume of execution scrol
   await render('third')
   expect(viewport.scrollTop).toBe(1200)
 })
+
+it('animates only running command text and stops when the command settles', async () => {
+  const tool: ToolResult = { name: 'bash', view: 'bash', status: '正在执行', args: { command: 'echo hello' }, output: '', details: {}, notices: [] }
+  for (const view of ['read', 'bash'] as const) {
+    await act(async () => root.render(<ToolResultCard result={{ ...tool, view }} label="运行 echo hello" />))
+    expect(container.querySelector('.command-running') !== null).toBe(view === 'bash')
+  }
+  const summary = container.querySelector('summary')!
+  expect(summary.querySelector('.command-running')?.textContent).toBe('正在运行 echo hello')
+  expect(summary.querySelector('svg')?.classList.contains('command-running')).toBe(false)
+  await expand()
+  expect(container.querySelectorAll('.command-running')).toHaveLength(1)
+  for (const status of ['完成', '失败', '结果未记录']) {
+    await act(async () => root.render(<ToolResultCard result={{ ...tool, status }} label="运行 echo hello" />))
+    expect(container.querySelector('.command-running')).toBeNull()
+    expect(container.querySelector<HTMLDetailsElement>('[data-tool-result]')?.open).toBe(true)
+  }
+})
