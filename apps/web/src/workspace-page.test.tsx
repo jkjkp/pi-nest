@@ -51,7 +51,7 @@ it('offers default queueing and the steering shortcut while preserving the stop 
   queryClient.setQueryData(['sessions'], [{ id: 'session-1', cwd: '/fixture' }])
   const markup = renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-1']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
   expect(markup).not.toContain('>引导</button>')
-  expect(markup).toContain('>排队</button>')
+  expect(markup).toContain('aria-label="排队"')
   expect(markup).toContain('Enter 排队，Ctrl + Enter 引导，Shift + Enter 换行')
   expect(markup).toContain('aria-label="停止生成"')
   queryClient.clear()

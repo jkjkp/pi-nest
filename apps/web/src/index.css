@@ -222,3 +222,99 @@ textarea {
     text-decoration: var(--shiki-dark-text-decoration);
   }
 }
+
+[data-slot="message-composer"] {
+  container: composer / inline-size;
+}
+
+.composer-toolbar {
+  min-width: 0;
+}
+
+.composer-actions {
+  display: contents;
+}
+
+.composer-actions > :first-child {
+  margin-inline-start: auto;
+}
+
+.composer-toolbar .composer-model {
+  flex: 0 1 12rem;
+  min-width: 4rem;
+  max-width: 12rem;
+}
+
+.composer-toolbar .composer-thinking {
+  width: auto;
+  max-width: 7rem;
+}
+
+.composer-toolbar :is(.composer-plan, .composer-extension) {
+  flex: 0 1 auto;
+  min-width: 1.75rem;
+  max-width: 12rem;
+}
+
+.composer-toolbar [data-composer-tooltip] {
+  position: relative;
+}
+
+.composer-toolbar [data-composer-tooltip]:is(:hover, :focus-visible)::after {
+  content: attr(data-composer-tooltip);
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 0.5rem);
+  right: 0;
+  width: max-content;
+  max-width: min(20rem, 75vw);
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  font-size: 0.75rem;
+  font-weight: normal;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
+.composer-toolbar :is(.composer-plan, .composer-extension)::after {
+  left: 0;
+  right: auto;
+}
+
+@container composer (max-width: 35rem) {
+  .composer-toolbar { gap: 0.25rem; }
+  .composer-toolbar .composer-model { min-width: 3rem; max-width: 8rem; }
+  .composer-toolbar .composer-extension { max-width: 6rem; }
+  .composer-toolbar .composer-thinking-prefix { display: none; }
+}
+
+@container composer (max-width: 28rem) {
+  .composer-toolbar :is(.composer-plan, .composer-extension, .composer-queue) {
+    flex: 0 0 1.75rem;
+    width: 1.75rem;
+    padding-inline: 0;
+  }
+  .composer-toolbar :is(.composer-plan, .composer-extension, .composer-queue) .composer-control-label,
+  .composer-toolbar .composer-thinking .composer-control-chevron { display: none; }
+  .composer-toolbar :is(.composer-plan, .composer-extension, .composer-queue) .composer-control-icon { display: block; }
+  .composer-toolbar .composer-model { min-width: 3rem; max-width: 6rem; }
+}
+
+@container composer (max-width: 17.5rem) {
+  .composer-toolbar { gap: 1px; }
+  .composer-toolbar :is(.composer-model, .composer-thinking, .composer-aborting) {
+    flex: 0 0 1.75rem;
+    width: 1.75rem;
+    min-width: 1.75rem;
+    padding-inline: 0;
+    justify-content: center;
+  }
+  .composer-toolbar :is(.composer-model, .composer-thinking, .composer-aborting) .composer-control-label,
+  .composer-toolbar .composer-model .composer-control-chevron { display: none; }
+  .composer-toolbar :is(.composer-model, .composer-thinking, .composer-aborting) .composer-control-icon { display: block; }
+}

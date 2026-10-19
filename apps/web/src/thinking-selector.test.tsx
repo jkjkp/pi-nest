@@ -36,3 +36,7 @@ it('keeps the same outer height for loading, loaded choices and read errors', ()
   expect(render('loading', ['low', 'high'])).toContain('aria-pressed=')
   expect(render('loading', ['low', 'high'])).not.toContain('aria-busy="true"')
 })
+
+it('exposes the selected thinking level independently of its visible prefix', () => {
+  expect(render('switching', ['medium'])).toContain('aria-label="选择思考等级：中"')
+})

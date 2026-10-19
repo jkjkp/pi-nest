@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { Check, ChevronDown, RefreshCw, X } from 'lucide-react'
+import { Check, ChevronDown, Cpu, RefreshCw, X } from 'lucide-react'
 import { Dialog, Popover } from 'radix-ui'
 import type { PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
 import { filterModels } from './model-search.js'
@@ -77,7 +77,7 @@ export function ModelSelector({ label, title, disabled, models, currentModel, st
     } finally { selectionPending.current = false }
   }
 
-  const trigger = <Button aria-label="选择模型" className="w-28 min-w-0 sm:w-48 text-foreground" disabled={disabled} title={title} size="sm" type="button" variant="ghost"><span className="truncate">{label}</span><ChevronDown aria-hidden="true" className="text-muted-foreground" /></Button>
+  const trigger = <Button aria-label={`选择模型：${title}`} data-composer-tooltip={title} className="composer-model w-28 min-w-0 sm:w-48 text-foreground" disabled={disabled} title={title} size="sm" type="button" variant="ghost"><Cpu aria-hidden="true" className="composer-control-icon hidden" /><span className="composer-control-label min-w-0 truncate">{label}</span><ChevronDown aria-hidden="true" className="composer-control-chevron text-muted-foreground" /></Button>
   const contents = <>
     <div className="flex shrink-0 items-center gap-1 border-b px-2 py-2">
       <input aria-label="搜索模型" aria-controls={listId} aria-activedescendant={filtered[highlight] ? `${listId}-${highlight}` : undefined} aria-expanded={open} aria-autocomplete="list" role="combobox" className="h-9 min-w-0 flex-1 rounded-md bg-transparent px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" placeholder="搜索模型或厂商…" value={search} onChange={(event) => { setSearch(event.target.value); setHighlight(0); if (listRef.current) listRef.current.scrollTop = 0 }} onKeyDown={(event) => {

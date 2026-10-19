@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, ChevronDown, RefreshCw } from 'lucide-react'
+import { Brain, Check, ChevronDown, RefreshCw } from 'lucide-react'
 import { Dialog, Popover, Portal } from 'radix-ui'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -36,7 +36,11 @@ export function ThinkingSelector({ open, onOpenChange, current, levels, status, 
     return () => media.removeEventListener('change', update)
   }, [])
   const busy = status === 'loading' || status === 'switching'
-  const trigger = <Button aria-label="选择思考等级" className="w-28 shrink-0" disabled={disabled} size="sm" variant="ghost" title={current}>{current ? `思考：${thinkingLabel(current)}` : '思考等级'}<ChevronDown aria-hidden="true" /></Button>
+  const trigger = <Button aria-label={`选择思考等级：${current ? thinkingLabel(current) : '未设置'}`} data-composer-tooltip={`思考等级：${current ? thinkingLabel(current) : '未设置'}`} className="composer-thinking w-28 shrink-0" disabled={disabled} size="sm" variant="ghost" title={current}>
+    <Brain aria-hidden="true" className="composer-control-icon hidden" />
+    <span className="composer-control-label min-w-0 truncate"><span className="composer-thinking-prefix">{current ? '思考：' : '思考'}</span>{current ? thinkingLabel(current) : '等级'}</span>
+    <ChevronDown aria-hidden="true" className="composer-control-chevron" />
+  </Button>
   const contents = <>
     <div className="flex shrink-0 items-center justify-between border-b px-3 py-2"><span className="text-sm font-medium">思考等级</span><Button aria-label="刷新思考等级" disabled={busy || isActive} onClick={onRetry} size="icon-sm" variant="ghost"><RefreshCw aria-hidden="true" className={status === 'loading' ? 'animate-spin' : ''} /></Button></div>
     <div className="model-list-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5" role="group" aria-label="可用思考等级" onKeyDown={(event) => {

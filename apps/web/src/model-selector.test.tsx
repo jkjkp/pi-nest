@@ -30,3 +30,7 @@ it('retains cached choices during refresh without adding a loading footer', () =
   expect(markup).not.toContain('正在读取模型…')
   expect(markup).toContain('animate-spin')
 })
+
+it('exposes the full current model name when the trigger text is abbreviated', () => {
+  expect(render('ready')).toContain('aria-label="选择模型：one"')
+})

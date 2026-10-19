@@ -71,3 +71,26 @@ it('keeps attachment-only submission gated by upload state and forwards pasted f
   expect(event.defaultPrevented).toBe(true)
   expect(props.state.attachmentDraft.add).toHaveBeenCalledWith([file])
 })
+
+it('lets touch and keyboard users read the complete extension status from its compact trigger', async () => {
+  const status = 'ponytail: FULL · another extension with a very long status'
+  props = { ...props, state: { ...props.state, extensionStatus: status } }
+  await render()
+  const trigger = container.querySelector<HTMLButtonElement>('[aria-label^="扩展状态："]')!
+  expect(trigger.getAttribute('aria-label')).toBe(`扩展状态：${status}`)
+  await act(() => {
+    trigger.focus()
+    trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+  })
+  expect(document.querySelector('[data-slot="dropdown-menu-content"]')?.textContent).toContain(status)
+})
+
+it('keeps the submitting and stopping states named when only their spinner is visible', async () => {
+  props = { ...props, state: { ...props.state, submittingInput: true } }
+  await render()
+  expect(container.querySelector('[aria-label="提交中"]')?.hasAttribute('disabled')).toBe(true)
+  props = { ...props, state: { ...props.state, status: 'aborting' } }
+  await render()
+  expect(container.querySelector('[role="status"][aria-label="正在停止"]')).not.toBeNull()
+  expect(container.querySelector('[aria-label="停止生成"]')).toBeNull()
+})

@@ -1,5 +1,5 @@
 import { useImperativeHandle, useState, type ReactNode, type RefObject } from 'react'
-import { Send, Square } from 'lucide-react'
+import { ListChecks, ListPlus, LoaderCircle, Puzzle, Send, Square, Terminal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { AttachmentPicker, ComposerAttachments } from './attachment-ui.js'
@@ -87,15 +87,15 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
           style={{ lineHeight: '1.75rem' }}
           value={prompt}
         />
-        <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-2">
+        <div className="composer-toolbar flex min-h-9 shrink-0 flex-nowrap items-center gap-2">
           <AttachmentPicker draft={attachmentDraft} onError={onError} />
-          {planStatus && <DropdownMenu><DropdownMenuTrigger asChild><Button aria-label="查看 Plan 模式详情" className="h-auto px-0 py-0 text-xs text-muted-foreground" size="sm" type="button" variant="ghost">{planStatus}</Button></DropdownMenuTrigger><DropdownMenuContent align="start" side="top" className="max-w-xs"><p className="px-2 py-1.5 text-sm font-medium">Plan mode</p><p className="px-2 pb-2 text-xs text-muted-foreground">{planPolicy ?? '当前阶段未提供工具列表。'}</p></DropdownMenuContent></DropdownMenu>}
-          {extensionStatus && <span className="text-xs text-muted-foreground">{extensionStatus}</span>}
-          <div className="ml-auto flex max-w-full items-center gap-2">
+          {planStatus && <DropdownMenu><DropdownMenuTrigger asChild><Button aria-label="查看 Plan 模式详情" data-composer-tooltip={planStatus} className="composer-plan text-xs text-muted-foreground" size="sm" type="button" variant="ghost"><ListChecks aria-hidden="true" className="composer-control-icon hidden" /><span className="composer-control-label truncate">{planStatus}</span></Button></DropdownMenuTrigger><DropdownMenuContent align="start" side="top" className="max-w-xs"><p className="px-2 py-1.5 text-sm font-medium">{planStatus}</p><p className="px-2 pb-2 text-xs text-muted-foreground">{planPolicy ?? '当前阶段未提供工具列表。'}</p></DropdownMenuContent></DropdownMenu>}
+          {extensionStatus && <DropdownMenu><DropdownMenuTrigger asChild><Button aria-label={`扩展状态：${extensionStatus}`} data-composer-tooltip={extensionStatus} className="composer-extension text-xs text-muted-foreground" size="sm" type="button" variant="ghost"><Puzzle aria-hidden="true" className="composer-control-icon hidden" /><span className="composer-control-label min-w-0 truncate">{extensionStatus}</span></Button></DropdownMenuTrigger><DropdownMenuContent align="start" side="top" className="max-w-xs"><p className="px-2 py-1.5 text-xs whitespace-pre-wrap break-words">{extensionStatus}</p></DropdownMenuContent></DropdownMenu>}
+          <div className="composer-actions ml-auto flex min-w-0 items-center gap-2">
             {controls}
             {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void onAbort()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
-            {status === 'aborting' && <span className="text-sm text-muted-foreground">正在停止…</span>}
-            {status === 'running' && (prompt.trim().length > 0 || attachmentDraft.items.length > 0) && <Button className="rounded-full" disabled={submittingInput || commands.busy || attachmentDraft.busy} onClick={() => onSubmit()} title={parseComposerCommand(prompt) ? '执行输入的命令' : '当前任务完成后执行'} type="button">{submittingInput ? '提交中…' : parseComposerCommand(prompt) ? '执行命令' : '排队'}</Button>}
+            {status === 'aborting' && <span role="status" aria-label="正在停止" data-composer-tooltip="正在停止…" className="composer-aborting inline-flex h-9 shrink-0 items-center text-sm text-muted-foreground"><LoaderCircle aria-hidden="true" className="composer-control-icon hidden animate-spin" /><span className="composer-control-label">正在停止…</span></span>}
+            {status === 'running' && (prompt.trim().length > 0 || attachmentDraft.items.length > 0) && <Button className="composer-queue rounded-full" disabled={submittingInput || commands.busy || attachmentDraft.busy} onClick={() => onSubmit()} aria-label={submittingInput ? '提交中' : parseComposerCommand(prompt) ? '执行命令' : '排队'} data-composer-tooltip={submittingInput ? '正在提交' : parseComposerCommand(prompt) ? '执行输入的命令' : '当前任务完成后执行'} type="button">{submittingInput ? <LoaderCircle aria-hidden="true" className="composer-control-icon hidden animate-spin" /> : parseComposerCommand(prompt) ? <Terminal aria-hidden="true" className="composer-control-icon hidden" /> : <ListPlus aria-hidden="true" className="composer-control-icon hidden" />}<span className="composer-control-label">{submittingInput ? '提交中…' : parseComposerCommand(prompt) ? '执行命令' : '排队'}</span></Button>}
             {!isActive && (
               <Button aria-label="发送提示词" className="rounded-full" disabled={commands.busy || (!selectedSession && !isDraft) || creatingDraft || settingsBusy || attachmentDraft.busy || (prompt.trim().length === 0 && attachmentDraft.items.length === 0)} onClick={() => onSubmit()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
             )}
