@@ -147,6 +147,8 @@ export type PiConfigurationUpdate =
   | { category: 'credentials'; provider: string; apiKey: string | null }
 export type PiMcpDiagnostics = { servers: { name: string; state: string; tools: string[] }[]; hasErrors: boolean }
 
+export type PiSessionInitialSettings = { model?: { provider: string; id: string }; thinkingLevel?: string }
+
 export type PiCatalogModel = PiRuntimeModel & { thinkingLevels: string[]; definition?: Record<string, unknown> }
 export type PiModelDiscoveryRequest = { provider: string; connection: { baseUrl: string; api: 'openai-completions' | 'openai-responses' | 'anthropic-messages'; apiKey?: string; headers?: Record<string, string> } }
 export type PiDiscoveredModel = { id: string; name?: string }
