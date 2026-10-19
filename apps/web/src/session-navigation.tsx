@@ -270,8 +270,8 @@ function SortableProject({
   const stopProjectInteraction = (event: React.SyntheticEvent) => event.stopPropagation()
 
   return (
-    <section className="space-y-1" onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false) }} onFocusCapture={() => setFocused(true)} onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
-      <div className="flex items-center rounded-md transition-colors hover:bg-muted">
+    <section className="space-y-1" ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
+      <div className="flex items-center rounded-md transition-colors hover:bg-muted" onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false) }} onFocusCapture={() => setFocused(true)} onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)}>
       <button
         aria-controls={sessionListId}
         aria-expanded={expanded}
@@ -291,14 +291,14 @@ function SortableProject({
       <div className="flex w-[4.5rem] shrink-0 items-center justify-end gap-0.5 pr-1">
         <DropdownMenu onOpenChange={setMenuOpen} open={menuOpen}>
           <DropdownMenuTrigger asChild>
-            <Button aria-label={`${project.name} 更多操作`} className={`size-7 transition-opacity motion-reduce:transition-none ${actionsClass}`} disabled={!project.cwd} onClick={stopProjectInteraction} onPointerDown={stopProjectInteraction} size="icon-sm" type="button" variant="ghost"><Ellipsis aria-hidden="true" /></Button>
+            <Button aria-label={`${project.name} 更多操作`} className={`size-7 border-0 transition-opacity motion-reduce:transition-none ${actionsClass}`} disabled={!project.cwd} onClick={stopProjectInteraction} onPointerDown={stopProjectInteraction} size="icon-sm" type="button" variant="ghost"><Ellipsis aria-hidden="true" /></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem disabled={!project.cwd} onSelect={() => { if (project.cwd) void onReveal(project.cwd) }}><FolderOpen aria-hidden="true" className="mr-2 size-3.5" />在 Finder 中显示</DropdownMenuItem>
             <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={!project.cwd} onSelect={() => onRemove(project)}><Trash2 aria-hidden="true" className="mr-2 size-3.5" />移除项目</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button aria-label={`在 ${project.name} 新建对话`} className={`size-7 transition-opacity motion-reduce:transition-none ${actionsClass}`} disabled={!project.cwd} onClick={(event) => { stopProjectInteraction(event); onNewConversation(project) }} onPointerDown={stopProjectInteraction} size="icon-sm" type="button" variant="ghost"><SquarePen aria-hidden="true" /></Button>
+        <Button aria-label={`在 ${project.name} 新建对话`} className={`size-7 border-0 transition-opacity motion-reduce:transition-none ${actionsClass}`} disabled={!project.cwd} onClick={(event) => { stopProjectInteraction(event); onNewConversation(project) }} onPointerDown={stopProjectInteraction} size="icon-sm" type="button" variant="ghost"><SquarePen aria-hidden="true" /></Button>
       </div>
       </div>
       {expanded && (
