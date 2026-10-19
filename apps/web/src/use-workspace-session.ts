@@ -6,13 +6,13 @@ import { sessionHistoryQueryKey } from './history.js'
 import { useSessionHistory } from './use-session-history.js'
 import { timelineItems } from './timeline-model.js'
 import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
-import type { PiProject, PiSessionBranchRequest, PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
+import type { PiProject, PiSessionInitialSettings, PiSessionBranchRequest, PiRuntimeModel, PiRuntimeState } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
 import { thinkingCommand } from './thinking-command.js'
 import { stripAnsiLine } from './ansi-text.js'
 import { activeRuntimeTurn, isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
-import { branchSession, createSession, deleteSession, fetchProjects, fetchSessions, renameSession, revealProjectInFinder } from './workspace-api.js'
+import { branchSession, createSession, deleteSession, fetchProjects, fetchSessions, fetchPiConfiguration, renameSession, revealProjectInFinder } from './workspace-api.js'
 import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, projectName, projectSessionGroupKey, planModePolicy, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
 
 const emptyProjects: PiProject[] = []
@@ -49,6 +49,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const [draftError, setDraftError] = useState<string>()
   const [draftPrompt, setDraftPrompt] = useState('')
   const [creatingDraft, setCreatingDraft] = useState(false)
+  const [draftSettings, setDraftSettings] = useState<Record<string, PiSessionInitialSettings>>({})
   const runningInputRequests = useRef(new Set<string>())
   const [runningInputSessions, setRunningInputSessions] = useState<string[]>([])
   const submittingInput = runningInputSessions.includes(selectedSessionId)
@@ -63,9 +64,10 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const [thinkingFailure, setThinkingFailure] = useState(0)
   const thinkingCache = useRef(new Map<string, { model: string; levels: string[] }>())
   const [thinkingLevels, setThinkingLevels] = useState<string[]>([])
-  const [controlSessionId, setControlSessionId] = useState(selectedSessionId)
-  if (controlSessionId !== selectedSessionId) {
-    setControlSessionId(selectedSessionId)
+  const controlKey = selectedSessionId || draftProjectKey
+  const [controlSessionId, setControlSessionId] = useState(controlKey)
+  if (controlSessionId !== controlKey) {
+    setControlSessionId(controlKey)
     setControlFailure(undefined)
     setModels([])
     setModelStatus('unloaded')
@@ -128,6 +130,21 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const attachmentDraft = useAttachmentDraft(selectedSessionId, draftProject?.cwd)
   const isDraft = Boolean(draftProject)
   const prompt = isDraft ? draftPrompt : drafts[selectedSessionId] ?? ''
+  const draftCwd = draftProject?.cwd ?? ''
+  const draftConfiguration = useQuery({ queryKey: ['draft-configuration', draftCwd], queryFn: () => fetchPiConfiguration(undefined, draftCwd), enabled: isDraft, retry: false })
+  const draftModels = draftConfiguration.data?.models ?? []
+  const draftDefaults = draftConfiguration.data?.settings.effective
+  const draftSelection = draftSettings[draftCwd]
+  const draftModel = draftSelection?.model ?? draftModels.find((model) => model.provider === draftDefaults?.defaultProvider && model.id === draftDefaults?.defaultModel)
+  const draftLevels = draftModels.find((model) => model.provider === draftModel?.provider && model.id === draftModel?.id)?.thinkingLevels ?? []
+  const requestedThinking = draftSelection?.thinkingLevel ?? draftDefaults?.defaultThinkingLevel
+  const draftThinking = requestedThinking && draftLevels.includes(requestedThinking) ? requestedThinking : draftLevels[0]
+  const draftSettingsStatus = creatingDraft ? 'switching' : draftConfiguration.isFetching ? 'loading' : draftConfiguration.isError ? 'error' : 'ready'
+  const draftSettingsError = draftConfiguration.error?.message
+  const loadDraftSettings = async (refresh: boolean) => {
+    const result = refresh || !draftConfiguration.data ? await draftConfiguration.refetch() : draftConfiguration
+    return result.data?.models
+  }
 
   useEffect(() => {
     // An unloaded list must not erase the persisted drag order on startup.
@@ -207,7 +224,12 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
       const firstPrompt = draftPrompt.trim()
       const attachedItems = [...attachmentDraft.items]
       const input = attachmentDraft.submission(firstPrompt)
-      const created = await createSession(draftProject.cwd, firstPrompt, ...(input && attachmentDraft.scope?.kind === 'draft' ? [{ attachmentIds: input.attachmentIds, submissionId: input.submissionId, draftId: attachmentDraft.scope.draftId }] : []))
+      const attachments = input && attachmentDraft.scope?.kind === 'draft' ? { attachmentIds: input.attachmentIds, submissionId: input.submissionId, draftId: attachmentDraft.scope.draftId } : undefined
+      const selection = draftSettings[draftProject.cwd]
+      if (selection && (draftConfiguration.isError || draftConfiguration.isFetching)) throw new Error('请先重新加载模型配置，再发送消息。')
+      if (selection?.model && !draftModels.some((model) => model.provider === selection.model?.provider && model.id === selection.model.id)) throw new Error('所选模型已不可用，请重新选择。')
+      const initialSettings = selection ? { ...selection, ...(selection.thinkingLevel !== undefined ? { thinkingLevel: draftThinking } : {}) } : undefined
+      const created = await createSession(draftProject.cwd, firstPrompt, attachments, initialSettings)
       attachmentDraft.clear(attachedItems)
       sessionRuns.adopt({ historyTurnCount: 0, prompt: firstPrompt || '请查看附件。', ...(input ? { attachments: input.attachments, submissionId: input.submissionId } : {}), sessionId: created.id })
       queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => [created, ...(current ?? []).filter((session) => session.id !== created.id)])
@@ -313,6 +335,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   async function openModels(refresh = false) {
+    if (isDraft) return loadDraftSettings(refresh)
     if (!selectedSessionId || modelOperation.current?.sessionId === selectedSessionId) return
     const cached = modelCache.current.get(selectedSessionId)
     if (!refresh && cached && cached.details === useWorkspaceStore.getState().runtimeDetails[selectedSessionId]) {
@@ -346,6 +369,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   async function openThinking(refresh = false) {
+    if (isDraft) { await loadDraftSettings(refresh); return }
     if (!selectedSessionId || modelOperation.current?.sessionId === selectedSessionId) return
     const model = `${currentModel?.provider}/${currentModel?.id}`
     const cached = thinkingCache.current.get(selectedSessionId)
@@ -416,6 +440,13 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   async function changeModel(provider: string, modelId: string) {
+    if (isDraft) {
+      const model = draftModels.find((candidate) => candidate.provider === provider && candidate.id === modelId)
+      if (!model || creatingDraft) return false
+      const level = draftThinking && model.thinkingLevels.includes(draftThinking) ? draftThinking : model.thinkingLevels[0]
+      setDraftSettings((current) => ({ ...current, [draftCwd]: { model: { provider, id: modelId }, ...(level !== undefined ? { thinkingLevel: level } : {}) } }))
+      return true
+    }
     if (!selectedSessionId || isActive || modelOperation.current?.sessionId === selectedSessionId) return false
     const operation = { sessionId: selectedSessionId }
     modelOperation.current = operation
@@ -445,6 +476,12 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   async function changeThinkingLevel(level: string) {
+    if (isDraft) {
+      if (!draftModel || !draftLevels.includes(level) || creatingDraft) return false
+      setDraftSettings((current) => ({ ...current, [draftCwd]: { model: { provider: draftModel.provider, id: draftModel.id }, thinkingLevel: level } }))
+      setThinkingOpen(false)
+      return true
+    }
     if (!selectedSessionId || isActive || modelOperation.current?.sessionId === selectedSessionId) return false
     const operation = { sessionId: selectedSessionId }
     modelOperation.current = operation
@@ -475,10 +512,10 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   return {
-    attachmentDraft, selectedSessionId, selectedSession, sessionResolution, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel, modelLabel, modelStatus, modelError, status, isActive, isStreaming,
+    attachmentDraft, selectedSessionId, selectedSession, sessionResolution, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel: isDraft ? draftModel : currentModel, modelLabel: isDraft ? (draftModels.find((model) => model.provider === draftModel?.provider && model.id === draftModel?.id)?.name ?? draftModel?.id ?? '选择模型') : modelLabel, modelStatus: isDraft ? draftSettingsStatus : modelStatus, modelError: isDraft ? draftSettingsError : modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, setDraft, setDraftPrompt,
-    mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel: runtimeDetails[selectedSessionId]?.thinkingLevel,
+    mutatingSessionId, creatingDraft, draftError, controlError, models: isDraft ? draftModels : models, thinkingLevels: isDraft ? draftLevels : thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus: isDraft ? draftSettingsStatus : thinkingStatus, thinkingError: isDraft ? draftSettingsError : thinkingError, thinkingFailure, currentThinkingLevel: isDraft ? draftThinking : runtimeDetails[selectedSessionId]?.thinkingLevel,
     sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
     selectSession, createBranch, startDraft, openProject, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel,

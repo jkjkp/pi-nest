@@ -82,6 +82,11 @@ describe('WorkspacePage new conversation draft', () => {
       </QueryClientProvider>,
     )
 
+    for (const label of ['选择模型：', '选择思考等级：']) {
+      const trigger = markup.match(new RegExp(`<button[^>]*aria-label="${label}[^>]*>`))?.[0]
+      expect(trigger).toBeDefined()
+      expect(trigger).not.toMatch(/\sdisabled(?:=|\s|>)/)
+    }
     expect(markup).toContain('在 pi-nest 开始新对话')
     expect(markup).toContain('发送第一条消息后才会创建 Pi 会话。')
     expect(markup).not.toContain('未命名会话')

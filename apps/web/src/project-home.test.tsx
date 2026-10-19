@@ -10,7 +10,7 @@ import type { SessionRunController } from './session-run-controller.js'
 import { addProject, createSession, selectProjectFolder } from './workspace-api.js'
 import { sessionHistoryQueryKey } from './history.js'
 
-vi.mock('./workspace-api.js', async (original) => ({ ...await original<typeof import('./workspace-api.js')>(), addProject: vi.fn(), selectProjectFolder: vi.fn(), createSession: vi.fn(), fetchSessionHistory: vi.fn(async (id: string) => ({ session: { id }, entries: [], hasEarlier: false, revision: 'fixture' })), fetchSessionTurnIndex: vi.fn(async () => ({ entries: [], revision: 'fixture' })) }))
+vi.mock('./workspace-api.js', async (original) => ({ ...await original<typeof import('./workspace-api.js')>(), addProject: vi.fn(), selectProjectFolder: vi.fn(), createSession: vi.fn(), fetchPiConfiguration: vi.fn(async () => ({ models: [], settings: { effective: {} } })), fetchSessionHistory: vi.fn(async (id: string) => ({ session: { id }, entries: [], hasEarlier: false, revision: 'fixture' })), fetchSessionTurnIndex: vi.fn(async () => ({ entries: [], revision: 'fixture' })) }))
 let container: HTMLDivElement
 let root: Root
 let client: QueryClient
@@ -70,7 +70,7 @@ it.each(['open', 'create'] as const)('adds an empty project via %s without creat
   vi.mocked(createSession).mockResolvedValue({ id: 'new-session', cwd: '/projects/new-project' })
   await fill(container.querySelector<HTMLTextAreaElement>('textarea')!, 'first message')
   await act(() => container.querySelector<HTMLButtonElement>('[aria-label="发送提示词"]')!.click())
-  expect(createSession).toHaveBeenCalledExactlyOnceWith('/projects/new-project', 'first message')
+  expect(createSession).toHaveBeenCalledExactlyOnceWith('/projects/new-project', 'first message', undefined, undefined)
   expect(controller.adopt).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'new-session', prompt: 'first message' }))
 })
 

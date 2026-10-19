@@ -51,8 +51,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const workspaceGrid = useRef<HTMLDivElement>(null)
   const [creatingProject, setCreatingProject] = useState(false)
   const [modelSelector, setModelSelector] = useState<{ sessionId?: string; open: boolean }>({ open: false })
-  const modelSelectorOpen = modelSelector.sessionId === selectedSessionId && modelSelector.open
-  const setModelSelectorOpen = (open: boolean) => setModelSelector({ sessionId: selectedSessionId, open })
+  const modelSelectorKey = selectedSessionId || draftProject?.key
+  const modelSelectorOpen = modelSelector.sessionId === modelSelectorKey && modelSelector.open
+  const setModelSelectorOpen = (open: boolean) => setModelSelector({ sessionId: modelSelectorKey, open })
   const {
     setComposer, showScrollToBottom, scrollToBottom, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
     scrollToFinalAnswer, followFinalAnswer, jumpToTurn, rememberLayoutPosition, restoreLayoutPosition,
@@ -213,8 +214,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             controls={<>
                   {selectedSession && <SessionStatistics key={`statistics:${selectedSessionId}`} open={commandPanels.sessionId === selectedSessionId && commandPanels.statistics} onOpenChange={(statistics) => setCommandPanels((panels) => ({ ...panels, sessionId: selectedSessionId, statistics }))} details={runtimeStatistics} onRetry={() => void sessionRuns.getSessionStatistics(selectedSessionId)} />}
 
-                  <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen} key={`model:${selectedSessionId}`} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={!selectedSession} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />
-                  <ThinkingSelector key={`thinking:${selectedSessionId}`} open={thinkingOpen} onOpenChange={setThinkingOpen} current={currentThinkingLevel} levels={thinkingLevels} status={thinkingStatus} error={thinkingError} failure={thinkingFailure} disabled={!selectedSession || modelStatus === 'loading' || modelStatus === 'switching'} isActive={isActive} onLoad={() => void openThinking()} onRetry={() => void openThinking(true)} onSelect={changeThinkingLevel} />
+                  <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen} key={`model:${selectedSessionId || draftProject?.key}`} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={(!selectedSession && !isDraft) || creatingDraft} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />
+                  <ThinkingSelector emptyMessage={isDraft && !currentModel ? '请先选择模型，再设置思考等级。' : undefined} key={`thinking:${selectedSessionId || draftProject?.key}`} open={thinkingOpen} onOpenChange={setThinkingOpen} current={currentThinkingLevel} levels={thinkingLevels} status={thinkingStatus} error={thinkingError} failure={thinkingFailure} disabled={(!selectedSession && !isDraft) || creatingDraft || (!isDraft && (modelStatus === 'loading' || modelStatus === 'switching'))} isActive={isActive} onLoad={() => void openThinking()} onRetry={() => void openThinking(true)} onSelect={changeThinkingLevel} />
             </>}
           />}
         </section>

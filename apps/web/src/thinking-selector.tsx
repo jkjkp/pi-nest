@@ -12,6 +12,7 @@ type Props = {
   levels: string[]
   status: 'unloaded' | 'loading' | 'ready' | 'error' | 'switching'
   error?: string
+  emptyMessage?: string
   failure: number
   disabled: boolean
   isActive: boolean
@@ -20,7 +21,7 @@ type Props = {
   onSelect: (level: string) => Promise<boolean>
 }
 
-export function ThinkingSelector({ open, onOpenChange, current, levels, status, error, failure, disabled, isActive, onLoad, onRetry, onSelect }: Props) {
+export function ThinkingSelector({ open, onOpenChange, current, levels, status, error, emptyMessage = '暂无可用思考等级。', failure, disabled, isActive, onLoad, onRetry, onSelect }: Props) {
   const [mobile, setMobile] = useState(false)
   const [dismissedFailure, setDismissedFailure] = useState(0)
   useEffect(() => {
@@ -51,7 +52,7 @@ export function ThinkingSelector({ open, onOpenChange, current, levels, status, 
       const index = buttons.indexOf(event.target as HTMLButtonElement)
       buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus()
     }}>{levels.map((level) => <button aria-pressed={level === current} disabled={busy || isActive || levels.length === 1} className="flex w-full items-center justify-between rounded-md px-3 py-2 text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60" key={level} onClick={() => void onSelect(level)} type="button"><span>{thinkingLabel(level)}<span className="ml-2 text-xs text-muted-foreground">{level}</span></span>{level === current && <Check aria-hidden="true" className="size-4" />}</button>)}
-    {status === 'ready' && !levels.length && <p className="px-3 py-2 text-sm text-muted-foreground">暂无可用思考等级。</p>}
+    {status === 'ready' && !levels.length && <p className="px-3 py-2 text-sm text-muted-foreground">{emptyMessage}</p>}
     {(status === 'loading' || (status === 'unloaded' && !isActive)) && !levels.length && <div aria-label="正在读取思考等级" aria-busy="true" className="space-y-2 p-3"><Skeleton className="h-8" /><Skeleton className="h-8" /><Skeleton className="h-8" /></div>}
     {error && <div className="px-3 py-2 text-xs text-destructive" role="alert">读取失败，请重试。<Button disabled={busy || isActive} onClick={onRetry} size="xs" variant="ghost">重试</Button></div>}
     {isActive && <p className="px-3 py-2 text-xs text-muted-foreground">生成结束后可调整思考等级。</p>}

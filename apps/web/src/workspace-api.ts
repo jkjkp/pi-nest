@@ -1,4 +1,4 @@
-import type { PiProject, PiSessionBranchRequest, PiSessionBranchResponse, PiRuntimeSettings, PiSettingsSnapshot, PiSessionsResponse } from '@pi-nest/contracts'
+import type { PiProject, PiSessionInitialSettings, PiSessionBranchRequest, PiSessionBranchResponse, PiRuntimeSettings, PiSettingsSnapshot, PiSessionsResponse } from '@pi-nest/contracts'
 import { historyPageSize, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
 import type { PiSessionSummary } from './workspace.js'
 
@@ -45,8 +45,8 @@ export async function fetchSessions() {
   return body.sessions
 }
 
-export async function createSession(cwd: string, prompt: string, attachments?: { attachmentIds: string[]; submissionId: string; draftId: string }) {
-  const body = await configurationRequest<{ session?: PiSessionSummary }>('/api/sessions', { body: JSON.stringify({ cwd, prompt, ...attachments }), method: 'POST' })
+export async function createSession(cwd: string, prompt: string, attachments?: { attachmentIds: string[]; submissionId: string; draftId: string }, initialSettings?: PiSessionInitialSettings) {
+  const body = await configurationRequest<{ session?: PiSessionSummary }>('/api/sessions', { body: JSON.stringify({ cwd, prompt, ...attachments, ...(initialSettings ? { initialSettings } : {}) }), method: 'POST' })
   if (!body.session?.id || !body.session.cwd) throw new Error('Invalid Pi session creation response')
   return body.session
 }
@@ -98,8 +98,8 @@ export async function configurationRequest<T>(path: string, init: RequestInit = 
   return (response.status === 204 ? undefined : await response.json()) as T
 }
 
-export function fetchPiConfiguration(sessionId?: string) {
-  return configurationRequest<import('@pi-nest/contracts').PiConfigurationSnapshot>(`/api/configuration${sessionId ? `?${new URLSearchParams({ session: sessionId })}` : ''}`)
+export function fetchPiConfiguration(sessionId?: string, project?: string) {
+  return configurationRequest<import('@pi-nest/contracts').PiConfigurationSnapshot>(`/api/configuration${project ? `?${new URLSearchParams({ project })}` : sessionId ? `?${new URLSearchParams({ session: sessionId })}` : ''}`)
 }
 
 export function savePiConfiguration(update: import('@pi-nest/contracts').PiConfigurationUpdate, sessionId?: string) {
