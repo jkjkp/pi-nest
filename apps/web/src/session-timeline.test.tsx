@@ -40,7 +40,7 @@ describe('SessionTimeline', () => {
   it('expands only the latest running Turn execution', () => {
     const running = render(<SessionTimeline error={false} history={history} isLoading={false} isRunning onRetry={() => undefined} />)
 
-    expect(running).toContain('思考中</span> ·')
+    expect(running).toMatch(/aria-live="off">用时 [^<]+秒/)
     expect(running).toContain('reasoning')
     expect(running).toContain('aria-expanded="true"')
     expect(running).toContain('aria-label="执行过程"')
@@ -101,7 +101,7 @@ describe('SessionTimeline', () => {
 
     expect((markup.match(/aria-expanded="true"/g) ?? [])).toHaveLength(1)
     expect((markup.match(/aria-expanded="false"/g) ?? [])).toHaveLength(2)
-    expect((markup.match(/思考中<\/span> ·/g) ?? [])).toHaveLength(1)
+    expect((markup.match(/<button data-execution-toggle=""[^>]*aria-expanded="true"[^>]*><span><span aria-live="off">用时 /g) ?? [])).toHaveLength(1)
   })
 
   it('keeps timeline content centered while allowing the Rail to move to the message viewport overlay', () => {

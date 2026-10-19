@@ -52,9 +52,8 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
 
   const elapsed = formatElapsedTime(turnElapsed(item, executionActive, now))
   const phase = executionPhase(item, presentation, runStatus, runMessage)
-  const statusText = executionActive ? `${phase} · ${elapsed}`
-    : runStatus === 'submitted' || runStatus === 'awaiting_agent' || runStatus === 'aborting' || runStatus === 'aborted' || runStatus === 'error'
-      ? phase : elapsed === '—' ? '正在同步执行状态…' : `用时 ${elapsed}`
+  const showPhase = runStatus !== undefined && ['submitted', 'awaiting_agent', 'awaiting_input', 'aborting', 'aborted', 'error'].includes(runStatus)
+  const statusText = showPhase ? phase : elapsed === '—' ? '正在同步执行状态…' : `用时 ${elapsed}`
   if (expanded && !contentMounted) setContentMounted(true)
   const contentExpanded = expanded && presentation.hasExecution
 
@@ -63,9 +62,9 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
       {showFileProgress && files.length > 0 && <p className="mb-2 text-xs text-muted-foreground">已修改 {files.length} 个文件</p>}
       {failures.length > 0 && <button type="button" className="mb-2 block text-left text-xs text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-controls={contentId} onClick={revealResult}>{failures.length} 项执行失败 · 查看失败</button>}
       {presentation.hasExecution ? <button data-execution-toggle="" aria-controls={contentId} aria-expanded={expanded} className="flex w-full items-center gap-1 text-left text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setUserToggled(true); if (!expanded) setExecutionFollowLatest(true); setExpanded((value) => !value) }} type="button">
-        <span><span aria-live="polite">{isRunning ? phase : statusText}</span>{isRunning ? ` · ${elapsed}` : null}</span>
+        <span><span aria-live={showPhase ? "polite" : "off"}>{statusText}</span>{showPhase && executionActive && elapsed !== '—' ? ` · ${elapsed}` : null}</span>
         <ChevronRight aria-hidden="true" className={`size-4 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
-      </button> : <p className="text-muted-foreground"><span aria-live="polite">{isRunning ? phase : statusText}</span>{isRunning ? ` · ${elapsed}` : null}</p>}
+      </button> : <p className="text-muted-foreground"><span aria-live={showPhase ? "polite" : "off"}>{statusText}</span>{showPhase && executionActive && elapsed !== '—' ? ` · ${elapsed}` : null}</p>}
       <div className="execution-collapse" data-expanded={contentExpanded} aria-hidden={!contentExpanded} inert={!contentExpanded} id={contentId}>
         <div className="min-h-0 overflow-hidden"><div className="py-3">
         {contentMounted && <>

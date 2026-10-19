@@ -72,7 +72,7 @@ export function AttachmentPicker({ draft, onError }: { draft: ReturnType<typeof 
   const input = useRef<HTMLInputElement>(null)
   function add(files: File[]) { try { draft.add(files) } catch (cause) { onError(cause instanceof Error ? cause.message : '无法添加附件') } }
   return <>
-    <Button type="button" size="icon-sm" variant="ghost" aria-label="添加附件" title="添加附件" onClick={() => input.current?.click()}><Paperclip aria-hidden className="size-4" /></Button>
+    <Button type="button" size="icon-sm" variant="ghost" aria-label="添加附件" className="composer-attachment" data-composer-tooltip="添加附件" onClick={() => input.current?.click()}><Paperclip aria-hidden className="size-4" /></Button>
     <input className="sr-only" ref={input} type="file" multiple aria-label="选择附件" onChange={(event) => { add([...event.currentTarget.files ?? []]); event.currentTarget.value = '' }} />
   </>
 }

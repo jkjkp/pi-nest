@@ -289,7 +289,7 @@ textarea {
   pointer-events: none;
 }
 
-.composer-toolbar :is(.composer-plan, .composer-extension)::after {
+.composer-toolbar :is(.composer-attachment, .composer-plan, .composer-extension)::after {
   left: 0;
   right: auto;
 }

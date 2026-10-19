@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { TurnExecution } from './turn-execution.js'
 import { shouldExecutionFollowLatest } from './turn-execution-scroll.js'
@@ -44,4 +44,26 @@ describe('TurnExecution scrolling', () => {
     expect(expanded).toContain('data-expanded="true" aria-hidden="false"')
     expect(expanded).not.toContain('inert=""')
   })
+})
+
+
+it('keeps command details out of the timer title and retains the final duration', () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse(item.startedAt) + 30_000)
+  const command = '运行 cd /workspace && ' + 'pnpm test '.repeat(40)
+  const presentation = { activities: [{ id: 'tool', kind: 'tool' as const, label: command, status: '正在执行', duration: undefined, events: [] }], finalAnswer: [], hasExecution: true }
+  try {
+    const markup = renderToStaticMarkup(<TurnExecution isRunning item={item} presentation={presentation} runStatus="running" />)
+    const title = markup.match(/<button data-execution-toggle=""[\s\S]*?<\/button>/)?.[0]
+    expect(title).toContain('用时 30秒')
+    expect(title).not.toContain('运行')
+    expect(title).toContain('aria-live="off"')
+    expect(markup).toContain('pnpm test')
+    const completed = renderToStaticMarkup(<TurnExecution isRunning={false} item={{ ...item, runtimeTiming: { startedAt: item.startedAt, completedAt: new Date(Date.parse(item.startedAt) + 30_000).toISOString() } }} presentation={presentation} />)
+    expect(completed).toContain('用时 30秒')
+  } finally { clock.mockRestore() }
+})
+
+it.each([['aborting', '正在停止…'], ['aborted', '已停止'], ['error', '执行失败']] as const)('preserves the %s status', (runStatus, label) => {
+  const markup = renderToStaticMarkup(<TurnExecution isRunning={runStatus === 'aborting'} item={item} presentation={{ activities: [], finalAnswer: [], hasExecution: false }} runStatus={runStatus} />)
+  expect(markup).toContain(label)
 })
