@@ -28,13 +28,17 @@ export function ToolResultCard({ result, label, duration }: { result: ToolResult
   const command = typeof args.command === 'string' ? args.command : undefined
   const written = typeof args.content === 'string' ? args.content : undefined
   const exitCode = typeof result.details.exitCode === 'number' ? result.details.exitCode : undefined
-  const title = view === 'bash' ? `${status === '正在执行' ? '正在运行' : status === '完成' ? '已运行' : status === '失败' ? '运行失败' : status} ${(command ?? label.replace(/^运行\s*/, '')).replace(/\s*\r?\n\s*/g, ' ')}` : view === 'write' ? `${status === '完成' ? '已写入' : status === '失败' ? '写入失败' : '准备写入'} ${result.path ?? ''}` : label
+  const action = view === 'bash' ? '运行' : view === 'write' ? '写入' : /^(读取|搜索|编辑|运行)/.exec(label)?.[0]
+  const subject = view === 'bash' ? command ?? label.replace(/^运行\s*/, '') : view === 'write' ? result.path ?? label.replace(/^编辑\s*/, '') : action ? label.slice(action.length).trimStart() : label
+  const verb = action ?? '调用'
+  const prefix = status === '正在执行' ? `正在${verb}` : status === '完成' ? `已${verb}` : status === '失败' ? `${verb}失败` : status
+  const title = `${prefix} ${subject}`.replace(/\s*\r?\n\s*/g, ' ')
   const metadata = <span className={`text-xs ${status === '失败' ? 'text-destructive' : 'text-muted-foreground'}`}>{status}{exitCode !== undefined ? ` · exit ${exitCode}` : ''}{duration ? ` · ${duration}` : ''}{result.changes ? ` · +${result.changes.added} −${result.changes.removed}` : ''}</span>
   const Icon = view === 'bash' ? Terminal : result.path ? FileText : Wrench
-  return <details className={view === 'bash' ? 'group min-w-0' : 'group rounded-lg border bg-card/40'} data-tool-result="" onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary className={`group/tool-toggle flex cursor-pointer list-none gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden ${view === 'bash' ? `items-center py-1 text-xs ${status === '失败' ? 'text-destructive' : 'text-muted-foreground'}` : 'items-start p-3'}`}><Icon aria-hidden="true" className={view === 'bash' ? 'size-4 shrink-0' : 'mt-0.5 size-4 shrink-0 text-muted-foreground'} /><span className="min-w-0 flex-1"><span className={view === 'bash' ? `block truncate${status === '正在执行' ? ' command-running' : ''}` : 'block break-words'} title={view === 'bash' ? title : undefined}>{title}</span>{view !== 'bash' && <span className="text-xs text-muted-foreground">{metadata} · <span className="text-xs text-primary decoration-dashed underline-offset-4 group-hover/tool-toggle:underline group-focus-visible/tool-toggle:underline">{open ? '收起' : '展开查看'}</span></span>}</span></summary>
-    {open && <div className={view === 'bash' ? 'space-y-3 pt-2 pl-6' : 'space-y-3 border-t p-3'}>
-      {view === 'bash' && <p>{metadata}</p>}
+  return <details className="group min-w-0" data-tool-result="" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary className={`flex cursor-pointer list-none items-center gap-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden ${status === '失败' ? 'text-destructive' : 'text-muted-foreground'}`}><Icon aria-hidden="true" className="size-4 shrink-0" /><span className={`min-w-0 flex-1 truncate${status === '正在执行' ? ' command-running' : ''}`} title={title}>{title}</span></summary>
+    {open && <div className="space-y-3 pt-2 pl-6">
+      <p>{metadata}</p>
       {result.path && view !== 'grep' && <div className="text-xs"><ToolFilePath path={result.path} line={typeof result.details.firstChangedLine === 'number' ? result.details.firstChangedLine : view === 'read' && typeof args.offset === 'number' ? args.offset : undefined} /></div>}
       {view === 'read' && <p className="text-xs text-muted-foreground">当时读取的内容 · 第 {typeof args.offset === 'number' ? args.offset : 1} 行起{typeof args.limit === 'number' ? `，请求最多 ${args.limit} 行` : ''}</p>}
       {view === 'grep' && <p className="break-words text-xs text-muted-foreground">搜索范围：{result.path ?? '.'} · 搜索 {typeof args.pattern === 'string' ? args.pattern : ''}{typeof args.glob === 'string' ? ` · ${args.glob}` : ''}</p>}

@@ -18,23 +18,6 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
   const [executionFollowLatest, setExecutionFollowLatest] = useState(true)
   const [now, setNow] = useState(() => Date.now())
   const contentId = `turn-execution-${item.id}`
-  const failures = presentation.activities.filter((activity) => (activity.kind === 'tool' || activity.kind === 'bash') && activity.status === '失败')
-  const resultTarget = failures[0]
-
-  function revealResult() {
-    setUserToggled(true)
-    setExpanded(true)
-    setExecutionFollowLatest(false)
-    requestAnimationFrame(() => {
-      const target = [...(executionViewport.current?.querySelectorAll<HTMLElement>('[data-activity-id]') ?? [])].find((element) => element.dataset.activityId === resultTarget?.id)
-      const details = target?.querySelector('details')
-      if (details) details.open = true
-      target?.scrollIntoView({ block: 'nearest' })
-      const summary = details?.querySelector('summary')
-      summary?.focus({ preventScroll: true })
-    })
-  }
-
   useEffect(() => {
     if (!executionActive) return
     return startElapsedClock(item.runtimeTiming?.startedAt ?? item.startedAt, setNow)
@@ -60,7 +43,6 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
   return (
     <section className="my-4 text-sm" data-turn-execution="">
       {showFileProgress && files.length > 0 && <p className="mb-2 text-xs text-muted-foreground">已修改 {files.length} 个文件</p>}
-      {failures.length > 0 && <button type="button" className="mb-2 block text-left text-xs text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-controls={contentId} onClick={revealResult}>{failures.length} 项执行失败 · 查看失败</button>}
       {presentation.hasExecution ? <button data-execution-toggle="" aria-controls={contentId} aria-expanded={expanded} className="flex w-full items-center gap-1 text-left text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { setUserToggled(true); if (!expanded) setExecutionFollowLatest(true); setExpanded((value) => !value) }} type="button">
         <span><span aria-live={showPhase ? "polite" : "off"}>{statusText}</span>{showPhase && executionActive && elapsed !== '—' ? ` · ${elapsed}` : null}</span>
         <ChevronRight aria-hidden="true" className={`size-4 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
