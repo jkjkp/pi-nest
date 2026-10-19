@@ -15,11 +15,12 @@ it.each([
   expect(modelCallErrorLabel({ message, model: 'glm-5.3-highspeed' })).toContain(label)
 })
 
-it('renders a persistent per-turn notice, provider details and a model selection action', () => {
+it('renders a persistent per-turn notice and provider details without a model selection action', () => {
   const error = modelCallError({ role: 'assistant', stopReason: 'error', errorMessage: '403: code 1220', provider: 'zai-coding-cn', model: 'glm-5.3-highspeed' })!
-  const markup = renderToStaticMarkup(<ModelCallErrorNotice error={error} onSelectModel={() => undefined} />)
+  const markup = renderToStaticMarkup(<ModelCallErrorNotice error={error} />)
   expect(markup).toContain('role="alert"')
-  expect(markup).toContain('选择模型')
+  expect(markup).not.toContain('选择模型')
+  expect(markup).not.toContain('<button')
   expect(markup).toContain('查看详情')
   expect(markup).toContain('zai-coding-cn/glm-5.3-highspeed')
   expect(markup).toContain('403: code 1220')

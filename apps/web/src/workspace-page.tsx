@@ -146,7 +146,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   </div>
                 ) : selectedSessionId ? <RenderErrorBoundary key={selectedSessionId} scope="timeline" sessionId={selectedSessionId}><SessionTimeline
                   sessionId={selectedSessionId}
-                  onSelectModel={() => { setModelSelectorOpen(true); void openModels() }}
                   sessionCwd={displaySession?.cwd}
                   error={historyError}
                   hasEarlier={historyQuery.hasPreviousPage}
