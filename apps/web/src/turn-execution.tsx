@@ -67,17 +67,12 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
       </button> : <p className="text-muted-foreground"><span aria-live={showPhase ? "polite" : "off"}>{statusText}</span>{showPhase && executionActive && elapsed !== '—' ? ` · ${elapsed}` : null}</p>}
       <div className="execution-collapse" data-expanded={contentExpanded} aria-hidden={!contentExpanded} inert={!contentExpanded} id={contentId}>
         <div className="min-h-0 overflow-hidden"><div className="py-3">
-        {contentMounted && <>
+        {contentMounted &&
         <div aria-label="执行过程" className="max-h-[min(38vh,22.5rem)] space-y-3 overflow-y-auto overscroll-contain pr-2" onScroll={() => {
           const viewport = executionViewport.current
           if (viewport) setExecutionFollowLatest(shouldExecutionFollowLatest(viewport.scrollHeight, viewport.scrollTop, viewport.clientHeight))
         }} onClickCapture={(event) => { if ((event.target as HTMLElement).closest('summary, button')) setExecutionFollowLatest(false) }} ref={executionViewport}>{presentation.activities.map((activity) => <div data-activity-id={activity.id} key={activity.id}><Activity activity={activity} /></div>)}</div>
-        {!executionFollowLatest && <button className="mt-2 text-xs text-muted-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => {
-          const viewport = executionViewport.current
-          setExecutionFollowLatest(true)
-          if (viewport) viewport.scrollTop = viewport.scrollHeight
-        }} type="button">↓ 查看最新</button>}
-        </>}
+        }
         </div></div>
       </div>
       <div className="border-b border-border/60" />
