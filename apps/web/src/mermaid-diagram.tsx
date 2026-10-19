@@ -180,7 +180,7 @@ export function MermaidDiagram({ source }: { source: string }) {
   if (!current?.diagram) return <div className="my-3 rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">正在生成 Mermaid 图表…</div>
   const show = (source: boolean) => { setInitialSource(source); setOpen(true) }
   return <figure className="my-3 rounded-md border bg-card p-3">
-    <figcaption className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-medium text-muted-foreground">
+    <figcaption className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-normal text-muted-foreground">
       Mermaid 图表
       <div className="flex flex-wrap items-center gap-1"><CameraControls camera={camera} diagram={current.diagram} onChange={changeCamera} /></div>
       <div className="flex items-center gap-1"><Button onClick={() => show(true)} size="sm" type="button" variant="ghost">查看源码</Button><Button aria-label="放大查看 Mermaid 图表" onClick={() => show(false)} size="sm" type="button" variant="ghost"><Maximize2 />展开查看</Button></div>

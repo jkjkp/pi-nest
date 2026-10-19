@@ -22,7 +22,7 @@ function AlertDialogContent({ className, ...props }: React.ComponentProps<typeof
 }
 
 function AlertDialogTitle(props: React.ComponentProps<typeof AlertDialogPrimitive.Title>) {
-  return <AlertDialogPrimitive.Title className="text-base font-semibold" {...props} />
+  return <AlertDialogPrimitive.Title className="text-base font-normal" {...props} />
 }
 
 function AlertDialogDescription(props: React.ComponentProps<typeof AlertDialogPrimitive.Description>) {

@@ -21,7 +21,7 @@ export function SessionRenameDialog({ session, onClose, onRename, onCloseAutoFoc
       <DialogTitle>重命名会话</DialogTitle>
       <DialogDescription>名称会作为 Pi 原生会话元数据保存，Pi CLI 也可读取。</DialogDescription>
       <form onSubmit={(event) => { event.preventDefault(); void save() }}>
-        <label className="mt-4 grid gap-2 text-sm font-medium" htmlFor={inputId}>会话名称
+        <label className="mt-4 grid gap-2 text-sm font-normal" htmlFor={inputId}>会话名称
           <input className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50" id={inputId} maxLength={120} disabled={saving} onChange={(event) => setName(event.target.value)} placeholder={sessionDisplayName(session)} value={name} />
         </label>
         {error && <p className="mt-3 text-sm text-destructive" role="alert">{error}</p>}

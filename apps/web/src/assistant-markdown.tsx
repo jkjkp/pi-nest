@@ -22,7 +22,7 @@ function MarkdownPre({ children }: ComponentProps<'pre'>) {
   const code = String(child.props.children ?? '').replace(/\n$/, '')
   const lang = language(child.props.className)
   if (lang === 'mermaid') return isStreaming
-    ? <pre className="my-3 max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs leading-6"><code>{code}</code></pre>
+    ? <pre className="my-4 max-h-96 overflow-auto rounded-md bg-muted p-3 font-mono text-[13px] leading-[22px]"><code>{code}</code></pre>
     : <MermaidDiagram source={code} />
   return <MarkdownCodeBlock code={code} language={lang} isStreaming={isStreaming} />
 }
@@ -37,26 +37,26 @@ function MarkdownLink({ children, href }: ComponentProps<'a'>) {
 // oxlint-disable-next-line react/only-export-components -- The regression oracle reuses the exact display components.
 export const markdownComponents: Components = {
   a: MarkdownLink,
-  blockquote: ({ children }) => <blockquote className="my-3 border-l-4 border-border pl-4 text-muted-foreground">{children}</blockquote>,
-  code: ({ children }) => <code className="rounded bg-muted px-1 py-0.5 text-[0.9em]">{children}</code>,
-  h1: ({ children }) => <h1 className="mt-6 mb-3 text-2xl leading-tight font-semibold first:mt-0">{children}</h1>,
-  h2: ({ children }) => <h2 className="mt-5 mb-3 text-xl leading-snug font-semibold first:mt-0">{children}</h2>,
-  h3: ({ children }) => <h3 className="mt-4 mb-2 text-lg leading-snug font-semibold first:mt-0">{children}</h3>,
-  h4: ({ children }) => <h4 className="mt-4 mb-2 text-base font-semibold first:mt-0">{children}</h4>,
-  h5: ({ children }) => <h5 className="mt-3 mb-2 text-sm font-semibold first:mt-0">{children}</h5>,
-  h6: ({ children }) => <h6 className="mt-3 mb-2 text-sm font-semibold text-muted-foreground first:mt-0">{children}</h6>,
+  blockquote: ({ children }) => <blockquote className="my-4 border-l-2 border-border pl-4 text-muted-foreground">{children}</blockquote>,
+  code: ({ children }) => <code className="rounded bg-muted px-1 py-0 text-[0.9em]">{children}</code>,
+  h1: ({ children }) => <h1 className="mt-6 mb-4 text-[22px] leading-normal font-normal first:mt-0">{children}</h1>,
+  h2: ({ children }) => <h2 className="mt-6 mb-4 text-xl leading-normal font-normal first:mt-0">{children}</h2>,
+  h3: ({ children }) => <h3 className="mt-5 mb-3 text-lg leading-normal font-normal first:mt-0">{children}</h3>,
+  h4: ({ children }) => <h4 className="mt-4 mb-2 text-base font-normal first:mt-0">{children}</h4>,
+  h5: ({ children }) => <h5 className="mt-4 mb-2 text-[15px] font-normal first:mt-0">{children}</h5>,
+  h6: ({ children }) => <h6 className="mt-3 mb-2 text-sm font-normal text-muted-foreground first:mt-0">{children}</h6>,
   em: ({ children }) => <em className="italic">{children}</em>,
   del: ({ children }) => <del className="line-through">{children}</del>,
   hr: () => <hr className="my-5 border-t" />,
   input: ({ checked }) => <input type="checkbox" checked={Boolean(checked)} disabled aria-label={checked ? '已完成' : '未完成'} className="mr-2 align-middle" />,
-  ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-6">{children}</ol>,
-  p: ({ children }) => <p className="my-3 first:mt-0 last:mb-0">{children}</p>,
+  ol: ({ children }) => <ol className="my-4 list-decimal space-y-1.5 pl-6">{children}</ol>,
+  p: ({ children }) => <p className="my-4 first:mt-0 last:mb-0">{children}</p>,
   pre: MarkdownPre,
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-  table: ({ children }) => <div className="my-3 overflow-x-auto rounded-md border"><table className="w-full border-collapse text-sm">{children}</table></div>,
+  table: ({ children }) => <div className="my-4 overflow-x-auto rounded-md border"><table className="w-full border-collapse text-sm leading-6">{children}</table></div>,
   td: ({ children }) => <td className="border-t px-3 py-2 align-top">{children}</td>,
-  th: ({ children }) => <th className="border-b bg-muted/60 px-3 py-2 text-left font-semibold">{children}</th>,
-  ul: ({ children, className }) => <ul className={`my-3 list-disc space-y-1 pl-6 ${className ?? ''}`}>{children}</ul>,
+  th: ({ children }) => <th className="border-b bg-muted/60 px-3 py-2 text-left font-normal">{children}</th>,
+  ul: ({ children, className }) => <ul className={`my-4 list-disc space-y-1.5 pl-6 ${className ?? ''}`}>{children}</ul>,
 }
 
 export const AssistantMarkdown = memo(function AssistantMarkdown({ isStreaming, source, onOpenLocalLink }: { isStreaming: boolean; source: string; onOpenLocalLink?: (href: string) => void }) {
@@ -68,7 +68,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({ isStreaming, 
     : [...blocks.frozen, ...blocks.tail].map(({ node, key }, index) => <Fragment key={key}>{index > 0 && '\n'}<MarkdownBlock node={node} components={markdownComponents} allowLocal={Boolean(onOpenLocalLink)} /></Fragment>)
   return (
     <LocalLinkContext value={onOpenLocalLink}><StreamingContext.Provider value={isStreaming}>
-      <div className="min-w-0 [overflow-wrap:anywhere] [&_.contains-task-list]:list-none [&_.contains-task-list]:pl-2">{children}</div>
+      <div className="min-w-0 text-[15px] leading-[26px] font-normal [overflow-wrap:anywhere] [&_li>p]:my-2 [&_li>:first-child]:mt-0 [&_li>:last-child]:mb-0 [&_.contains-task-list]:list-none [&_.contains-task-list]:pl-2">{children}</div>
     </StreamingContext.Provider></LocalLinkContext>
   )
 })

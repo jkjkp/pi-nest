@@ -18,7 +18,7 @@ export function SessionFilePreview({ sessionId, path, line, searchRoot, navigati
     staleTime: 0, retry: false, refetchOnWindowFocus: false,
   })
   return <section className="flex h-full min-h-0 flex-col" aria-label="当前文件预览">
-    <header className="shrink-0 space-y-2 border-b p-3"><div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">当前文件</h2><Button type="button" size="sm" variant="ghost" onClick={onClose}>收起预览</Button></div><p className="break-all text-xs">{query.data?.path ?? path}</p><p className="text-xs text-muted-foreground">只读预览 · 当前内容可能与历史调用不同</p></header>
+    <header className="shrink-0 space-y-2 border-b p-3"><div className="flex items-center justify-between gap-2"><h2 className="text-sm font-normal">当前文件</h2><Button type="button" size="sm" variant="ghost" onClick={onClose}>收起预览</Button></div><p className="break-all text-xs">{query.data?.path ?? path}</p><p className="text-xs text-muted-foreground">只读预览 · 当前内容可能与历史调用不同</p></header>
     {query.isPending && <p role="status" className="p-4 text-sm text-muted-foreground">正在读取文件…</p>}
     {query.isError && <p role="alert" className="break-words p-4 text-sm text-destructive">{query.data ? '刷新失败，仍显示上次读取的内容：' : ''}{query.error.message}<Button className="ml-2" type="button" size="sm" variant="ghost" disabled={query.isFetching} onClick={() => void query.refetch()}>重试读取</Button></p>}
     {query.data?.kind === 'text' && <FilePreviewText content={query.data.content} path={query.data.path} line={line} navigation={navigation} positionKey={key} onOpenFile={onOpenFile} />}

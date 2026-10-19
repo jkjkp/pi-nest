@@ -48,7 +48,7 @@ export function SessionStatistics({ details, onRetry, open: controlledOpen, onOp
       <span aria-hidden="true" className="absolute inset-0 flex items-center justify-center text-[8px] tabular-nums">{known ? `${Math.round(percent)}%` : '—'}</span>
     </Button></Popover.Trigger>
     <Popover.Portal><Popover.Content ref={content} onPointerEnter={enter} onPointerLeave={leave} onFocusCapture={() => clearTimeout(timer.current)} onBlurCapture={leave} onOpenAutoFocus={(event) => event.preventDefault()} onCloseAutoFocus={(event) => event.preventDefault()} side="top" align="end" sideOffset={8} collisionPadding={12} className="z-50 w-72 max-w-[calc(100vw-24px)] rounded-xl border bg-popover p-3 text-sm text-popover-foreground shadow-lg">
-      <h2 className="font-medium">会话用量与上下文</h2>
+      <h2 className="font-normal">会话用量与上下文</h2>
       {known && <p className="mt-2 text-xs text-muted-foreground">上下文占用 {percent.toFixed(1)}%</p>}
       {stats ? <dl className="mt-3 grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 text-xs">
         <dt>当前上下文</dt><dd>{context ? `${context.tokens === null ? '待更新' : formatStatisticsTokens(context.tokens)} / ${formatStatisticsTokens(context.contextWindow)}` : '未知'}</dd>

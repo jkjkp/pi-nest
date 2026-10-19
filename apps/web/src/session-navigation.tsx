@@ -127,8 +127,8 @@ export function SessionNavigation({
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b">
         <div className="flex h-14 items-center gap-2 px-4">
-          <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">PN</span>
-          <h2 className="min-w-0 truncate text-sm font-semibold tracking-tight">Pi Nest</h2>
+          <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-normal text-primary-foreground">PN</span>
+          <h2 className="min-w-0 truncate text-sm font-normal tracking-tight">Pi Nest</h2>
         </div>
         <label className="relative block px-3 pb-3" htmlFor="session-search">
           <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-2.5 size-3.5 text-muted-foreground" />
@@ -143,7 +143,7 @@ export function SessionNavigation({
         </label>
       </div>
       <div className="flex shrink-0 items-center justify-between px-4 pt-3 pb-1">
-        <h3 className="text-xs font-medium text-muted-foreground">项目</h3>
+        <h3 className="text-xs font-normal text-muted-foreground">项目</h3>
         <Button aria-label="创建项目" size="icon-sm" variant="ghost" onClick={onAddProject}><Plus aria-hidden="true" className="size-4" /></Button>
       </div>
       <ScrollArea className="min-h-0 flex-1">
@@ -276,7 +276,7 @@ function SortableProject({
         aria-controls={sessionListId}
         aria-expanded={expanded}
         aria-label={`项目 ${project.name}，目录 ${projectDescription}，${project.sessions.length} 个会话，${expanded ? '已展开' : '已折叠'}`}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-normal outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         onClick={() => onToggle(project.key, !collapsed)}
         ref={setActivatorNodeRef}
         title={project.cwd}
@@ -370,7 +370,7 @@ function SortableSession({
             {...attributes}
             {...listeners}
           >
-            <NavigationTitle className="text-sm font-medium" stopped={isDragging || menuOpen}>{sessionDisplayName(session)}</NavigationTitle>
+            <NavigationTitle className="text-sm font-normal" stopped={isDragging || menuOpen}>{sessionDisplayName(session)}</NavigationTitle>
             <SessionStatusIndicator status={status} unread={unread} />
           </Button>
           <Button aria-label={`删除 ${sessionDisplayName(session)}`} title={isRunActive(status) ? '运行中的会话无法删除' : '删除会话'} className="pointer-events-none mr-1 shrink-0 text-muted-foreground opacity-0 hover:text-destructive disabled:opacity-0 group-hover/session:pointer-events-auto group-hover/session:opacity-100 group-hover/session:disabled:opacity-50 focus-visible:pointer-events-auto focus-visible:opacity-100" disabled={cannotDelete} onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onDelete(session) }} size="icon-sm" type="button" variant="ghost"><Trash2 aria-hidden="true" className="size-3.5" /></Button>

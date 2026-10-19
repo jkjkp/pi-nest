@@ -11,7 +11,7 @@ export function TurnFileSummary({ files, state }: { files: TurnFileChange[]; sta
   const visible = expanded ? files : files.slice(0, 3)
   return <section aria-label="本轮文件变更" className="mt-4 overflow-hidden rounded-xl border bg-card/50" data-turn-file-summary="" data-execution-toggle="">
     <header className="border-b px-4 py-3">
-      <h2 className="flex items-center gap-2 text-sm font-medium"><FilePenLine aria-hidden="true" className="size-4 text-muted-foreground" />文件变更 · {files.length} 个文件</h2>
+      <h2 className="flex items-center gap-2 text-sm font-normal"><FilePenLine aria-hidden="true" className="size-4 text-muted-foreground" />文件变更 · {files.length} 个文件</h2>
     </header>
     {state !== 'complete' && <p role="status" className="px-4 pt-3 text-xs text-warning">{state === 'aborted' ? '任务已中断' : '任务执行失败'}，以下为已记录的文件修改。</p>}
     <ul id={listId} className="divide-y px-4">{visible.map((file) => <li key={file.path} className="py-3">

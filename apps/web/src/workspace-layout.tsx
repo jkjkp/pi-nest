@@ -30,8 +30,8 @@ export function WorkspaceLayout({ title, titleTooltip, navigation, preview, prev
             {navigation}
           </SheetContent>
         </Sheet>
-        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground">PN</span>
-        <h1 className="truncate text-sm font-semibold tracking-tight" title={titleTooltip}>{title}</h1>
+        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-normal text-primary-foreground">PN</span>
+        <h1 className="truncate text-sm font-normal tracking-tight" title={titleTooltip}>{title}</h1>
       </div>
     </header>
     <div className="workspace-grid grid min-h-0 flex-1" ref={containerRef} style={{

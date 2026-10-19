@@ -101,8 +101,8 @@ export function ModelSelector({ label, title, disabled, models, currentModel, st
         const selected = currentModel?.provider === model.provider && currentModel.id === model.id
         const groupStart = index === 0 || filtered[index - 1]?.provider !== model.provider
         return <div key={`${model.provider}:${model.id}`} role="presentation">
-          {groupStart && <p role="presentation" className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">{model.provider}</p>}
-          <button id={`${listId}-${index}`} role="option" aria-selected={selected} aria-label={`${model.provider}/${model.id}${selected ? '，当前模型' : ''}`} data-model-index={index} disabled={busy || isActive} className={`flex min-h-9 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${highlight === index ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'} ${selected ? 'font-medium' : ''}`} onKeyDown={(event) => {
+          {groupStart && <p role="presentation" className="px-2 pb-1 pt-2 text-xs font-normal text-muted-foreground">{model.provider}</p>}
+          <button id={`${listId}-${index}`} role="option" aria-selected={selected} aria-label={`${model.provider}/${model.id}${selected ? '，当前模型' : ''}`} data-model-index={index} disabled={busy || isActive} className={`flex min-h-9 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${highlight === index ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'}`} onKeyDown={(event) => {
               if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return
               event.preventDefault()
               const next = (index + (event.key === 'ArrowDown' ? 1 : -1) + filtered.length) % filtered.length

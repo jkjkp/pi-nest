@@ -24,7 +24,7 @@ export function SessionInspector({ run, session }: { run: SessionRunSummary | un
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-6 p-4 text-sm">
           <section aria-labelledby="inspector-runtime-heading" className="space-y-3">
-            <h3 className="text-xs font-semibold tracking-[0.12em] text-muted-foreground uppercase" id="inspector-runtime-heading">
+            <h3 className="text-xs font-normal tracking-[0.12em] text-muted-foreground uppercase" id="inspector-runtime-heading">
               运行
             </h3>
             <dl className="space-y-4">
@@ -43,7 +43,7 @@ export function SessionInspector({ run, session }: { run: SessionRunSummary | un
           </section>
 
           <section aria-labelledby="inspector-session-heading" className="space-y-3 border-t pt-5">
-            <h3 className="text-xs font-semibold tracking-[0.12em] text-muted-foreground uppercase" id="inspector-session-heading">
+            <h3 className="text-xs font-normal tracking-[0.12em] text-muted-foreground uppercase" id="inspector-session-heading">
               会话
             </h3>
             <dl className="space-y-4">
@@ -73,7 +73,7 @@ function InspectorUnavailable() {
 function InspectorItem({ children, label }: { children: ReactNode; label: string }) {
   return (
     <div className="space-y-1">
-      <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
+      <dt className="text-xs font-normal text-muted-foreground">{label}</dt>
       <dd className="m-0">{children}</dd>
     </div>
   )
@@ -82,5 +82,5 @@ function InspectorItem({ children, label }: { children: ReactNode; label: string
 function StatusBadge({ status }: { status: Parameters<typeof sessionStatusLabel>[0] }) {
   const current = status ?? 'idle'
   const color = isRunActive(current) ? 'text-warning' : current === 'complete' ? 'text-success' : current === 'error' ? 'text-destructive' : 'text-muted-foreground'
-  return <span className={`text-xs font-medium ${color}`}>{sessionStatusLabel(status)}</span>
+  return <span className={`text-xs font-normal ${color}`}>{sessionStatusLabel(status)}</span>
 }

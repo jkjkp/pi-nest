@@ -84,7 +84,7 @@ export function CommandComposer({ value, onValueChange, onExecuteCommand, textar
     {open && <div className="absolute inset-x-0 bottom-full z-30 mb-3 overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-md" aria-label="命令提示">
       <div id={listId} ref={list} role="listbox" aria-label="可用命令" className="max-h-[min(16rem,35dvh)] overflow-y-auto overscroll-contain p-1.5">
         {commands.map((command, itemIndex) => <button key={command.name} id={`${listId}-${itemIndex}`} type="button" role="option" aria-selected={itemIndex === index} tabIndex={-1} className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm ${itemIndex === index ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'}`} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(command.name)}>
-          <span className="shrink-0 font-medium">/{command.name}</span><span className="min-w-0 truncate text-muted-foreground">{command.description}</span>
+          <span className="shrink-0 font-normal">/{command.name}</span><span className="min-w-0 truncate text-muted-foreground">{command.description}</span>
         </button>)}
         {!commands.length && commandsQuery.data !== undefined && !commandsQuery.isFetching && !commandsQuery.isError && <p className="px-3 py-2 text-sm text-muted-foreground">没有匹配的命令</p>}
       </div>

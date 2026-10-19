@@ -26,7 +26,7 @@ function DialogContent({ className, ...props }: React.ComponentProps<typeof Dial
 }
 
 function DialogTitle(props: React.ComponentProps<typeof DialogPrimitive.Title>) {
-  return <DialogPrimitive.Title className="text-base font-semibold" {...props} />
+  return <DialogPrimitive.Title className="text-base font-normal" {...props} />
 }
 
 function DialogDescription(props: React.ComponentProps<typeof DialogPrimitive.Description>) {

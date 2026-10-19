@@ -42,7 +42,7 @@ export function ThinkingSelector({ open, onOpenChange, current, levels, status, 
     <ChevronDown aria-hidden="true" className="composer-control-chevron" />
   </Button>
   const contents = <>
-    <div className="flex shrink-0 items-center justify-between border-b px-3 py-2"><span className="text-sm font-medium">思考等级</span><Button aria-label="刷新思考等级" disabled={busy || isActive} onClick={onRetry} size="icon-sm" variant="ghost"><RefreshCw aria-hidden="true" className={status === 'loading' ? 'animate-spin' : ''} /></Button></div>
+    <div className="flex shrink-0 items-center justify-between border-b px-3 py-2"><span className="text-sm font-normal">思考等级</span><Button aria-label="刷新思考等级" disabled={busy || isActive} onClick={onRetry} size="icon-sm" variant="ghost"><RefreshCw aria-hidden="true" className={status === 'loading' ? 'animate-spin' : ''} /></Button></div>
     <div className="model-list-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5" role="group" aria-label="可用思考等级" onKeyDown={(event) => {
       if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return
       const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
