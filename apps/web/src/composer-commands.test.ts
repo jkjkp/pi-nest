@@ -48,9 +48,11 @@ it.each([
 it('parses exact commands and preserves parameters without interpreting commands inside prose', () => {
   expect(parseComposerCommand('  /COMPACT instructions  ')).toEqual({ name: 'compact', argument: 'instructions' })
   expect(parseComposerCommand('/compact 保留接口\n保留约束')).toEqual({ name: 'compact', argument: '保留接口\n保留约束' })
-  expect(parseComposerCommand('/name 名称 含空格')).toEqual({ name: 'name', argument: '名称 含空格' })
+  expect(parseComposerCommand(' /RENAME ')).toEqual({ name: 'rename', argument: '' })
+  expect(parseComposerCommand('/name')).toBeUndefined()
+  expect(matchingCommands([], 'name')).toEqual([])
   for (const value of ['/model', '/model fixture/model', '/thinking', '/thinking high', '/modelx', '/p', '你好 /model', '*****/model', '/model/path']) expect(parseComposerCommand(value)).toBeUndefined()
-  expect(matchingCommands([], '').map((command) => command.name)).toEqual(['compact', 'name', 'session', 'copy', 'fork', 'clone', 'settings'])
+  expect(matchingCommands([], '').map((command) => command.name)).toEqual(['compact', 'rename', 'session', 'copy', 'fork', 'clone', 'settings'])
 })
 
 it('copies only the latest completed assistant text across history and runtime without thinking or unfinished output', () => {

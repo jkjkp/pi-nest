@@ -4,7 +4,7 @@ import type { PiRuntimeCommand } from '@pi-nest/contracts'
 
 export const composerCommands = [
   { name: 'compact', description: '压缩上下文 · /compact [说明]' },
-  { name: 'name', description: '重命名会话 · /name [名称]' },
+  { name: 'rename', description: '重命名当前会话' },
   { name: 'session', description: '查看会话用量与上下文' },
   { name: 'copy', description: '复制最近已完成的助手消息' },
   { name: 'fork', description: '从历史用户消息处分叉为新会话' },

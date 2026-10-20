@@ -71,8 +71,8 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
     async function execute() {
       try {
         if (workspace.isDraft || !workspace.selectedSession) throw new Error('请先进入已有会话，再执行命令。')
-        if (['session', 'copy', 'settings', 'fork', 'clone'].includes(command.name) && command.argument) throw new Error(`用法：/${command.name}（无需参数）`)
-        if (['compact', 'name', 'fork', 'clone'].includes(command.name)) {
+        if (['session', 'copy', 'settings', 'fork', 'clone', 'rename'].includes(command.name) && command.argument) throw new Error(`用法：/${command.name}（无需参数）`)
+        if (['compact', 'rename', 'fork', 'clone'].includes(command.name)) {
           if (workspace.isActive || workspace.runtimeStates[sessionId]?.lifecycle === 'active') throw new Error('请等待当前任务结束后再执行此命令。')
           if (workspace.mutatingSessionId === sessionId || ['loading', 'switching'].includes(workspace.modelStatus) || ['loading', 'switching'].includes(workspace.thinkingStatus) || workspace.runtimeStates[sessionId]?.lifecycle === 'loading') throw new Error('正在处理会话操作，请稍后重试。')
         }
@@ -92,11 +92,9 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
             setCompactNotices((current) => ({ ...current, [sessionId]: { message: completed === false ? '已取消上下文压缩' : '上下文压缩完成' } }))
             break
           }
-          case 'name':
-            if (!command.argument) { ui.rename(() => complete('会话已重命名')); report('请在对话框中设置会话名称'); break }
-            if (command.argument.length > 120) throw new Error('会话名称不能超过 120 个字符。')
-            await workspace.handleRename(sessionId, command.argument)
-            complete('会话已重命名')
+          case 'rename':
+            ui.rename(() => report('会话已重命名'))
+            complete()
             break
           case 'session':
             ui.statistics()

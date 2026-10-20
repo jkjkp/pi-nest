@@ -88,15 +88,33 @@ it('keeps failed commands and does not clear a draft after switching sessions', 
   expect(useWorkspaceStore.getState().drafts.two).toBe('另一会话')
   expect(context.render().notice).toBeUndefined()
 })
-it('renames directly or keeps /name until the shared dialog saves', async () => {
-  const context = setup('/name 新名称')
-  context.submit(); await tick()
-  expect(context.workspace.handleRename).toHaveBeenCalledWith('one', '新名称')
-  useWorkspaceStore.getState().setDraft('one', '/name')
-  context.render().submit('/name'); await tick()
-  expect(context.draft()).toBe('/name')
-  context.ui.rename.mock.calls[0]![0]()
+it('opens rename, clears the command immediately and never clears a later draft on save', async () => {
+  const context = setup('/rename')
+  expect(context.submit()).toBe(true)
+  await tick()
+  expect(context.ui.rename).toHaveBeenCalledOnce()
+  expect(context.workspace.handleRename).not.toHaveBeenCalled()
   expect(context.draft()).toBe('')
+  useWorkspaceStore.getState().setDraft('one', '/rename')
+  context.ui.rename.mock.calls[0]![0]()
+  expect(context.draft()).toBe('/rename')
+  expect(context.render().notice?.message).toBe('会话已重命名')
+  context.workspace.selectedSessionId = 'two'
+  context.render()
+  context.ui.rename.mock.calls[0]![0]()
+  expect(context.render().notice).toBeUndefined()
+})
+it('rejects rename arguments and keeps the command when a dialog cannot be opened', async () => {
+  const context = setup('/rename New name')
+  context.submit(); await tick()
+  expect(context.ui.rename).not.toHaveBeenCalled()
+  expect(context.draft()).toBe('/rename New name')
+  expect(context.render().notice?.message).toContain('无需参数')
+  context.workspace.isDraft = true
+  context.render().submit('/rename'); await tick()
+  expect(context.ui.rename).not.toHaveBeenCalled()
+  expect(context.render().notice?.message).toContain('已有会话')
+  expect(context.render().submit('/name')).toBe(false)
 })
 it('copies raw assistant text, reports clipboard failures and never copies thinking', async () => {
   const context = setup('/copy')
@@ -113,12 +131,13 @@ it('copies raw assistant text, reports clipboard failures and never copies think
 it('rejects mutation commands during generation while allowing read-only actions', async () => {
   const context = setup('/compact')
   context.workspace.isActive = true
-  for (const text of ['/compact', '/name Test']) {
+  for (const text of ['/compact', '/rename']) {
     context.render().submit(text); await tick()
     expect(context.render().notice?.error).toBe(true)
   }
   expect(context.workspace.changeModel).not.toHaveBeenCalled()
   expect(context.workspace.handleRename).not.toHaveBeenCalled()
+  expect(context.ui.rename).not.toHaveBeenCalled()
   expect(context.sessionRuns.compact).not.toHaveBeenCalled()
   context.render().submit('/session')
   expect(context.ui.statistics).toHaveBeenCalledOnce()

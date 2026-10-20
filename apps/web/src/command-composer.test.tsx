@@ -61,6 +61,7 @@ it.each(['/cl', '/clo', '/clon', '/clone', ' /cl'])('executes the selected clone
 
 it.each([
   ['/cl', 'Tab'], ['你好 /cl', 'Enter'], ['/clone 参数', 'Enter'], ['/session', 'Enter'],
+  ['/ren', 'Tab'], ['你好 /ren', 'Enter'],
 ])('only completes %s with %s', (value, key) => {
   const context = setup(value)
   if (value === '/clone 参数') {
@@ -73,7 +74,7 @@ it.each([
   expect(context.downstream).not.toHaveBeenCalled()
 })
 
-it.each(['/model', '/thinking'])('does not suggest or complete the removed %s command', (value) => {
+it.each(['/model', '/thinking', '/name'])('does not suggest or complete the removed %s command', (value) => {
   const context = setup(value)
   expect(renderToStaticMarkup(context.render())).not.toContain('role="option"')
   expect(context.key('Enter').preventDefault).not.toHaveBeenCalled()
@@ -202,5 +203,28 @@ it.each(['/com', '/compact'])('executes compact on one Enter for %s', (value) =>
   const context = setup(value)
   context.key('Enter')
   expect(context.execute).toHaveBeenCalledExactlyOnceWith('/compact ')
+  expect(context.downstream).not.toHaveBeenCalled()
+})
+
+
+it.each(['/r', '/re', '/ren', '/rena', '/renam', '/rename', '/RENAME'])('executes rename on one Enter for %s', (value) => {
+  const context = setup(value)
+  context.key('Enter')
+  expect(context.execute).toHaveBeenCalledExactlyOnceWith('/rename ')
+  expect(context.downstream).not.toHaveBeenCalled()
+})
+
+it('executes rename after selecting it from the full command menu', () => {
+  const context = setup('/')
+  context.key('ArrowDown'); context.render()
+  context.key('Enter')
+  expect(context.execute).toHaveBeenCalledExactlyOnceWith('/rename ')
+})
+
+it('does not execute rename while confirming IME input', () => {
+  const context = setup('/ren')
+  context.key('Enter', { nativeEvent: { isComposing: true } })
+  context.key('Enter', { nativeEvent: { keyCode: 229 } })
+  expect(context.execute).not.toHaveBeenCalled()
   expect(context.downstream).not.toHaveBeenCalled()
 })
