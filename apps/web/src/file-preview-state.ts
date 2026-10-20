@@ -16,6 +16,6 @@ export function localMarkdownLink(filePath: string, href: string) {
   try { path = decodeURIComponent(destination!.split('?')[0]!) } catch { return undefined }
   if (!path || /[\\\0]/.test(path)) return undefined
   const line = fragment?.match(/^L([1-9]\d*)(?:-L?[1-9]\d*)?$/)?.[1]
-  // Preserve parent segments: only the server decides whether the resolved path stays in the project.
+  // Preserve parent segments for the server to resolve against the current file directory.
   return { path: path.startsWith('/') ? path : `${filePath.slice(0, filePath.lastIndexOf('/') + 1)}${path}`, line: line && Number.isSafeInteger(Number(line)) ? Number(line) : undefined }
 }

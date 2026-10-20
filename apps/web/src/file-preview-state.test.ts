@@ -25,6 +25,8 @@ it('resolves document-relative file links and line fragments without swallowing 
   expect(localMarkdownLink('docs/guide.md', '../src/a%20b.ts#L24-L30')).toEqual({ path: 'docs/../src/a b.ts', line: 24 })
   expect(localMarkdownLink('README.md', '../../outside')).toEqual({ path: '../../outside', line: undefined })
   expect(localMarkdownLink('README.md', '/project/a.ts#L5')).toEqual({ path: '/project/a.ts', line: 5 })
+  expect(localMarkdownLink('/other/docs/guide.md', '../src/a%20b.ts#L24')).toEqual({ path: '/other/docs/../src/a b.ts', line: 24 })
+  expect(localMarkdownLink('/other/next.md', 'last.md')).toEqual({ path: '/other/last.md', line: undefined })
   for (const href of ['https://example.com', '//example.com', 'javascript:alert(1)', 'data:text/html,test', '#heading', '%', 'a%00b', 'a\\b']) expect(localMarkdownLink('docs/a.md', href)).toBeUndefined()
   expect(isPreviewImage('screenshot.JPEG')).toBe(true)
   expect(isPreviewImage('drawing.svg')).toBe(false)

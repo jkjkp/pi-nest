@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -27,6 +28,7 @@ it('reads current text through a session-authorized route and rejects forged ori
   const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }
   expect((await request({})).status).toBe(403)
   expect((await request({ ...headers, origin: 'https://evil.example' })).status).toBe(403)
+  expect((await request({ ...headers, 'x-pi-nest-token': 'wrong' })).status).toBe(403)
   expect((await request(headers)).status).toBe(200)
   expect(await (await request(headers)).json()).toEqual({ path: 'a.ts', content: 'hello\nworld' })
   writeFileSync(join(cwd, 'a.ts'), 'changed')
@@ -34,18 +36,22 @@ it('reads current text through a session-authorized route and rejects forged ori
   expect(await refreshed.json()).toEqual({ path: 'a.ts', content: 'changed' })
   expect(refreshed.headers.get('cache-control')).toBe('no-store')
   expect((await request(headers, { path: '' })).status).toBe(400)
+  expect((await request(headers, { path: 'a\0.ts' })).status).toBe(400)
+  expect(await (await request(headers, { path: join(directory, 'outside') })).json()).toEqual({ path: join(directory, 'outside'), content: 'private' })
+  expect((await request({ ...headers, origin: 'https://evil.example' }, { path: join(directory, 'outside') })).status).toBe(403)
   const routes = createSessionFilePreviewRoutes(security)
   expect((await routes.request('/sessions/missing/file-preview', { method: 'POST', headers, body: JSON.stringify({ path: 'a.ts' }) })).status).toBe(404)
 })
 
-it('rejects traversal, sibling-prefix paths and symlinks escaping the session project', async () => {
+it('reads parent paths, sibling projects and symlinks with canonical external paths', async () => {
   symlinkSync(join(directory, 'outside'), join(cwd, 'escape'))
   const sibling = join(directory, 'project-other')
   mkdirSync(sibling)
   writeFileSync(join(sibling, 'a'), 'private')
-  for (const path of ['../outside', join(directory, 'outside'), join(sibling, 'a'), 'escape']) {
-    await expect(readSessionFilePreview(cwd, path)).rejects.toMatchObject({ status: 403 })
+  for (const path of ['../outside', join(directory, 'outside'), 'escape']) {
+    expect(await readSessionFilePreview(cwd, path)).toEqual({ path: join(directory, 'outside'), content: 'private' })
   }
+  expect(await readSessionFilePreview(cwd, join(sibling, 'a'))).toEqual({ path: join(sibling, 'a'), content: 'private' })
   symlinkSync(join(cwd, 'a.ts'), join(cwd, 'alias'))
   expect(await readSessionFilePreview(cwd, 'alias')).toEqual({ path: 'a.ts', content: 'hello\nworld' })
 })
@@ -68,9 +74,12 @@ it('resolves grep paths relative to its directory or single-file search scope', 
   writeFileSync(join(cwd, 'src', 'a.ts'), 'scoped')
   expect(await readSessionFilePreview(cwd, 'a.ts', 'src')).toEqual({ path: 'src/a.ts', content: 'scoped' })
   expect(await readSessionFilePreview(cwd, 'a.ts', 'src/a.ts')).toEqual({ path: 'src/a.ts', content: 'scoped' })
-  await expect(readSessionFilePreview(cwd, '../a.ts', 'src')).rejects.toMatchObject({ status: 403 })
+  expect(await readSessionFilePreview(cwd, '../a.ts', 'src')).toEqual({ path: 'a.ts', content: 'hello\nworld' })
   await expect(readSessionFilePreview(cwd, 'wrong.ts', 'src/a.ts')).rejects.toMatchObject({ status: 400 })
-  await expect(readSessionFilePreview(cwd, 'outside', '..')).rejects.toMatchObject({ status: 403 })
+  expect(await readSessionFilePreview(cwd, 'outside', '..')).toEqual({ path: join(directory, 'outside'), content: 'private' })
+  expect(await readSessionFilePreview(cwd, 'outside', directory)).toEqual({ path: join(directory, 'outside'), content: 'private' })
+  expect(await readSessionFilePreview(cwd, 'outside', join(directory, 'outside'))).toEqual({ path: join(directory, 'outside'), content: 'private' })
+  expect(await readSessionFilePreview(cwd, join(directory, 'outside'), 'missing-scope')).toEqual({ path: join(directory, 'outside'), content: 'private' })
 })
 
 const pixelPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64')
@@ -96,6 +105,13 @@ it('authorizes image bytes independently and chooses MIME from actual data rathe
   expect(Buffer.from(await image.arrayBuffer())).toEqual(pixelPng)
   expect((await request(headers, { path: 'x', content: 'forged' })).status).toBe(400)
   expect((await request(headers, { path: 'x'.repeat(17_000) })).status).toBe(413)
+  const outside = join(directory, '外部图片.png')
+  writeFileSync(outside, pixelPng)
+  const externalImage = await request(headers, { path: outside })
+  expect(externalImage.status).toBe(200)
+  expect(decodeURIComponent(externalImage.headers.get('x-pi-nest-file-path')!)).toBe(outside)
+  expect(Buffer.from(await externalImage.arrayBuffer())).toEqual(pixelPng)
+  expect((await request({ ...headers, 'x-pi-nest-token': 'wrong' }, { path: outside })).status).toBe(403)
 })
 
 it('allows raster formats, bounds image dimensions and bytes, and rejects corrupt or active content', async () => {
@@ -117,11 +133,31 @@ it('allows raster formats, bounds image dimensions and bytes, and rejects corrup
   await expect(readSessionImagePreview(cwd, 'enormous.png')).rejects.toMatchObject({ status: 413 })
 })
 
-it('applies the same directory and symlink restrictions to image previews', async () => {
+it('supports external image paths, search scopes and symlinks', async () => {
   writeFileSync(join(directory, 'private.png'), pixelPng)
   symlinkSync(join(directory, 'private.png'), join(cwd, 'escape.png'))
-  for (const path of ['../private.png', join(directory, 'private.png'), 'escape.png']) await expect(readSessionImagePreview(cwd, path)).rejects.toMatchObject({ status: 403 })
+  for (const path of ['../private.png', join(directory, 'private.png'), 'escape.png']) {
+    const image = await readSessionImagePreview(cwd, path)
+    expect(image.path).toBe(join(directory, 'private.png'))
+    expect(image.buffer).toEqual(pixelPng)
+  }
+  expect((await readSessionImagePreview(cwd, 'private.png', directory)).path).toBe(join(directory, 'private.png'))
+  expect((await readSessionImagePreview(cwd, 'private.png', join(directory, 'private.png'))).mime).toBe('image/png')
   mkdirSync(join(cwd, 'images'))
   writeFileSync(join(cwd, 'images', 'pixel.png'), pixelPng)
   expect((await readSessionImagePreview(cwd, 'pixel.png', 'images')).path).toBe('images/pixel.png')
+})
+
+
+it('uses the session directory only as a path base, including an unavailable directory', async () => {
+  const alias = join(directory, 'alias-project')
+  symlinkSync(cwd, alias)
+  expect(await readSessionFilePreview(alias, 'a.ts')).toEqual({ path: 'a.ts', content: 'hello\nworld' })
+  expect(await readSessionFilePreview(join(directory, 'deleted-project'), join(directory, 'outside'))).toEqual({ path: join(directory, 'outside'), content: 'private' })
+})
+
+it.skipIf(process.platform === 'win32')('rejects an external FIFO without waiting for a writer', async () => {
+  const fifo = join(directory, 'pipe')
+  execFileSync('mkfifo', [fifo])
+  await expect(readSessionFilePreview(cwd, fifo)).rejects.toMatchObject({ status: 400 })
 })

@@ -9,45 +9,34 @@ import { bodyLimit } from 'hono/body-limit'
 import { z } from 'zod'
 import { configurationSecurity } from './configuration-routes.js'
 import type { RuntimeSecurity } from './runtime-security.js'
-import { resolveProjectDirectory } from './project-registry.js'
 
 const maxPreviewBytes = 1_048_576
 class PreviewError extends Error {
   constructor(message: string, readonly status: 400 | 403 | 404 | 413 | 415) { super(message) }
 }
 
-function assertInside(root: string, path: string) {
-  const child = relative(root, path)
-  if (isAbsolute(child) || child === '..' || child.startsWith(`..${sep}`)) throw new PreviewError('只能预览当前会话项目内的文件。', 403)
-}
-
 async function readPreviewFile(cwd: string, path: string, searchRoot: string | undefined, maxBytes: number) {
-  const root = resolveProjectDirectory(cwd)
+  // A missing session directory must not prevent opening an absolute path.
+  const root = await realpath(cwd).catch(() => resolve(cwd))
   let requested = resolve(root, path)
-  if (searchRoot !== undefined) {
+  if (searchRoot !== undefined && !isAbsolute(path)) {
     const scope = resolve(root, searchRoot)
-    assertInside(root, scope)
     const canonicalScope = await realpath(scope)
-    assertInside(root, canonicalScope)
     const scopeInfo = await stat(canonicalScope)
     if (scopeInfo.isFile()) {
       if (path !== basename(scope)) throw new PreviewError('搜索结果与文件范围不匹配。', 400)
       requested = canonicalScope
     } else if (scopeInfo.isDirectory()) {
       requested = resolve(canonicalScope, path)
-      assertInside(canonicalScope, requested)
     } else throw new PreviewError('搜索范围不是文件或目录。', 400)
   }
-  assertInside(root, requested)
   const canonical = await realpath(requested)
-  assertInside(root, canonical)
   const file = await open(canonical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
     const info = await file.stat()
     if (!info.isFile()) throw new PreviewError('此路径不是普通文件。', 400)
-    // Recheck containment and identity after opening; never read a replaced path's descriptor.
+    // Recheck identity after opening; never read a replaced path's descriptor.
     const current = await realpath(canonical)
-    assertInside(root, current)
     const currentInfo = await stat(current)
     if (info.dev !== currentInfo.dev || info.ino !== currentInfo.ino) throw new PreviewError('文件已变化，请重试。', 400)
     if (info.size > maxBytes) throw new PreviewError(`文件超过 ${maxBytes / 1_048_576} MiB，无法在此预览。`, 413)
@@ -59,7 +48,9 @@ async function readPreviewFile(cwd: string, path: string, searchRoot: string | u
       length += bytesRead
     }
     if (length > maxBytes) throw new PreviewError(`文件超过 ${maxBytes / 1_048_576} MiB，无法在此预览。`, 413)
-    return { path: relative(root, canonical), buffer: buffer.subarray(0, length) }
+    const child = relative(root, canonical)
+    const outside = isAbsolute(child) || child === '..' || child.startsWith(`..${sep}`)
+    return { path: outside ? canonical : child, buffer: buffer.subarray(0, length) }
   } finally { await file.close() }
 }
 
