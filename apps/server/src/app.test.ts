@@ -13,6 +13,7 @@ const adapter = vi.hoisted(() => {
   return {
     PiSessionBranchTargetError,
     branchPiSession: vi.fn(),
+    readPiSessionForkSource: vi.fn(),
     PiSessionHistoryCursorError,
     PiSessionHistoryRevisionError,
     PiSessionHistorySourceChangedError,
@@ -233,12 +234,15 @@ describe('branch creation', () => {
     adapter.branchPiSession.mockReturnValue({ session: { id: 'child', cwd: '/working', createdAt: 'now', sessionFile: '/private/child.jsonl' }, draft: 'selected text' })
     const registry = runtimeMock()
     const finish = vi.fn()
-    registry.beginMutation.mockResolvedValue(finish)
+    const source = Buffer.from('validated source')
+    adapter.readPiSessionForkSource.mockReturnValue(source)
+    registry.beginMutation.mockImplementationOnce(async (_sessionId, beforeUnload) => { beforeUnload?.(); return finish })
     const response = await createApp(registry as unknown as PiRuntimeRegistry).request('/api/sessions/session-1/branch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) }) })
     expect(response.status).toBe(201)
     const body = await response.json()
     expect(body).toEqual({ session: { id: 'child', cwd: '/working', createdAt: 'now', updatedAt: 'now' }, draft: 'selected text' })
-    expect(adapter.branchPiSession).toHaveBeenCalledWith({ expectedSessionId: nativeSession.id, expectedCwd: nativeSession.cwd, sessionFile: nativeSession.sessionFile, kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) })
+    expect(adapter.readPiSessionForkSource).toHaveBeenCalledWith({ sessionFile: nativeSession.sessionFile, revision: 'a'.repeat(64) })
+    expect(adapter.branchPiSession).toHaveBeenCalledWith({ expectedSessionId: nativeSession.id, expectedCwd: nativeSession.cwd, sessionFile: nativeSession.sessionFile, kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) }, source)
     expect(finish).toHaveBeenCalledOnce()
   })
   it('rejects malformed, busy, missing and stale branch operations', async () => {

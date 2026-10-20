@@ -4,6 +4,7 @@ import { runtimeSettingsSchema } from './configuration-schema.js'
 import type { PiSessionsResponse, PiSessionHistoryResponse } from '@pi-nest/contracts'
 import {
   branchPiSession,
+  readPiSessionForkSource,
   PiSessionBranchTargetError,
   createPiSession,
   deletePiSession,
@@ -156,12 +157,16 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
       if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
       if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
       if (!resolved.session.cwd) return context.json({ error: 'Pi session cwd is unavailable' }, 409)
-      const mutation = runtime.beginMutation(resolved.session.id)
+      const revision = parsed.data.kind === 'fork' ? parsed.data.revision : undefined
+      let beforeShutdown: Buffer | undefined
+      const mutation = runtime.beginMutation(resolved.session.id, revision ? () => {
+        beforeShutdown = readPiSessionForkSource({ sessionFile: resolved.session.sessionFile, revision })
+      } : undefined)
       if (!mutation) return context.json({ error: 'Pi session is busy', code: 'SESSION_RUNNING' }, 409)
       let finish: (() => void) | undefined
       try {
         finish = await mutation
-        const { session, draft, draftContent, entries } = branchPiSession({ ...parsed.data, expectedSessionId: resolved.session.id, expectedCwd: resolved.session.cwd, sessionFile: resolved.session.sessionFile })
+        const { session, draft, draftContent, entries } = branchPiSession({ ...parsed.data, expectedSessionId: resolved.session.id, expectedCwd: resolved.session.cwd, sessionFile: resolved.session.sessionFile }, beforeShutdown)
         const { id, cwd, createdAt, name, firstMessage } = session
         runtime.attachments.inherit(entries, resolved.session.id, id)
         let attachments: import('@pi-nest/contracts').AttachmentRef[] | undefined
@@ -176,7 +181,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
         }
         return context.json({ session: { id, cwd, createdAt, updatedAt: createdAt, name, firstMessage: runtime.attachments.displayPrompt(firstMessage, id) }, draft: draftText, ...(attachments?.length ? { attachments } : {}) }, 201)
       } catch (cause) {
-        if (historyRevisionChanged(cause)) return context.json({ error: '会话历史已变化，请刷新后重试。', code: 'HISTORY_REVISION_CHANGED' }, 409)
+        if (historyRevisionChanged(cause)) return context.json({ error: '会话历史已变化，请点击“刷新位置”后重新选择分叉消息。', code: 'HISTORY_REVISION_CHANGED' }, 409)
         if (cause instanceof PiSessionBranchTargetError) return context.json({ error: cause.message, code: 'INVALID_BRANCH_TARGET' }, 400)
         console.error('Failed to branch Pi session', { cause })
         return context.json({ error: '创建分支会话失败，请重试。' }, 500)

@@ -429,12 +429,13 @@ export class PiRuntimeRegistry {
     }
   }
 
-  beginMutation(sessionId: string): Promise<(() => void) | undefined> | undefined {
+  beginMutation(sessionId: string, beforeUnload?: () => void): Promise<(() => void) | undefined> | undefined {
     if (this.settingsUpdating || this.locks.has(sessionId)) return undefined
     this.locks.set(sessionId, 'mutation')
 
     return this.projectionsReady.then(async () => {
       try {
+        beforeUnload?.()
         await this.remove(sessionId, 'mutation')
         return () => {
           if (this.locks.get(sessionId) === 'mutation') {

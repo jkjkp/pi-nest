@@ -11,6 +11,28 @@ export type PiSessionBranchOptions = PiSessionMutationOptions & ({ kind: 'clone'
 export type PiSessionBranchResult = { session: PiCreatedSession & { name?: string; firstMessage?: string }; draft: string; draftContent?: unknown; entries?: unknown }
 
 function fingerprint(bytes: Buffer) { return createHash('sha256').update(bytes).digest('hex') }
+export function readPiSessionForkSource(options: Pick<PiSessionMutationOptions, 'sessionFile'> & { revision: string }): Buffer {
+  const bytes = readFileSync(options.sessionFile)
+  if (fingerprint(bytes) !== options.revision) throw new PiSessionHistoryRevisionError()
+  return bytes
+}
+
+function onlyAppendedMetadata(before: Buffer, after: Buffer): boolean {
+  if (before.at(-1) !== 10 || !after.subarray(0, before.length).equals(before)) return false
+  try {
+    const entries = before.toString('utf8').trim().split('\n').map((line) => JSON.parse(line))
+    const ids = new Set(entries.map((entry) => entry.id))
+    let parentId = entries.at(-1)?.id
+    for (const line of after.subarray(before.length).toString('utf8').trim().split('\n')) {
+      const entry = JSON.parse(line)
+      if (!entry || !['session_info', 'custom'].includes(entry.type) || typeof entry.id !== 'string' || ids.has(entry.id) || entry.parentId !== parentId) return false
+      ids.add(entry.id)
+      parentId = entry.id
+    }
+    return true
+  } catch { return false }
+}
+
 function messageText(content: unknown) {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -18,10 +40,13 @@ function messageText(content: unknown) {
 }
 
 // shortcut: File-level branching skips extension fork hooks; use an isolated runtime when those hooks are required.
-export function branchPiSession(options: PiSessionBranchOptions): PiSessionBranchResult {
+export function branchPiSession(options: PiSessionBranchOptions, beforeShutdown?: Buffer): PiSessionBranchResult {
   const bytes = readFileSync(options.sessionFile)
   const revision = fingerprint(bytes)
-  if (options.kind === 'fork' && revision !== options.revision) throw new PiSessionHistoryRevisionError()
+  // Only shutdown metadata may advance a fork revision; keep exact byte checks for all other writes.
+  if (options.kind === 'fork' && revision !== options.revision) {
+    if (!beforeShutdown || fingerprint(beforeShutdown) !== options.revision || !onlyAppendedMetadata(beforeShutdown, bytes)) throw new PiSessionHistoryRevisionError()
+  }
   const temporary = mkdtempSync(join(tmpdir(), 'pi-nest-branch-'))
   chmodSync(temporary, 0o700)
   const snapshot = join(temporary, 'source.jsonl')

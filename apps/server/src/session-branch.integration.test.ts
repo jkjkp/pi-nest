@@ -40,7 +40,7 @@ it('clones the native snapshot after runtime shutdown writes, and keeps fork rev
   const pending = app.request('/api/sessions/source/branch', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'clone' }),
   })
-  await vi.waitFor(() => expect(registry.beginMutation).toHaveBeenCalledWith('source'))
+  await vi.waitFor(() => expect(registry.beginMutation).toHaveBeenCalledWith('source', undefined))
   expect(readdirSync(directory)).toEqual(['source.jsonl'])
   shutdownComplete()
   const response = await pending
@@ -93,3 +93,55 @@ it('serves pinned native history, pagination and index over HTTP during generati
   expect(completed.entries[0]).toMatchObject({ id: 'live-user', runId: 'live', runIndex: 0 })
   expect(completed.session.sessionFile).toBeUndefined()
 })
+
+
+it.each(['session_info', 'custom', 'message', 'model_change', 'context_edit', 'branch'])(
+  'checks fork history before shutdown and only accepts appended metadata (%s)', async (change) => {
+    directory = mkdtempSync(join(tmpdir(), 'pi-nest-fork-shutdown-'))
+    const sessionFile = join(directory, 'source.jsonl')
+    const timestamp = '2026-10-20T00:00:00.000Z'
+    const session = { id: 'source', cwd: directory, sessionFile, createdAt: timestamp, updatedAt: timestamp, name: undefined, firstMessage: 'first' }
+    writeFileSync(sessionFile, [
+      { type: 'session', version: 3, id: 'source', cwd: directory, timestamp },
+      { type: 'message', id: 'first', parentId: null, timestamp, message: { role: 'user', content: 'first', timestamp: Date.parse(timestamp) } },
+      { type: 'message', id: 'selected', parentId: 'first', timestamp, message: { role: 'user', content: 'full draft', timestamp: Date.parse(timestamp) } },
+    ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+    const binding = { sessionFile, expectedSessionId: 'source', expectedCwd: directory }
+    const index = readPiSessionTurnIndex(binding)
+    vi.mocked(listPiSessions).mockResolvedValue([session])
+    const finish = vi.fn()
+    const registry = { attachments: new AttachmentStore(), beginMutation: vi.fn(async (_id: string, beforeUnload?: () => void) => {
+      beforeUnload?.()
+      const entry = { id: 'shutdown', parentId: 'selected', timestamp, ...({
+        session_info: { type: 'session_info', name: 'Shutdown name' },
+        custom: { type: 'custom', customType: 'extension-state', data: { saved: true } },
+        message: { type: 'message', message: { role: 'user', content: 'new question', timestamp: Date.parse(timestamp) } },
+        model_change: { type: 'model_change', provider: 'fixture', modelId: 'other' },
+        context_edit: { type: 'context_edit', targetId: 'first', replacement: null },
+        branch: { type: 'custom', customType: 'extension-state', parentId: 'first' },
+      }[change]) }
+      appendFileSync(sessionFile, JSON.stringify(entry) + '\n')
+      return finish
+    }) }
+    const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry))
+    const request = () => app.request('/api/sessions/source/branch', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fork', entryId: 'selected', revision: index.revision }),
+    })
+    const response = await request()
+    const metadataOnly = change === 'session_info' || change === 'custom'
+    expect(response.status).toBe(metadataOnly ? 201 : 409)
+    const result = await response.json()
+    if (metadataOnly) {
+      expect(result.draft).toBe('full draft')
+      const childFile = join(directory, readdirSync(directory).find((file) => file !== 'source.jsonl')!)
+      expect(readPiSessionHistory({ sessionFile: childFile, expectedSessionId: result.session.id, expectedCwd: directory }).entries.map((entry) => entry.id)).toEqual(['first'])
+    } else expect(result.code).toBe('HISTORY_REVISION_CHANGED')
+    expect(readdirSync(directory)).toHaveLength(metadataOnly ? 2 : 1)
+    expect(finish).toHaveBeenCalledOnce()
+    // A revision already stale before shutdown must never be upgraded automatically.
+    const bytes = readFileSync(sessionFile)
+    expect((await request()).status).toBe(409)
+    expect(readFileSync(sessionFile)).toEqual(bytes)
+    expect(finish).toHaveBeenCalledOnce()
+  },
+)

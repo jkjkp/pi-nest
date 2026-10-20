@@ -32,7 +32,7 @@ export function SessionForkDialog({ sessionId, onClose, onFork, onCloseAutoFocus
       {!index.isFetching && !index.isError && index.data?.entries.length === 0 && <p className="mt-2 text-sm text-muted-foreground">当前分支没有可选择的用户消息。</p>}
       {(error || index.isError) && <p role="alert" className="mt-2 text-sm text-destructive">{error ?? '读取分叉位置失败，请重试。'}</p>}
       <div className="mt-4 flex justify-end gap-2">
-        <Button type="button" variant="ghost" disabled={saving || index.isFetching} onClick={() => { setEntryId(''); setError(undefined); void index.refetch() }}>刷新位置</Button>
+        <Button type="button" variant="ghost" disabled={saving || index.isFetching} onClick={() => { setEntryId(''); void index.refetch().then((result) => { if (!result.isError) setError(undefined) }) }}>刷新位置</Button>
         <DialogClose asChild><Button disabled={saving} type="button" variant="secondary">取消</Button></DialogClose>
         <Button type="button" disabled={saving || index.isFetching || index.isError || !index.data?.entries.some((entry) => entry.id === entryId)} onClick={() => void fork()}>{saving ? '创建中…' : '创建分支'}</Button>
       </div>

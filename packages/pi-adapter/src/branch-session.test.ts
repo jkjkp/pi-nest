@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { SessionManager } from '@earendil-works/pi-coding-agent'
-import { branchPiSession, PiSessionBranchTargetError } from './branch-session.js'
+import { branchPiSession, readPiSessionForkSource, PiSessionBranchTargetError } from './branch-session.js'
 import { PiSessionHistoryRevisionError } from './read-session-history.js'
 
 let directory: string
@@ -75,8 +75,9 @@ it('rejects stale history and targets outside the active branch without creating
   expect(readdirSync(join(directory, 'sessions'))).toEqual(files)
 })
 
-it('removes the new session if the source changes during creation', () => {
-  prompt('source')
+it.each(['clone', 'fork'] as const)('removes the new session if the source changes during %s creation', (kind) => {
+  prompt('before')
+  const entryId = prompt('source')
   const request = options()
   const files = readdirSync(join(directory, 'sessions'))
   const create = SessionManager.prototype.createBranchedSession
@@ -85,7 +86,7 @@ it('removes the new session if the source changes during creation', () => {
     appendFileSync(request.sessionFile, '\n')
     return file
   })
-  expect(() => branchPiSession({ ...request, kind: 'clone' })).toThrow('changed while reading history')
+  expect(() => branchPiSession({ ...request, kind, entryId })).toThrow('changed while reading history')
   expect(readdirSync(join(directory, 'sessions'))).toEqual(files)
 })
 
@@ -100,4 +101,32 @@ it('forks image-bearing native input into a complete draft while clone preserves
   const clone = branchPiSession({ ...options(), kind: 'clone' })
   expect(JSON.stringify(SessionManager.open(clone.session.sessionFile).getBranch())).toContain('image-bytes')
   expect(readFileSync(source.getSessionFile()!)).toEqual(original)
+})
+
+
+it('accepts chained SDK shutdown metadata without changing the fork draft or inherited context', () => {
+  const first = prompt('first')
+  const selected = prompt('draft')
+  const request = { ...options(), kind: 'fork' as const, entryId: selected }
+  const before = readPiSessionForkSource(request)
+  source.appendSessionInfo('Shutdown name')
+  source.appendCustomEntry('extension-state', { saved: true })
+  const result = branchPiSession(request, before)
+  expect(result.draft).toBe('draft')
+  expect(SessionManager.open(result.session.sessionFile).getBranch().map((entry) => entry.id)).toEqual([first])
+  expect(() => readPiSessionForkSource(request)).toThrow(PiSessionHistoryRevisionError)
+})
+
+it.each(['rewrite', 'duplicate', 'malformed', 'custom_message'])('rejects unsafe shutdown changes (%s)', (change) => {
+  const selected = prompt('draft')
+  const request = { ...options(), kind: 'fork' as const, entryId: selected }
+  const before = readPiSessionForkSource(request)
+  if (change === 'rewrite') writeFileSync(request.sessionFile, before.toString().replace('draft', 'other'))
+  else appendFileSync(request.sessionFile, change === 'malformed' ? '{broken\n' : JSON.stringify({
+    type: change === 'custom_message' ? 'custom_message' : 'custom',
+    id: change === 'duplicate' ? selected : 'shutdown', parentId: selected,
+    timestamp: new Date().toISOString(), customType: 'fixture', content: 'new context',
+  }) + '\n')
+  expect(() => branchPiSession(request, before)).toThrow(PiSessionHistoryRevisionError)
+  expect(readdirSync(join(directory, 'sessions'))).toHaveLength(1)
 })

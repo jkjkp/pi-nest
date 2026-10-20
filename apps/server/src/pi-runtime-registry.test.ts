@@ -898,3 +898,28 @@ it('allows abort during manual compaction and cleans up after completion', async
     expect(await registry.abort(session.id)).toBe(false)
   } finally { await registry.close() }
 })
+
+
+it('validates mutations under the lock before unloading and releases the lock on validation failure', async () => {
+  const host = hostMock()
+  const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    await registry.resume(session)
+    const invalid = registry.beginMutation(session.id, () => {
+      expect(host.close).not.toHaveBeenCalled()
+      expect(registry.beginMutation(session.id)).toBeUndefined()
+      throw new Error('stale revision')
+    })
+    await expect(invalid).rejects.toThrow('stale revision')
+    expect(host.close).not.toHaveBeenCalled()
+    const validate = vi.fn(() => { expect(host.close).not.toHaveBeenCalled() })
+    const finish = await registry.beginMutation(session.id, validate)
+    expect(validate).toHaveBeenCalledOnce()
+    expect(host.close).toHaveBeenCalledOnce()
+    expect(registry.beginMutation(session.id)).toBeUndefined()
+    finish?.()
+    const next = await registry.beginMutation(session.id)
+    expect(next).toBeTypeOf('function')
+    next?.()
+  } finally { await registry.close() }
+})
