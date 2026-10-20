@@ -59,7 +59,7 @@ export function CommandComposer({ value, onValueChange, onExecuteCommand, textar
     setDismissed(true)
     onValueChange(next.value)
     textareaRef.current?.focus()
-    if (enter && ['clone', 'compact', 'rename'].includes(name) && next.value.trim() === `/${name}`) onExecuteCommand(next.value)
+    if (enter && ['clone', 'compact', 'rename', 'session'].includes(name) && next.value.trim() === `/${name}`) onExecuteCommand(next.value)
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {

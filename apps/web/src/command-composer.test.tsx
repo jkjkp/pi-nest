@@ -60,7 +60,7 @@ it.each(['/cl', '/clo', '/clon', '/clone', ' /cl'])('executes the selected clone
 })
 
 it.each([
-  ['/cl', 'Tab'], ['你好 /cl', 'Enter'], ['/clone 参数', 'Enter'], ['/session', 'Enter'],
+  ['/cl', 'Tab'], ['你好 /cl', 'Enter'], ['/clone 参数', 'Enter'], ['/session', 'Tab'], ['你好 /sess', 'Enter'],
   ['/ren', 'Tab'], ['你好 /ren', 'Enter'],
 ])('only completes %s with %s', (value, key) => {
   const context = setup(value)
@@ -227,4 +227,20 @@ it('does not execute rename while confirming IME input', () => {
   context.key('Enter', { nativeEvent: { keyCode: 229 } })
   expect(context.execute).not.toHaveBeenCalled()
   expect(context.downstream).not.toHaveBeenCalled()
+})
+
+
+it.each(['/sess', '/session', '/SESSION'])('executes session on one Enter for %s', (value) => {
+  const context = setup(value)
+  expect(context.key('Enter').preventDefault).toHaveBeenCalledOnce()
+  expect(context.execute).toHaveBeenCalledExactlyOnceWith('/session ')
+  expect(context.downstream).not.toHaveBeenCalled()
+})
+
+it('executes session after selecting it among matching candidates', () => {
+  const context = setup('/s')
+  context.key('ArrowDown'); context.render()
+  context.key('ArrowUp'); context.render()
+  context.key('Enter')
+  expect(context.execute).toHaveBeenCalledExactlyOnceWith('/session ')
 })

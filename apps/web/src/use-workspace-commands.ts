@@ -7,7 +7,7 @@ import { useWorkspaceStore } from './workspace-store.js'
 type CompactNotice = { message: string; running?: boolean; cancelling?: boolean; error?: boolean }
 
 type Workspace = ReturnType<typeof useWorkspaceSession>
-type CommandUi = { fork: (onFork: (entryId: string, revision: string) => Promise<void>) => void; rename: (onSaved: () => void) => void; statistics: () => void; settings: () => void }
+type CommandUi = { fork: (onFork: (entryId: string, revision: string) => Promise<void>) => void; rename: () => void; statistics: () => void; settings: () => void }
 
 export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionRunController, ui: CommandUi) {
   const currentSession = useRef(workspace.selectedSessionId)
@@ -93,13 +93,13 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
             break
           }
           case 'rename':
-            ui.rename(() => report('会话已重命名'))
+            ui.rename()
             complete()
             break
           case 'session':
             ui.statistics()
             void sessionRuns.getSessionStatistics(sessionId)
-            complete('已打开会话用量与上下文')
+            complete()
             break
           case 'copy': {
             if (workspace.historyQuery.isPending || workspace.historyQuery.isError) throw new Error('会话历史尚未就绪，请稍后重试。')

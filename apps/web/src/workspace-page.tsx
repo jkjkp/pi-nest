@@ -62,11 +62,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const preview = useWorkspaceFilePreview(selectedSessionId, rememberLayoutPosition, restoreLayoutPosition)
   const promptTextareaRef = useRef<HTMLTextAreaElement>(null)
 
-  const [commandPanels, setCommandPanels] = useState<{ sessionId: string; statistics: boolean; fork?: (entryId: string, revision: string) => Promise<void>; rename?: { session: NonNullable<typeof selectedSession>; onSaved: () => void } }>({ sessionId: selectedSessionId, statistics: false })
+  const [commandPanels, setCommandPanels] = useState<{ sessionId: string; statistics: boolean; fork?: (entryId: string, revision: string) => Promise<void>; rename?: { session: NonNullable<typeof selectedSession> } }>({ sessionId: selectedSessionId, statistics: false })
   if (commandPanels.sessionId !== selectedSessionId) setCommandPanels({ sessionId: selectedSessionId, statistics: false })
   const commands = useWorkspaceCommands(session, sessionRuns, {
     fork: (onFork) => setCommandPanels({ sessionId: selectedSessionId, statistics: false, fork: onFork }),
-    rename: (onSaved) => { if (selectedSession) setCommandPanels({ sessionId: selectedSessionId, statistics: false, rename: { session: selectedSession, onSaved } }) },
+    rename: () => { if (selectedSession) setCommandPanels({ sessionId: selectedSessionId, statistics: false, rename: { session: selectedSession } }) },
     statistics: () => setCommandPanels({ sessionId: selectedSessionId, statistics: true }),
     settings: () => { void navigate(`/settings?session=${encodeURIComponent(selectedSessionId)}`) },
   })
@@ -118,7 +118,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       {commandPanels.sessionId === selectedSessionId && commandPanels.rename && <SessionRenameDialog key={selectedSessionId} session={commandPanels.rename.session} onCloseAutoFocus={(event) => { event.preventDefault(); promptTextareaRef.current?.focus() }} onClose={() => setCommandPanels({ sessionId: selectedSessionId, statistics: false })} onRename={async (id, name) => {
         if (isActive || ['loading', 'switching'].includes(modelStatus) || ['loading', 'switching'].includes(thinkingStatus)) throw new Error('请等待当前会话操作结束。')
         await handleRename(id, name)
-        commandPanels.rename?.onSaved()
       }} />}
       <WorkspaceLayout title={sessionTitle} titleTooltip={displaySession ? sessionDisplayName(displaySession) : undefined}
         navigation={navigation} containerRef={workspaceGrid} previewOpen={!isHome && Boolean(preview.selection) && preview.open}

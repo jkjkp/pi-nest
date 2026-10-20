@@ -54,6 +54,7 @@ it.each([['/session', 'statistics'], ['/settings', 'settings']] as const)('opens
   await tick()
   expect(context.ui[action]).toHaveBeenCalledOnce()
   expect(context.draft()).toBe('')
+  if (text === '/session') expect(context.render().notice).toBeUndefined()
 })
 it('passes compaction instructions, blocks duplicate commands and preserves new input', async () => {
   const context = setup('/compact 保留接口设计')
@@ -88,20 +89,13 @@ it('keeps failed commands and does not clear a draft after switching sessions', 
   expect(useWorkspaceStore.getState().drafts.two).toBe('另一会话')
   expect(context.render().notice).toBeUndefined()
 })
-it('opens rename, clears the command immediately and never clears a later draft on save', async () => {
+it('opens rename, clears the command immediately and leaves no success notice', async () => {
   const context = setup('/rename')
   expect(context.submit()).toBe(true)
   await tick()
-  expect(context.ui.rename).toHaveBeenCalledOnce()
+  expect(context.ui.rename).toHaveBeenCalledExactlyOnceWith()
   expect(context.workspace.handleRename).not.toHaveBeenCalled()
   expect(context.draft()).toBe('')
-  useWorkspaceStore.getState().setDraft('one', '/rename')
-  context.ui.rename.mock.calls[0]![0]()
-  expect(context.draft()).toBe('/rename')
-  expect(context.render().notice?.message).toBe('会话已重命名')
-  context.workspace.selectedSessionId = 'two'
-  context.render()
-  context.ui.rename.mock.calls[0]![0]()
   expect(context.render().notice).toBeUndefined()
 })
 it('rejects rename arguments and keeps the command when a dialog cannot be opened', async () => {
