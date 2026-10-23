@@ -28,13 +28,62 @@ it('clones only the active native branch, preserves metadata and source bytes, a
   expect(child.getSessionId()).not.toBe(source.getSessionId())
   expect(child.getHeader()?.parentSession).toBe(source.getSessionFile())
   expect(child.getBranch().filter((entry) => entry.type === 'message').map((entry) => entry.id)).toEqual([first, last])
-  expect(child.getSessionName()).toBe('Original')
+  expect(child.getSessionName()).toBe('Original（副本）')
+  expect(result.session.name).toBe(child.getSessionName())
   expect(result.draft).toBe('')
   expect(statSync(result.session.sessionFile).mode & 0o777).toBe(0o600)
   expect(readFileSync(source.getSessionFile()!)).toEqual(original)
   child.appendMessage({ role: 'user', content: 'child only', timestamp: Date.now() })
   expect(SessionManager.open(result.session.sessionFile).getBranch()).toHaveLength(child.getBranch().length)
   expect(readFileSync(source.getSessionFile()!)).toEqual(original)
+})
+
+it.each([
+  { name: '登录接口排查', existingNames: [], expected: '登录接口排查（副本）' },
+  { name: '登录接口排查', existingNames: ['登录接口排查（副本）', '登录接口排查（副本 2）'], expected: '登录接口排查（副本 3）' },
+  { name: '登录接口排查（副本）', existingNames: [], expected: '登录接口排查（副本 2）' },
+  { name: '登录接口排查（副本 2）', existingNames: ['登录接口排查（副本）'], expected: '登录接口排查（副本 3）' },
+  { name: undefined, existingNames: [], expected: 'first question（副本）' },
+])('persists the clone title $expected without renaming the source', async ({ name, existingNames, expected }) => {
+  prompt('first\n question')
+  if (name) source.appendSessionInfo(name)
+  const original = readFileSync(source.getSessionFile()!)
+  const result = branchPiSession({ ...options(), kind: 'clone', existingNames })
+  expect(result.session.name).toBe(expected)
+  expect(SessionManager.open(result.session.sessionFile).getSessionName()).toBe(expected)
+  expect((await SessionManager.list(directory, join(directory, 'sessions'))).find((item) => item.id === result.session.id)?.name).toBe(expected)
+  expect(readFileSync(source.getSessionFile()!)).toEqual(original)
+})
+
+it('uses the safe display title for unnamed attachment conversations and falls back for textless input', () => {
+  source.appendMessage({ role: 'user', content: [{ type: 'image', data: 'image-bytes', mimeType: 'image/png' }], timestamp: Date.now() })
+  expect(branchPiSession({ ...options(), kind: 'clone' }).session.name).toBe('未命名会话（副本）')
+  expect(branchPiSession({ ...options(), kind: 'clone', fallbackName: '附件对话' }).session.name).toBe('附件对话（副本）')
+})
+
+it('reserves suffix space for numbered long names without breaking emoji', () => {
+  prompt('first')
+  source.appendSessionInfo('😀'.repeat(60))
+  const first = branchPiSession({ ...options(), kind: 'clone' })
+  const second = branchPiSession({ ...options(), kind: 'clone', existingNames: [first.session.name!] })
+  expect(first.session.name).toBe('😀'.repeat(58) + '（副本）')
+  expect(second.session.name).toBe('😀'.repeat(57) + '（副本 2）')
+  expect(second.session.name!.length).toBeLessThanOrEqual(120)
+})
+
+it('keeps fork titles unchanged and cleans up when clone naming fails', () => {
+  source.appendSessionInfo('Original')
+  const first = prompt('first')
+  const second = prompt('second')
+  const fork = branchPiSession({ ...options(), kind: 'fork', entryId: second })
+  expect(fork.session.name).toBe('Original')
+  expect(SessionManager.open(fork.session.sessionFile).getBranch().filter((entry) => entry.type === 'message').map((entry) => entry.id)).toEqual([first])
+  const files = readdirSync(join(directory, 'sessions'))
+  const bytes = readFileSync(source.getSessionFile()!)
+  vi.spyOn(SessionManager.prototype, 'appendSessionInfo').mockImplementationOnce(() => { throw new Error('name write failed') })
+  expect(() => branchPiSession({ ...options(), kind: 'clone' })).toThrow('name write failed')
+  expect(readdirSync(join(directory, 'sessions'))).toEqual(files)
+  expect(readFileSync(source.getSessionFile()!)).toEqual(bytes)
 })
 it('forks before a selected message and returns its complete text as an unsent draft', () => {
   const first = prompt('first')

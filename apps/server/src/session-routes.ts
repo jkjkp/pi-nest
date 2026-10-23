@@ -166,7 +166,13 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
       let finish: (() => void) | undefined
       try {
         finish = await mutation
-        const { session, draft, draftContent, entries } = branchPiSession({ ...parsed.data, expectedSessionId: resolved.session.id, expectedCwd: resolved.session.cwd, sessionFile: resolved.session.sessionFile }, beforeShutdown)
+        // shortcut: Naming uses discovered sessions; add project locking if strict concurrent uniqueness is required.
+        const naming = parsed.data.kind === 'clone' ? {
+          existingNames: (await listPiSessions()).filter((candidate) => candidate.cwd === resolved.session.cwd)
+            .map((candidate) => candidate.name ?? runtime.attachments.displayPrompt(candidate.firstMessage, candidate.id) ?? '未命名会话'),
+          fallbackName: runtime.attachments.displayPrompt(resolved.session.firstMessage, resolved.session.id) ?? '未命名会话',
+        } : {}
+        const { session, draft, draftContent, entries } = branchPiSession({ ...parsed.data, ...naming, expectedSessionId: resolved.session.id, expectedCwd: resolved.session.cwd, sessionFile: resolved.session.sessionFile }, beforeShutdown)
         const { id, cwd, createdAt, name, firstMessage } = session
         runtime.attachments.inherit(entries, resolved.session.id, id)
         let attachments: import('@pi-nest/contracts').AttachmentRef[] | undefined

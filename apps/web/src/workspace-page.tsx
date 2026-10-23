@@ -123,10 +123,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
         navigation={navigation} containerRef={workspaceGrid} previewOpen={!isHome && Boolean(preview.selection) && preview.open}
         preview={<WorkspaceFilePreview preview={preview} isHome={isHome} containerRef={workspaceGrid} />}>
         <section onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={(event) => { try { attachmentDrop(event, attachmentDraft.add) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '附件无法添加') } }} className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
-          <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-background/95 py-2 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
+          <header className="flex min-h-10 shrink-0 items-center gap-3 border-b bg-background/95 py-0.5 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              {(selectedSession || draftProject) && <Folder aria-hidden="true" className="size-[18px] shrink-0 text-muted-foreground" />}
-              <h1 className="min-w-0 truncate text-[15px] leading-6 font-normal" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
+              {(selectedSession || draftProject) && <Folder aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
+              <h1 className="min-w-0 truncate text-[13px] leading-5 font-normal" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
               {selectedSession && <span className="inline-flex size-4 shrink-0" role={runtimeLoading ? 'status' : undefined} aria-label={runtimeLoading ? '正在加载 Pi 运行时' : undefined}>{runtimeLoading && <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />}</span>}
             </div>
             <WorkspaceFilePreviewToggle available={Boolean(preview.selection)} open={preview.open} onToggle={preview.toggle} buttonRef={preview.toggleRef} />

@@ -46,14 +46,15 @@ it('clones the native snapshot after runtime shutdown writes, and keeps fork rev
   const response = await pending
   expect(response.status).toBe(201)
   const result = await response.json()
-  expect(result.session).toMatchObject({ cwd: directory, name: 'Shutdown metadata' })
+  expect(result.session).toMatchObject({ cwd: directory, name: 'Shutdown metadata（副本）' })
   expect(result.session.id).not.toBe('source')
   expect(result.draft).toBe('')
   expect(result.session.sessionFile).toBeUndefined()
   const childFile = join(directory, readdirSync(directory).find((file) => file !== 'source.jsonl')!)
   const sourceBytes = readFileSync(sessionFile)
-  expect(readPiSessionHistory({ sessionFile: childFile, expectedSessionId: result.session.id, expectedCwd: directory }).entries)
-    .toEqual(readPiSessionHistory(binding).entries)
+  const childHistory = readPiSessionHistory({ sessionFile: childFile, expectedSessionId: result.session.id, expectedCwd: directory }).entries
+  expect(childHistory.slice(0, -1)).toEqual(readPiSessionHistory(binding).entries)
+  expect(childHistory.at(-1)?.raw).toMatchObject({ type: 'session_info', name: result.session.name })
   expect(readPiSessionTurnIndex(binding).revision).not.toBe(old.revision)
   registry.beginMutation.mockResolvedValueOnce(finish)
   const fork = await app.request('/api/sessions/source/branch', {
@@ -64,6 +65,44 @@ it('clones the native snapshot after runtime shutdown writes, and keeps fork rev
   expect(readFileSync(sessionFile)).toEqual(sourceBytes)
   expect(readdirSync(directory)).toHaveLength(2)
   expect(finish).toHaveBeenCalledTimes(2)
+})
+
+it('numbers clones within the project and persists names when cloning a copy', async () => {
+  directory = mkdtempSync(join(tmpdir(), 'pi-nest-clone-names-'))
+  const sessionFile = join(directory, 'source.jsonl')
+  const timestamp = new Date().toISOString()
+  writeFileSync(sessionFile, [
+    { type: 'session', version: 3, id: 'source', cwd: directory, timestamp },
+    { type: 'message', id: 'user', parentId: null, timestamp, message: { role: 'user', content: '登录接口排查', timestamp: Date.parse(timestamp) } },
+  ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+  const sessions: Awaited<ReturnType<typeof listPiSessions>> = [
+    { id: 'source', cwd: directory, sessionFile, updatedAt: timestamp, name: undefined, firstMessage: '登录接口排查' },
+    { id: 'foreign', cwd: join(directory, 'other'), sessionFile: '/unused', updatedAt: timestamp, name: '登录接口排查（副本）', firstMessage: undefined },
+  ]
+  vi.mocked(listPiSessions).mockImplementation(async () => sessions)
+  const finish = vi.fn()
+  const registry = { attachments: new AttachmentStore(), beginMutation: vi.fn(async () => finish) }
+  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry))
+  async function clone(id: string, expectedName: string) {
+    const response = await app.request(`/api/sessions/${id}/branch`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'clone' }),
+    })
+    expect(response.status).toBe(201)
+    const result = await response.json()
+    expect(result.session.name).toBe(expectedName)
+    const childFile = readdirSync(directory!).find((file) => file.includes(result.session.id))!
+    const history = readPiSessionHistory({ sessionFile: join(directory!, childFile), expectedSessionId: result.session.id, expectedCwd: directory })
+    expect(history.entries.at(-1)?.raw).toMatchObject({ type: 'session_info', name: expectedName })
+    sessions.push({ ...result.session, sessionFile: join(directory!, childFile) })
+    return result.session.id as string
+  }
+  const sourceBytes = readFileSync(sessionFile)
+  const first = await clone('source', '登录接口排查（副本）')
+  sessions.push({ id: 'occupied', cwd: directory, sessionFile: '/unused', updatedAt: timestamp, name: undefined, firstMessage: '登录接口排查（副本 2）' })
+  await clone('source', '登录接口排查（副本 3）')
+  await clone(first, '登录接口排查（副本 4）')
+  expect(readFileSync(sessionFile)).toEqual(sourceBytes)
+  expect(finish).toHaveBeenCalledTimes(3)
 })
 
 it('serves pinned native history, pagination and index over HTTP during generation', async () => {

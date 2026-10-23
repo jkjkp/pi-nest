@@ -7,7 +7,7 @@ import type { PiSessionMutationOptions, PiCreatedSession } from './manage-sessio
 import { PiSessionHistoryRevisionError, PiSessionHistorySourceChangedError } from './read-session-history.js'
 
 export class PiSessionBranchTargetError extends Error {}
-export type PiSessionBranchOptions = PiSessionMutationOptions & ({ kind: 'clone' } | { kind: 'fork'; entryId: string; revision: string })
+export type PiSessionBranchOptions = PiSessionMutationOptions & ({ kind: 'clone'; existingNames?: string[]; fallbackName?: string } | { kind: 'fork'; entryId: string; revision: string })
 export type PiSessionBranchResult = { session: PiCreatedSession & { name?: string; firstMessage?: string }; draft: string; draftContent?: unknown; entries?: unknown }
 
 function fingerprint(bytes: Buffer) { return createHash('sha256').update(bytes).digest('hex') }
@@ -37,6 +37,17 @@ function messageText(content: unknown) {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
   return content.flatMap((block) => block && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string' ? [block.text] : []).join('\n')
+}
+
+function cloneName(name: string, existingNames: string[]) {
+  const base = name.replace(/（副本(?: \d+)?）$/, '').trim() || '未命名会话'
+  const taken = new Set([name, ...existingNames])
+  for (let number = 1; ; number++) {
+    const suffix = number === 1 ? '（副本）' : `（副本 ${number}）`
+    // Keep the suffix within the rename limit without cutting a surrogate pair.
+    const candidate = base.slice(0, 120 - suffix.length).replace(/[\uD800-\uDBFF]$/u, '').trimEnd() + suffix
+    if (!taken.has(candidate)) return candidate
+  }
 }
 
 // shortcut: File-level branching skips extension fork hooks; use an isolated runtime when those hooks are required.
@@ -70,11 +81,15 @@ export function branchPiSession(options: PiSessionBranchOptions, beforeShutdown?
     } else if (!target || !branch.some((entry) => entry.type === 'message' && entry.message.role === 'user')) {
       throw new PiSessionBranchTargetError('当前会话没有可复制的对话。')
     }
+    const firstUser = branch.find((entry) => entry.type === 'message' && entry.message.role === 'user')
+    const name = manager.getSessionName() || (options.kind === 'clone' ? options.fallbackName : undefined) ||
+      (firstUser?.type === 'message' && firstUser.message.role === 'user' ? messageText(firstUser.message.content).replace(/\s+/g, ' ').trim() : '') || '未命名会话'
     if (target) manager.createBranchedSession(target)
     else manager.newSession({ parentSession: options.sessionFile })
     const header = manager.getHeader()
     const file = manager.getSessionFile()
     if (!header || !file || file === snapshot || manager.getSessionId() === options.expectedSessionId) throw new Error('Pi branch creation failed')
+    if (options.kind === 'clone') manager.appendSessionInfo(cloneName(name, options.existingNames ?? []))
     // Persist SDK-produced entries even for a fork before the first user message, and bind lineage to the real source.
     const entries = manager.getEntries()
     const targetFile = join(dirname(options.sessionFile), basename(file))
