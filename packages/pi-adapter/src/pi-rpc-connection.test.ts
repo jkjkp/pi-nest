@@ -109,7 +109,7 @@ describe('PiRpcConnection', () => {
     expect(spawnProcess).toHaveBeenCalledWith(
       '/fixture/pi',
       ['--mode', 'rpc', '--session', '/fixture/session.jsonl'],
-      { cwd: '/fixture', stdio: 'pipe' },
+      { cwd: '/fixture', stdio: 'pipe', ...(process.platform === 'win32' ? { windowsHide: true } : {}) },
     )
     expect(child.stdin.writableEnded).toBe(false)
     await connection.close()

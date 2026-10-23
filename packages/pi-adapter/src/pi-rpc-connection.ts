@@ -22,7 +22,7 @@ export type PiRpcResponse = PiRpcRecord & {
 export type SpawnRpcProcess = (
   executable: string,
   args: string[],
-  options: { cwd: string; stdio: 'pipe' },
+  options: { cwd: string; stdio: 'pipe'; windowsHide?: boolean },
 ) => ChildProcessWithoutNullStreams
 
 export type PiRpcConnectionOptions = {
@@ -75,7 +75,11 @@ export class PiRpcConnection {
 
     const args = this.options.args ?? ['--mode', 'rpc', '--session', this.options.sessionFile]
     const createProcess = this.options.spawnProcess ?? spawn
-    const child = createProcess(this.options.executable, args, { cwd: this.options.cwd, stdio: 'pipe' })
+    const child = createProcess(this.options.executable, args, {
+      cwd: this.options.cwd,
+      stdio: 'pipe',
+      ...(process.platform === 'win32' ? { windowsHide: true } : {}),
+    })
     this.child = child
 
     child.stdout.on('data', (chunk: Buffer) => this.consumeStdout(chunk))

@@ -1,9 +1,14 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { getPackageDir } from '@earendil-works/pi-coding-agent'
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { PiRpcProcess } from './pi-rpc-process.js'
+
+afterEach(() => vi.unstubAllGlobals())
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough()
@@ -49,6 +54,41 @@ function respondToState(child: FakeChild, sessionId = 'session-1') {
 }
 
 describe('PiRpcProcess', () => {
+  it.each(['win32', 'darwin', 'linux'])('uses the platform default on %s and preserves session path arguments', async (platform) => {
+    vi.stubGlobal('process', { ...process, platform })
+    const child = new FakeChild()
+    const spawnProcess = vi.fn(() => child)
+    const cwd = platform === 'win32' ? 'D:\\项目 空格 & (test)' : '/项目 空格 & (test)'
+    const sessionFile = `${cwd}/会话 'quoted'.jsonl`
+    const rpc = new PiRpcProcess({ cwd, sessionFile, expectedSessionId: 'session-1', spawnProcess: spawnProcess as any })
+    respondToState(child)
+
+    try {
+      await expect(rpc.start()).resolves.toMatchObject({ sessionId: 'session-1' })
+      const args = ['--mode', 'rpc', '--session', sessionFile]
+      expect(spawnProcess).toHaveBeenCalledWith(
+        platform === 'win32' ? process.execPath : resolve(dirname(fileURLToPath(import.meta.url)), '../..', 'node_modules/.bin/pi'),
+        platform === 'win32' ? [join(getPackageDir(), 'dist/bundle/cli.js'), ...args] : args,
+        { cwd, stdio: 'pipe', ...(platform === 'win32' ? { windowsHide: true } : {}) },
+      )
+    } finally { await rpc.close() }
+  })
+
+  it.each(['win32', 'darwin', 'linux'])('preserves an explicit executable on %s', async (platform) => {
+    vi.stubGlobal('process', { ...process, platform })
+    const child = new FakeChild()
+    const { process: rpc, spawnProcess } = createProcess(child)
+    respondToState(child)
+
+    try {
+      await rpc.start()
+      expect(spawnProcess).toHaveBeenCalledWith(
+        '/fixture/pi', ['--mode', 'rpc', '--session', '/fixture/session.jsonl'],
+        { cwd: '/fixture', stdio: 'pipe', ...(platform === 'win32' ? { windowsHide: true } : {}) },
+      )
+    } finally { await rpc.close() }
+  })
+
   it('starts the locked CLI RPC command without fixture approval and resolves the native session ID', async () => {
     const child = new FakeChild()
     const { process, spawnProcess } = createProcess(child)
@@ -61,7 +101,7 @@ describe('PiRpcProcess', () => {
     expect(spawnProcess).toHaveBeenCalledWith(
       '/fixture/pi',
       ['--mode', 'rpc', '--session', '/fixture/session.jsonl'],
-      { cwd: '/fixture', stdio: 'pipe' },
+      { cwd: '/fixture', stdio: 'pipe', ...(globalThis.process.platform === 'win32' ? { windowsHide: true } : {}) },
     )
     await process.close()
   })

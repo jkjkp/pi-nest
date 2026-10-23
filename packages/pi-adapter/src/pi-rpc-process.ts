@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { getPackageDir } from '@earendil-works/pi-coding-agent'
 
 import {
   PiRpcConnection,
@@ -24,8 +25,7 @@ export type PiRpcProcessState = {
 }
 
 function defaultPiExecutable() {
-  // This module is executed from dist/src in production. Tests inject the
-  // executable so they do not depend on this build-output location.
+  // The Unix default is resolved relative to the production dist/src module.
   return resolve(dirname(fileURLToPath(import.meta.url)), '../..', 'node_modules/.bin/pi')
 }
 
@@ -45,9 +45,12 @@ export class PiRpcProcess {
   private started = false
 
   constructor(private readonly options: PiRpcProcessOptions) {
+    const useNode = options.piExecutable === undefined && process.platform === 'win32'
     const connectionOptions: PiRpcConnectionOptions = {
       cwd: options.cwd,
-      executable: options.piExecutable ?? defaultPiExecutable(),
+      executable: options.piExecutable ?? (useNode ? process.execPath : defaultPiExecutable()),
+      // Windows cannot execute the Unix .bin/pi shim directly.
+      args: useNode ? [join(getPackageDir(), 'dist/bundle/cli.js'), '--mode', 'rpc', '--session', options.sessionFile] : undefined,
       sessionFile: options.sessionFile,
       spawnProcess: options.spawnProcess,
     }
