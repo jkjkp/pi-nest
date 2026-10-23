@@ -66,7 +66,7 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
           <ComposerAttachments draft={attachmentDraft} />
           {error && <p role="alert" className="pointer-events-auto mb-2 text-xs text-destructive">{error}<Button variant="ghost" size="sm" onClick={() => onError(undefined)}>关闭</Button></p>}
           <CommandNotice notice={commands.notice} />
-          <div data-slot="message-composer" className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-[#303030] sm:px-6">
+          <div data-slot="message-composer" className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-card sm:px-6">
         <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
         <CommandComposer
           onExecuteCommand={(value) => { if (attachmentDraft.items.length) onError('带附件时暂不支持命令，请先移除附件。'); else commands.submit(value) }}

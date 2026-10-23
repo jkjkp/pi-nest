@@ -33,7 +33,7 @@ function MarkdownPre({ children }: ComponentProps<'pre'>) {
   const code = String(child.props.children ?? '').replace(/\n$/, '')
   const lang = language(child.props.className)
   if (lang === 'mermaid') return isStreaming
-    ? <pre className="my-4 max-h-96 overflow-auto rounded-md bg-muted p-3 font-mono text-[13px] leading-[22px]"><code>{code}</code></pre>
+    ? <pre className="my-4 max-h-96 overflow-auto rounded-md bg-code-background p-3 font-mono text-[13px] leading-[22px]"><code>{code}</code></pre>
     : <MermaidDiagram source={code} />
   return <MarkdownCodeBlock code={code} language={lang} isStreaming={isStreaming} />
 }
@@ -41,8 +41,8 @@ function MarkdownPre({ children }: ComponentProps<'pre'>) {
 function MarkdownLink({ children, href }: ComponentProps<'a'>) {
   const openLocalLink = useContext(LocalLinkContext)
   const url = href ? safeUrl(href) : undefined
-  if (!url && href && openLocalLink) return <button type="button" className="text-primary underline underline-offset-4 text-left" onClick={() => openLocalLink(href)}>{children}</button>
-  return url ? <a className="text-primary underline underline-offset-4" href={url} rel="noopener noreferrer" target="_blank">{children}</a> : <>{children}</>
+  if (!url && href && openLocalLink) return <button type="button" className="text-link underline underline-offset-4 text-left" onClick={() => openLocalLink(href)}>{children}</button>
+  return url ? <a className="text-link underline underline-offset-4" href={url} rel="noopener noreferrer" target="_blank">{children}</a> : <>{children}</>
 }
 
 const markdownComponents: Components = {

@@ -43,7 +43,7 @@ export function MarkdownCodeBlock({ code, language, isStreaming }: { code: strin
   }
 
   const tokens = !isStreaming && highlighted?.code === code && highlighted.language === language ? highlighted.tokens : undefined
-  return <div className="my-4 min-w-0 overflow-hidden rounded-md border bg-muted/60" data-markdown-code-block="">
+  return <div className="my-4 min-w-0 overflow-hidden rounded-md border bg-code-background" data-markdown-code-block="">
     <div className="flex min-w-0 items-center justify-between gap-3 border-b px-3 py-1.5 text-xs">
       <span className="min-w-0 truncate text-muted-foreground">{language || '文本'}</span>
       <div className="flex shrink-0 items-center gap-1">

@@ -1,4 +1,4 @@
-import { createHighlighterCore, type ThemedToken } from 'shiki/core'
+import { createHighlighterCore, createCssVariablesTheme, type ThemedToken } from 'shiki/core'
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
 
 const languages = {
@@ -23,11 +23,11 @@ export async function highlightCode(code: string, language: string): Promise<The
   const name = aliases[language.toLowerCase()] ?? language.toLowerCase()
   if (!Object.hasOwn(languages, name)) return undefined
   highlighter ??= createHighlighterCore({
-    themes: [import('shiki/themes/github-light.mjs'), import('shiki/themes/github-dark.mjs')],
+    themes: [import('shiki/themes/github-light.mjs'), createCssVariablesTheme({ name: 'pi-nest-dark' })],
     langs: [],
     engine: createJavaScriptRegexEngine(),
   }).catch((error: unknown) => { highlighter = undefined; throw error })
   const instance = await highlighter
   await instance.loadLanguage(languages[name as keyof typeof languages]())
-  return instance.codeToTokens(code, { lang: name, themes: { light: 'github-light', dark: 'github-dark' } }).tokens
+  return instance.codeToTokens(code, { lang: name, themes: { light: 'github-light', dark: 'pi-nest-dark' } }).tokens
 }

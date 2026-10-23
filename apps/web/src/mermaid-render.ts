@@ -14,7 +14,7 @@ export function diagramConfig(dark: boolean): MermaidConfig {
     startOnLoad: false,
     theme: 'base',
     themeVariables: dark
-      ? { background: '#202020', lineColor: '#a3a3a3', primaryBorderColor: '#737373', primaryColor: '#292929', primaryTextColor: '#f1f1f1', secondaryColor: '#303030', tertiaryColor: '#202020', fontSize: '16px' }
+      ? { background: '#232324', lineColor: '#a3a3a3', primaryBorderColor: '#737373', primaryColor: '#2c2c2e', primaryTextColor: '#cfd3d6', secondaryColor: '#353638', tertiaryColor: '#232324', fontSize: '16px' }
       : { background: '#ffffff', lineColor: '#64748b', primaryBorderColor: '#94a3b8', primaryColor: '#eff6ff', primaryTextColor: '#1f2937', secondaryColor: '#f8fafc', tertiaryColor: '#ffffff', fontSize: '16px' },
     fontFamily: 'system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif',
   }
