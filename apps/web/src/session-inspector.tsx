@@ -14,7 +14,7 @@ export function SessionInspector({ run, session }: { run: SessionRunSummary | un
 
   return (
     <Dialog>
-      <DialogTrigger asChild><Button aria-label="打开会话检查器" title="会话检查器" size="icon-sm" variant="ghost"><Info aria-hidden="true" /></Button></DialogTrigger>
+      <DialogTrigger asChild><Button aria-label="打开会话检查器" title="会话检查器" className="border-0" size="icon-sm" variant="ghost"><Info aria-hidden="true" /></Button></DialogTrigger>
       <DialogContent className="flex h-[min(40rem,calc(100dvh-2rem))] flex-col overflow-hidden p-0">
       <header className="relative shrink-0 border-b py-4 pr-14 pl-4">
         <DialogTitle>会话检查器</DialogTitle>

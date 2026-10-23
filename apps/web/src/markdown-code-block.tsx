@@ -47,8 +47,8 @@ export function MarkdownCodeBlock({ code, language, isStreaming }: { code: strin
     <div className="flex min-w-0 items-center justify-between gap-3 border-b px-3 py-1.5 text-xs">
       <span className="min-w-0 truncate text-muted-foreground">{language || '文本'}</span>
       <div className="flex shrink-0 items-center gap-1">
-        <Button aria-label="自动换行" aria-pressed={wrapped} title={wrapped ? '关闭自动换行' : '开启自动换行'} onClick={() => setWrapped(!wrapped)} size="icon-sm" type="button" variant={wrapped ? 'secondary' : 'ghost'}><WrapText aria-hidden="true" /></Button>
-        <Button aria-label="复制代码" aria-busy={copying} title={copying ? '复制中…' : copyStatus === '已复制' ? '已复制' : '复制代码'} disabled={copying} onClick={() => void copy()} size="icon-sm" type="button" variant="ghost">{copying ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : copyStatus === '已复制' ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}</Button>
+        <Button className="border-0" aria-label="自动换行" aria-pressed={wrapped} title={wrapped ? '关闭自动换行' : '开启自动换行'} onClick={() => setWrapped(!wrapped)} size="icon-sm" type="button" variant={wrapped ? 'secondary' : 'ghost'}><WrapText aria-hidden="true" /></Button>
+        <Button className="border-0" aria-label="复制代码" aria-busy={copying} title={copying ? '复制中…' : copyStatus === '已复制' ? '已复制' : '复制代码'} disabled={copying} onClick={() => void copy()} size="icon-sm" type="button" variant="ghost">{copying ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : copyStatus === '已复制' ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}</Button>
       </div>
     </div>
     <pre aria-label="代码" tabIndex={0} className={`markdown-code max-h-96 overflow-auto overscroll-contain p-3 font-mono text-[13px] leading-[22px] ${wrapped ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre [overflow-wrap:normal]'}`}><code>{tokens ? tokens.map((line, index) => <Fragment key={index}>{index > 0 ? '\n' : ''}{line.map((token, tokenIndex) => <span key={tokenIndex} style={{ color: token.color, ...token.htmlStyle } as CSSProperties}>{token.content}</span>)}</Fragment>) : code}</code></pre>
