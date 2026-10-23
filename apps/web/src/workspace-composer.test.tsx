@@ -72,17 +72,20 @@ it('keeps attachment-only submission gated by upload state and forwards pasted f
   expect(props.state.attachmentDraft.add).toHaveBeenCalledWith([file])
 })
 
-it('lets touch and keyboard users read the complete extension status from its compact trigger', async () => {
+it('keeps the extension hover tooltip without opening click or keyboard details', async () => {
   const status = 'ponytail: FULL · another extension with a very long status'
   props = { ...props, state: { ...props.state, extensionStatus: status } }
   await render()
   const trigger = container.querySelector<HTMLButtonElement>('[aria-label^="扩展状态："]')!
   expect(trigger.getAttribute('aria-label')).toBe(`扩展状态：${status}`)
+  expect(trigger.getAttribute('data-composer-tooltip')).toBe(status)
   await act(() => {
     trigger.focus()
+    trigger.click()
     trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
   })
-  expect(document.querySelector('[data-slot="dropdown-menu-content"]')?.textContent).toContain(status)
+  expect(document.querySelector('[data-slot="dropdown-menu-content"]')).toBeNull()
+  expect(trigger.hasAttribute('aria-haspopup')).toBe(false)
 })
 
 it('keeps the submitting and stopping states named when only their spinner is visible', async () => {
