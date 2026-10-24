@@ -54,7 +54,18 @@ it.each([0, 60, 1620])('anchors the current message after pagination, streaming,
   }
   const flush = async () => {
     for (let i = 0; i < 5 && frames.size; i++) {
-      await act(() => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback(0)) })
+      await act(() => {
+        const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback(0))
+        // Check before React commits: a scroll compensation must already have matching row positions.
+        let start = 20
+        for (const id of prepended ? ['older', 'current', 'live'] : ['current', 'live']) {
+          const row = viewport.querySelector<HTMLElement>(`[data-turn-id="${id}"]`)!.parentElement!
+          const translated = Number(row.style.transform.match(/translate(?:Y|3d)\((?:0, )?(-?[\d.]+)px/)?.[1])
+          expect(translated).toBe(start)
+          start += sizes[id]!
+        }
+        expect(viewport.querySelector<HTMLElement>('[data-index]')!.parentElement!.style.height).toBe(`${start}px`)
+      })
     }
   }
   const scroll = async (position: number) => {
@@ -81,6 +92,14 @@ it.each([0, 60, 1620])('anchors the current message after pagination, streaming,
     loading = true
     await render()
     await scroll(readingTop)
+    if (readingTop === 1620) {
+      sizes.current! += 400
+      await resize()
+      expect(top).toBe(readingTop + 400)
+      sizes.current! -= 400
+      await resize()
+      expect(top).toBe(readingTop)
+    }
     sizes.live! += 500
     await resize()
     expect(top).toBe(readingTop)

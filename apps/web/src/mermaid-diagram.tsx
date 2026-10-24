@@ -24,11 +24,11 @@ function useDarkMode() {
 
 type CameraChange = (camera: DiagramCamera) => void
 
-function CameraControls({ diagram, camera, onChange, disabled = false }: { diagram: Diagram; camera?: DiagramCamera; onChange: CameraChange; disabled?: boolean }) {
+function CameraControls({ diagram, camera, onChange, disabled = false }: { diagram?: Diagram; camera?: DiagramCamera; onChange: CameraChange; disabled?: boolean }) {
   const label = `${Number(((camera?.scale ?? 1) * 100).toFixed(1))}%`
   const zoom = (scale: number) => { if (camera) onChange(zoomDiagramCamera(camera, scale)) }
   return <div className="flex flex-wrap items-center gap-1">
-    <Button disabled={disabled || !camera} onClick={() => { if (camera) onChange(fitDiagramCamera(diagram, camera)) }} size="sm" type="button" variant="ghost">适合窗口</Button>
+    <Button disabled={disabled || !camera} onClick={() => { if (camera && diagram) onChange(fitDiagramCamera(diagram, camera)) }} size="sm" type="button" variant="ghost">适合窗口</Button>
     <Button disabled={disabled || !camera} onClick={() => zoom(1)} size="sm" type="button" variant="ghost">100%</Button>
     <Button aria-label="缩小图表" disabled={disabled || !camera || camera.scale <= 0.01} onClick={() => zoom(camera!.scale / 1.25)} size="icon-sm" type="button" variant="ghost"><Minus /></Button>
     <label className="flex items-center"><span className="sr-only">缩放比例</span><input aria-label="缩放比例" className="h-7 w-20 rounded border bg-background px-1 text-center text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50" defaultValue={label} disabled={disabled || !camera} inputMode="decimal" key={label} onBlur={(event) => {
@@ -43,7 +43,7 @@ function CameraControls({ diagram, camera, onChange, disabled = false }: { diagr
   </div>
 }
 
-function DiagramCanvas({ diagram, camera, onChange }: { diagram: Diagram; camera?: DiagramCamera; onChange: CameraChange }) {
+function DiagramCanvas({ diagram, camera, onChange, expanded = false }: { diagram: Diagram; camera?: DiagramCamera; onChange: CameraChange; expanded?: boolean }) {
   const viewport = useRef<HTMLDivElement>(null)
   const latest = useRef(camera)
   const frame = useRef<number | undefined>(undefined)
@@ -73,6 +73,7 @@ function DiagramCanvas({ diagram, camera, onChange }: { diagram: Diagram; camera
     const element = viewport.current
     if (!element) return
     const wheel = (event: WheelEvent) => {
+      if (!expanded && !event.ctrlKey) return
       const current = latest.current
       if (!current) return
       event.preventDefault()
@@ -88,9 +89,9 @@ function DiagramCanvas({ diagram, camera, onChange }: { diagram: Diagram; camera
     }
     element.addEventListener('wheel', wheel, { passive: false })
     return () => { element.removeEventListener('wheel', wheel); if (frame.current !== undefined) cancelAnimationFrame(frame.current) }
-  }, [update])
+  }, [update, expanded])
   const release = (id: number) => { pointers.current.delete(id); setDragging(pointers.current.size > 0) }
-  return <div aria-label="图表画布，可缩放和自由平移" className="relative min-h-0 flex-1 touch-none overflow-hidden overscroll-contain rounded-md border bg-muted/20 outline-none focus-visible:outline-1 focus-visible:outline-border" onLostPointerCapture={(event) => release(event.pointerId)} onPointerDown={(event) => {
+  return <div aria-label="图表画布，可缩放和自由平移" title={expanded ? '滚轮缩放，拖动平移' : 'Ctrl + 滚轮缩放，拖动平移'} className="relative min-h-0 flex-1 touch-none overflow-hidden overscroll-x-contain rounded-md border bg-muted/20 outline-none focus-visible:outline-1 focus-visible:outline-border" onLostPointerCapture={(event) => release(event.pointerId)} onPointerDown={(event) => {
     if (event.button !== 0) return
     event.preventDefault()
     event.currentTarget.focus({ preventScroll: true })
@@ -136,7 +137,7 @@ function DiagramViewer({ diagram, source, initialSource, camera, onChange }: { d
       </div>
     </div>
     <DialogDescription>滚轮缩放、拖动画布查看；可输入 1%–1600%，按 Esc 关闭。</DialogDescription>
-    {showSource ? <pre className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted p-4 text-xs leading-6"><code>{source}</code></pre> : <DiagramCanvas camera={camera} diagram={diagram} onChange={onChange} />}
+    {showSource ? <pre className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted p-4 text-xs leading-6"><code>{source}</code></pre> : <DiagramCanvas camera={camera} diagram={diagram} expanded onChange={onChange} />}
     <div className="flex shrink-0 items-center gap-1">
       <Button aria-pressed={!showSource} onClick={() => setShowSource(false)} size="sm" type="button" variant={showSource ? 'ghost' : 'secondary'}>图表</Button>
       <Button aria-pressed={showSource} onClick={() => setShowSource(true)} size="sm" type="button" variant={showSource ? 'secondary' : 'ghost'}>源码</Button>
@@ -177,15 +178,15 @@ export function MermaidDiagram({ source }: { source: string }) {
   }, [dark, id, source])
 
   if (source.length > maxSourceLength || current?.error) return <div className="my-3"><pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs leading-6"><code>{source}</code></pre><p className="mt-2 text-sm text-destructive">{current?.error ?? '图表源码超过 32 KiB 上限。'}</p></div>
-  if (!current?.diagram) return <div className="my-3 rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">正在生成 Mermaid 图表…</div>
+  const diagram = current?.diagram
   const show = (source: boolean) => { setInitialSource(source); setOpen(true) }
   return <figure className="my-3 rounded-md border bg-card p-3">
     <figcaption className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-normal text-muted-foreground">
       Mermaid 图表
-      <div className="flex flex-wrap items-center gap-1"><CameraControls camera={camera} diagram={current.diagram} onChange={changeCamera} /></div>
-      <div className="flex items-center gap-1"><Button onClick={() => show(true)} size="sm" type="button" variant="ghost">查看源码</Button><Button aria-label="放大查看 Mermaid 图表" onClick={() => show(false)} size="sm" type="button" variant="ghost"><Maximize2 />展开查看</Button></div>
+      <div className="flex flex-wrap items-center gap-1"><CameraControls camera={camera} diagram={diagram} disabled={!diagram} onChange={changeCamera} /></div>
+      <div className="flex items-center gap-1"><Button disabled={!diagram} onClick={() => show(true)} size="sm" type="button" variant="ghost">查看源码</Button><Button aria-label="放大查看 Mermaid 图表" disabled={!diagram} onClick={() => show(false)} size="sm" type="button" variant="ghost"><Maximize2 />展开查看</Button></div>
     </figcaption>
-    <div className="flex h-80">{!open && <DiagramCanvas camera={camera} diagram={current.diagram} onChange={changeCamera} />}</div>
-    <Dialog onOpenChange={setOpen} open={open}>{open && <DiagramViewer camera={camera} diagram={current.diagram} initialSource={initialSource} onChange={changeCamera} source={source} />}</Dialog>
+    <div className="flex h-80">{!diagram ? <div className="flex-1 rounded-md border bg-muted/20 p-3 text-sm text-muted-foreground" role="status">正在生成 Mermaid 图表…</div> : !open && <DiagramCanvas camera={camera} diagram={diagram} onChange={changeCamera} />}</div>
+    <Dialog onOpenChange={setOpen} open={open}>{open && diagram && <DiagramViewer camera={camera} diagram={diagram} initialSource={initialSource} onChange={changeCamera} source={source} />}</Dialog>
   </figure>
 }
