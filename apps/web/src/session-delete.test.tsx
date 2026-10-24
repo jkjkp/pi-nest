@@ -14,7 +14,7 @@ beforeEach(() => {
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
   props = {
     collapsedProjectKeys: {}, error: null, isLoading: false, mutationSessionId: undefined,
-    onDelete: vi.fn(async () => {}), onSelect: vi.fn(), onRename: vi.fn(async () => {}), onProjectOrderChange: vi.fn(), onNewConversation: vi.fn(), onAddProject: vi.fn(), onRemoveProject: vi.fn(), onRevealProject: vi.fn(async () => {}), onSessionOrderChange: vi.fn(), onToggleProject: vi.fn(),
+    onClone: vi.fn(async () => {}), onDelete: vi.fn(async () => {}), onSelect: vi.fn(), onRename: vi.fn(async () => {}), onProjectOrderChange: vi.fn(), onNewConversation: vi.fn(), onAddProject: vi.fn(), onRemoveProject: vi.fn(), onRevealProject: vi.fn(async () => {}), onSessionOrderChange: vi.fn(), onToggleProject: vi.fn(),
     projects: [{ key: 'cwd:/fixture', cwd: '/fixture', name: 'Fixture', sessions: [{ id: 'one', name: '当前对话' }, { id: 'two', name: '另一会话' }, { id: 'running', name: '运行中的会话' }] }],
     selectedSessionId: 'one', runs: { running: { status: 'running', turns: [], systemEvents: [], pendingInputs: [] } },
   }

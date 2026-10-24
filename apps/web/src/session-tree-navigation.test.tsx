@@ -23,7 +23,7 @@ async function mount(overrides: Partial<ComponentProps<typeof SessionNavigation>
   const root = createRoot(container)
   let props: ComponentProps<typeof SessionNavigation> = {
     collapsedProjectKeys: { [project.key]: false }, error: null, isLoading: false, mutationSessionId: undefined,
-    onDelete: vi.fn(async () => {}), onSelect: vi.fn(), onRename: vi.fn(async () => {}), onProjectOrderChange: vi.fn(),
+    onClone: vi.fn(async () => {}), onDelete: vi.fn(async () => {}), onSelect: vi.fn(), onRename: vi.fn(async () => {}), onProjectOrderChange: vi.fn(),
     onNewConversation: vi.fn(), onAddProject: vi.fn(), onRemoveProject: vi.fn(), onRevealProject: vi.fn(async () => {}),
     onSessionOrderChange: vi.fn(), onToggleProject: vi.fn(), projects: [project], runs: {}, selectedSessionId: 'child', ...overrides,
   }

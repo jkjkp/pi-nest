@@ -222,3 +222,31 @@ it('adds a native branch to the session cache and restores the selected message 
   expect(useWorkspaceStore.getState().drafts.source).toBe('/fork')
   queryClient.clear()
 })
+
+it('clones an idle background session while the selected session runs, blocks duplicates, and allows retry after failure', async () => {
+  vi.mocked(branchSession).mockReset()
+  const queryClient = new QueryClient()
+  queryClient.setQueryData(['sessions'], [{ id: 'source', cwd: '/fixture' }, { id: 'other', cwd: '/fixture' }])
+  useWorkspaceStore.setState({ drafts: { source: '保留草稿', other: '未发送' }, sessionNotifications: {}, runs: { source: { status: 'running', turns: [], systemEvents: [], pendingInputs: [] } }, runtimeStates: {}, watchStates: {} })
+  const probe: { workspace?: ReturnType<typeof useWorkspaceSession> } = {}
+  function Probe() {
+    // oxlint-disable-next-line react/immutability -- Capture the hook API for async operation checks.
+    probe.workspace = useWorkspaceSession({} as SessionRunController)
+    return null
+  }
+  renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=source']}><Probe /></MemoryRouter></QueryClientProvider>)
+  await expect(probe.workspace!.createBranch({ kind: 'clone' }, 'source')).rejects.toThrow('请等待')
+  let reject!: (cause: Error) => void
+  vi.mocked(branchSession).mockImplementationOnce(() => new Promise((_, rejectPromise) => { reject = rejectPromise }))
+  const pending = probe.workspace!.createBranch({ kind: 'clone' }, 'other')
+  await expect(probe.workspace!.createBranch({ kind: 'clone' }, 'other')).rejects.toThrow('请等待')
+  expect(branchSession).toHaveBeenCalledExactlyOnceWith('other', { kind: 'clone' })
+  reject(new Error('克隆失败'))
+  await expect(pending).rejects.toThrow('克隆失败')
+  const result = { session: { id: 'child', cwd: '/fixture', parentSessionId: 'other' }, draft: '' }
+  vi.mocked(branchSession).mockResolvedValueOnce(result)
+  await expect(probe.workspace!.createBranch({ kind: 'clone' }, 'other')).resolves.toEqual(result)
+  expect(queryClient.getQueryData(['sessions'])).toEqual([result.session, { id: 'source', cwd: '/fixture' }, { id: 'other', cwd: '/fixture' }])
+  expect(useWorkspaceStore.getState().drafts).toMatchObject({ source: '保留草稿', other: '未发送', child: '' })
+  queryClient.clear()
+})

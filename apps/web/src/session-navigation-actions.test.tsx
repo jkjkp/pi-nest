@@ -13,7 +13,7 @@ it.each([undefined, '没有访问项目文件夹的权限。'])('opens the selec
   try {
     await act(() => root.render(<SessionNavigation
       collapsedProjectKeys={{}} error={null} isLoading={false} mutationSessionId={undefined}
-      onDelete={vi.fn(async () => {})} onSelect={vi.fn()} onRename={vi.fn(async () => {})}
+      onClone={vi.fn(async () => {})} onDelete={vi.fn(async () => {})} onSelect={vi.fn()} onRename={vi.fn(async () => {})}
       onProjectOrderChange={vi.fn()} onNewConversation={vi.fn()} onAddProject={vi.fn()}
       onRemoveProject={vi.fn()} onRevealProject={openFolder} onSessionOrderChange={vi.fn()}
       onToggleProject={vi.fn()} projects={[{ key: 'cwd:/fixture', cwd: '/fixture', name: 'Fixture', sessions: [] }]} selectedSessionId="" runs={{}}
@@ -50,7 +50,7 @@ it('limits borderless project actions to header hover/focus and keeps an open me
   try {
     await act(() => root.render(<SessionNavigation
       collapsedProjectKeys={{}} error={null} isLoading={false} mutationSessionId={undefined}
-      onDelete={vi.fn(async () => {})} onSelect={vi.fn()} onRename={vi.fn(async () => {})}
+      onClone={vi.fn(async () => {})} onDelete={vi.fn(async () => {})} onSelect={vi.fn()} onRename={vi.fn(async () => {})}
       onProjectOrderChange={vi.fn()} onNewConversation={onNewConversation} onAddProject={vi.fn()}
       onRemoveProject={vi.fn()} onRevealProject={vi.fn(async () => {})} onSessionOrderChange={vi.fn()}
       onToggleProject={onToggleProject} projects={[project]} selectedSessionId="one" runs={{}}

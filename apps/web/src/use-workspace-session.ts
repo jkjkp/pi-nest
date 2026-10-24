@@ -38,6 +38,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const setNavigationOrder = useWorkspaceStore((state) => state.setNavigationOrder)
   const setProjectCollapsed = useWorkspaceStore((state) => state.setProjectCollapsed)
   const restoreProject = useWorkspaceStore((state) => state.restoreProject)
+  const branchingSession = useRef<string | undefined>(undefined)
   const [mutatingSessionId, setMutatingSessionId] = useState<string>()
   const [controlFailure, setControlFailure] = useState<{ sessionId: string; message: string }>()
   const controlError = controlFailure?.sessionId === selectedSessionId ? controlFailure.message : undefined
@@ -386,9 +387,11 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     } finally { if (modelOperation.current === operation) modelOperation.current = undefined }
   }
 
-  async function createBranch(request: PiSessionBranchRequest) {
-    const sessionId = selectedSessionId
-    if (!selectedSession || isActive || modelOperation.current?.sessionId === sessionId || mutatingSessionId === sessionId) throw new Error('请等待当前会话操作结束后再创建分支。')
+  async function createBranch(request: PiSessionBranchRequest, sessionId = selectedSessionId) {
+    const store = useWorkspaceStore.getState()
+    const status = store.runs[sessionId]?.status ?? (store.sessionNotifications[sessionId]?.pendingRunId ? 'running' : 'idle')
+    if (!sessions.some((session) => session.id === sessionId) || isRunActive(status) || modelOperation.current?.sessionId === sessionId || mutatingSessionId !== undefined || branchingSession.current !== undefined) throw new Error('请等待当前会话操作结束后再创建分支。')
+    branchingSession.current = sessionId
     setMutatingSessionId(sessionId)
     try {
       const result = await branchSession(sessionId, request)
@@ -396,7 +399,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
       useWorkspaceStore.getState().setDraft(result.session.id, result.draft)
       if (result.attachments?.length) setDraftAttachments(result.session.id, result.attachments)
       return result
-    } finally { setMutatingSessionId(undefined) }
+    } finally { branchingSession.current = undefined; setMutatingSessionId(undefined) }
   }
 
   async function handleRename(sessionId: string, name: string) {

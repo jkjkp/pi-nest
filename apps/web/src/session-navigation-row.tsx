@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
-import { ChevronRight, MessageSquare, Pencil, Trash2 } from 'lucide-react'
+import { ChevronRight, Copy, MessageSquare, Pencil, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { NavigationTitle } from './navigation-title.js'
@@ -12,6 +12,7 @@ import { sessionDisplayName, type PiSessionSummary } from './workspace.js'
 export function SessionNavigationRow({
   disabled,
   mutationSessionId,
+  onClone,
   onDelete,
   onRename,
   onSelect,
@@ -26,6 +27,7 @@ export function SessionNavigationRow({
   branch?: { hasChildren: boolean; expanded: boolean; onToggle: () => void; summary: string }
   disabled: boolean
   mutationSessionId: string | undefined
+  onClone: (session: PiSessionSummary) => void
   onDelete: (session: PiSessionSummary) => void
   onRename: (session: PiSessionSummary) => void
   onSelect: (sessionId: string) => void
@@ -70,6 +72,9 @@ export function SessionNavigationRow({
       <ContextMenuContent>
         <ContextMenuItem disabled={mutationSessionId === session.id} onSelect={() => onRename(session)}>
           <Pencil aria-hidden="true" className="mr-2 size-3.5" />重命名
+        </ContextMenuItem>
+        <ContextMenuItem disabled={isRunActive(status) || mutationSessionId !== undefined} onSelect={() => onClone(session)}>
+          <Copy aria-hidden="true" className="mr-2 size-3.5" />克隆对话
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={cannotDelete} onSelect={() => onDelete(session)}>

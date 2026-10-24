@@ -89,6 +89,10 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       error={sessionsQuery.error}
       isLoading={sessionsQuery.isPending}
       mutationSessionId={mutatingSessionId}
+      onClone={async (sessionId) => {
+        const result = await session.createBranch({ kind: 'clone' }, sessionId)
+        selectSession(result.session.id)
+      }}
       onDelete={handleDelete}
       onAddProject={() => setCreatingProject(true)}
       onNewConversation={startDraft}

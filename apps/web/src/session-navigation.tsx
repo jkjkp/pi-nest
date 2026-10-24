@@ -32,6 +32,7 @@ export function SessionNavigation({
   error,
   isLoading,
   mutationSessionId,
+  onClone,
   onDelete,
   onSelect,
   onRename,
@@ -50,6 +51,7 @@ export function SessionNavigation({
   error: Error | null
   isLoading: boolean
   mutationSessionId: string | undefined
+  onClone: (sessionId: string) => Promise<void>
   onDelete: (sessionId: string) => Promise<void>
   onSelect: (sessionId: string) => void
   onRename: (sessionId: string, name: string) => Promise<void>
@@ -158,9 +160,9 @@ export function SessionNavigation({
       <div className="flex shrink-0 items-center justify-between px-4 pt-3 pb-1">
         <h3 className="text-xs font-normal text-muted-foreground">项目</h3>
         <div className="flex items-center gap-1">
-        <div role="group" aria-label="会话显示方式" className="flex items-center rounded-md border p-0.5">
-          <Button aria-label="列表视图" title="列表视图" aria-pressed={navigationView === 'list'} size="icon-sm" className="size-6" variant={navigationView === 'list' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('list')}><List aria-hidden="true" className="size-3.5" /></Button>
-          <Button aria-label="树状视图" title="树状视图" aria-pressed={navigationView === 'tree'} size="icon-sm" className="size-6" variant={navigationView === 'tree' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('tree')}><ListTree aria-hidden="true" className="size-3.5" /></Button>
+        <div role="group" aria-label="会话显示方式" className="flex items-center rounded-md p-0.5">
+          <Button aria-label="列表视图" title="列表视图" aria-pressed={navigationView === 'list'} size="icon-sm" className="size-6 border-0" variant={navigationView === 'list' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('list')}><List aria-hidden="true" className="size-3.5" /></Button>
+          <Button aria-label="树状视图" title="树状视图" aria-pressed={navigationView === 'tree'} size="icon-sm" className="size-6 border-0" variant={navigationView === 'tree' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('tree')}><ListTree aria-hidden="true" className="size-3.5" /></Button>
         </div>
         <Button aria-label="创建项目" size="icon-sm" variant="ghost" onClick={onAddProject}><Plus aria-hidden="true" className="size-4" /></Button>
         </div>
@@ -187,6 +189,12 @@ export function SessionNavigation({
                   index={index}
                   key={project.key}
                   mutationSessionId={mutationSessionId}
+                  onClone={(session) => {
+                    setActionError(undefined)
+                    void onClone(session.id).catch((cause) => {
+                      setActionError(cause instanceof Error ? cause.message : '克隆对话失败，请重试。')
+                    })
+                  }}
                   onDelete={(session) => {
                     deleteTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
                     setActionError(undefined)
@@ -256,6 +264,7 @@ function SortableProject({
   disabled,
   index,
   mutationSessionId,
+  onClone,
   onDelete,
   onNewConversation,
   onRemove,
@@ -273,6 +282,7 @@ function SortableProject({
   disabled: boolean
   index: number
   mutationSessionId: string | undefined
+  onClone: (session: PiSessionSummary) => void
   onDelete: (session: PiSessionSummary) => void
   onNewConversation: (project: ProjectSessionGroup) => void
   onRemove: (project: ProjectSessionGroup) => void
@@ -333,12 +343,13 @@ function SortableProject({
       </div>
       {expanded && (
         <div className="space-y-1 pl-2" id={sessionListId}>
-          {navigationView === 'tree' ? <SessionTreeNavigation sessions={project.sessions} projectKey={project.key} searchValue={searchValue} projectMatches={Boolean(searchValue.trim()) && `${project.name} ${project.cwd ?? ''}`.toLocaleLowerCase().includes(searchValue.trim().toLocaleLowerCase())} disabled={disabled} mutationSessionId={mutationSessionId} onDelete={onDelete} onRename={onRename} onSelect={onSelect} runs={runs} selectedSessionId={selectedSessionId} /> : <SortableContext items={project.sessions.map((session) => `session:${session.id}`)} strategy={verticalListSortingStrategy}>
+          {navigationView === 'tree' ? <SessionTreeNavigation sessions={project.sessions} projectKey={project.key} searchValue={searchValue} projectMatches={Boolean(searchValue.trim()) && `${project.name} ${project.cwd ?? ''}`.toLocaleLowerCase().includes(searchValue.trim().toLocaleLowerCase())} disabled={disabled} mutationSessionId={mutationSessionId} onClone={onClone} onDelete={onDelete} onRename={onRename} onSelect={onSelect} runs={runs} selectedSessionId={selectedSessionId} /> : <SortableContext items={project.sessions.map((session) => `session:${session.id}`)} strategy={verticalListSortingStrategy}>
             {project.sessions.map((session) => (
               <SessionNavigationRow
                 key={session.id}
                 disabled={disabled}
                 mutationSessionId={mutationSessionId}
+                onClone={onClone}
                 onDelete={onDelete}
                 onRename={onRename}
                 onSelect={onSelect}

@@ -18,7 +18,7 @@ describe('SessionNavigation project actions', () => {
         error={null}
         isLoading={false}
         mutationSessionId={undefined}
-        onDelete={async () => undefined}
+        onClone={vi.fn(async () => {})} onDelete={async () => undefined}
         onNewConversation={vi.fn()}
         onAddProject={vi.fn()}
         onProjectOrderChange={vi.fn()}
