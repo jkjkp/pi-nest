@@ -162,6 +162,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   onJumpToTurn={jumpToTurn}
                   onReadTurnPrompt={readTurnPrompt}
                   onJumpToUnloadedTurn={jumpToUnloadedTurn}
+                  branchDisabled={mutatingSessionId !== undefined}
+                  onBranchAnswer={async (entryId, revision) => {
+                    const result = await session.createBranch({ kind: 'fork', entryId, revision })
+                    selectSession(result.session.id)
+                  }}
                   onRetry={retryHistory}
                   onPendingJumpHandled={() => setPendingJump(undefined)}
                   overlayRoot={railOverlay}

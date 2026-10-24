@@ -188,7 +188,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
         }
         return context.json({ session: { id, cwd, createdAt, updatedAt: createdAt, name, parentSessionId: resolved.session.id, firstMessage: runtime.attachments.displayPrompt(firstMessage, id) }, draft: draftText, ...(attachments?.length ? { attachments } : {}) }, 201)
       } catch (cause) {
-        if (historyRevisionChanged(cause)) return context.json({ error: '会话历史已变化，请点击“刷新位置”后重新选择分叉消息。', code: 'HISTORY_REVISION_CHANGED' }, 409)
+        if (historyRevisionChanged(cause)) return context.json({ error: '会话历史已变化，请刷新后重新选择分支位置。', code: 'HISTORY_REVISION_CHANGED' }, 409)
         if (cause instanceof PiSessionBranchTargetError) return context.json({ error: cause.message, code: 'INVALID_BRANCH_TARGET' }, 400)
         console.error('Failed to branch Pi session', { cause })
         return context.json({ error: '创建分支会话失败，请重试。' }, 500)

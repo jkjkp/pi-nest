@@ -74,10 +74,12 @@ export function branchPiSession(options: PiSessionBranchOptions, beforeShutdown?
     let draftContent: unknown
     if (options.kind === 'fork') {
       const entry = branch.find((entry) => entry.id === options.entryId)
-      if (!entry || entry.type !== 'message' || entry.message.role !== 'user') throw new PiSessionBranchTargetError('请选择当前分支的一条用户消息。')
-      target = entry.parentId
-      draft = messageText(entry.message.content)
-      draftContent = entry.message.content
+      if (!entry || entry.type !== 'message' || !['user', 'assistant'].includes(entry.message.role)) throw new PiSessionBranchTargetError('请选择当前分支的一条用户消息或助手回复。')
+      target = entry.message.role === 'assistant' ? entry.id : entry.parentId
+      if (entry.message.role === 'user') {
+        draft = messageText(entry.message.content)
+        draftContent = entry.message.content
+      }
     } else if (!target || !branch.some((entry) => entry.type === 'message' && entry.message.role === 'user')) {
       throw new PiSessionBranchTargetError('当前会话没有可复制的对话。')
     }

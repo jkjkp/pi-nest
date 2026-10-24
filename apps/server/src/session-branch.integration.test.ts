@@ -184,3 +184,30 @@ it.each(['session_info', 'custom', 'message', 'model_change', 'context_edit', 'b
     expect(finish).toHaveBeenCalledOnce()
   },
 )
+
+it('branches through an assistant reply via the existing endpoint without including subsequent conversation', async () => {
+  directory = mkdtempSync(join(tmpdir(), 'pi-nest-reply-branch-'))
+  const sessionFile = join(directory, 'source.jsonl')
+  const timestamp = new Date().toISOString()
+  writeFileSync(sessionFile, [
+    { type: 'session', version: 3, id: 'source', cwd: directory, timestamp },
+    { type: 'message', id: 'user', parentId: null, timestamp, message: { role: 'user', content: 'question', timestamp: Date.parse(timestamp) } },
+    { type: 'message', id: 'answer', parentId: 'user', timestamp, message: { role: 'assistant', content: [{ type: 'text', text: 'reply' }], stopReason: 'stop', timestamp: Date.parse(timestamp) } },
+    { type: 'message', id: 'later', parentId: 'answer', timestamp, message: { role: 'user', content: 'later question', timestamp: Date.parse(timestamp) } },
+  ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+  const binding = { sessionFile, expectedSessionId: 'source', expectedCwd: directory }
+  const before = readFileSync(sessionFile)
+  vi.mocked(listPiSessions).mockResolvedValue([{ id: 'source', cwd: directory, sessionFile, createdAt: timestamp, updatedAt: timestamp, name: undefined, firstMessage: 'question' }])
+  const finish = vi.fn()
+  const registry = { attachments: new AttachmentStore(), beginMutation: vi.fn(async () => finish) }
+  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry))
+  const response = await app.request('/api/sessions/source/branch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fork', entryId: 'answer', revision: readPiSessionHistory(binding).revision }) })
+  expect(response.status).toBe(201)
+  const result = await response.json()
+  expect(result).toMatchObject({ draft: '', session: { parentSessionId: 'source' } })
+  const childFile = readdirSync(directory).find((file) => file.includes(result.session.id))!
+  const child = readPiSessionHistory({ sessionFile: join(directory, childFile), expectedSessionId: result.session.id, expectedCwd: directory })
+  expect(child.entries.filter((entry) => entry.type === 'message').map((entry) => entry.id)).toEqual(['user', 'answer'])
+  expect(readFileSync(sessionFile)).toEqual(before)
+  expect(finish).toHaveBeenCalledOnce()
+})
