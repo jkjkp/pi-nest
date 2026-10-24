@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Hono } from 'hono'
-import { AttachmentStore } from './attachment-store.js'
+import { AttachmentError, AttachmentStore } from './attachment-store.js'
 import { createAttachmentRoutes } from './attachment-routes.js'
 import { ProjectRegistry } from './project-registry.js'
 import { RuntimeSecurity } from './runtime-security.js'
@@ -16,7 +16,28 @@ let app: Hono
 const security = new RuntimeSecurity()
 const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/octet-stream', 'x-pi-nest-file-name': encodeURIComponent('说明.html'), 'x-pi-nest-file-type': 'text/html', 'x-pi-nest-attachment-scope': encodeURIComponent(JSON.stringify({ kind: 'session', sessionId: 'a' })) }
 beforeEach(() => { directory = realpathSync(mkdtempSync(join(tmpdir(), 'pi-upload-api-'))); store = new AttachmentStore(directory); adapter.listPiSessions.mockResolvedValue([{ id: 'a' }, { id: 'b' }]); app = new Hono().route('/api/attachments', createAttachmentRoutes(store, security, new ProjectRegistry(join(directory, 'projects.json')))) })
-afterEach(() => rmSync(directory, { recursive: true, force: true }))
+afterEach(() => { rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks() })
+
+it.each(['EPERM', 'ENOSPC'])('logs %s and returns an actionable storage error without internal details', async (code) => {
+  const cause = Object.assign(new Error('private disk path'), { code, syscall: 'fsync' })
+  vi.spyOn(store, 'upload').mockRejectedValueOnce(cause)
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  const response = await app.request('/api/attachments', { method: 'POST', headers, body: 'file' })
+  expect(response.status).toBe(500)
+  await expect(response.json()).resolves.toEqual({ error: '附件保存或读取失败，请检查磁盘空间及目录权限后重试。', code: 'ATTACHMENT_STORAGE_FAILED' })
+  expect(log).toHaveBeenCalledExactlyOnceWith('Attachment processing failed', { method: 'POST', path: '/api/attachments', cause })
+})
+
+it('returns a distinct decode failure and logs its cause rather than claiming a disk failure', async () => {
+  const cause = new Error('decoder failed')
+  const error = new AttachmentError('图片无法解码或压缩，请换一张图片。', 415, 'ATTACHMENT_IMAGE_DECODE_FAILED', { cause })
+  vi.spyOn(store, 'upload').mockRejectedValueOnce(error)
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  const response = await app.request('/api/attachments', { method: 'POST', headers, body: 'file' })
+  expect(response.status).toBe(415)
+  await expect(response.json()).resolves.toEqual({ error: error.message, code: error.code })
+  expect(log).toHaveBeenCalledOnce()
+})
 
 it('requires both the configured origin and token on upload and content reads', async () => {
   for (const missing of ['origin', 'x-pi-nest-token']) {

@@ -15,7 +15,14 @@ export function createAttachmentRoutes(store: AttachmentStore, security: Runtime
   const routes = new Hono().use('*', configurationSecurity(security))
   routes.use('/:id/content', bodyLimit({ maxSize: 16_384 }))
   routes.use('/inspect', bodyLimit({ maxSize: 16_384 }))
-  routes.onError((error, c) => error instanceof AttachmentError ? c.json({ error: error.message, code: error.code }, error.status) : c.json({ error: '附件处理失败，请重试。' }, 500))
+  routes.onError((error, c) => {
+    if (!(error instanceof AttachmentError) || error.cause) console.error('Attachment processing failed', { method: c.req.method, path: c.req.path, cause: error })
+    if (error instanceof AttachmentError) return c.json({ error: error.message, code: error.code }, error.status)
+    const storageFailure = ['EACCES', 'EPERM', 'ENOSPC', 'EDQUOT', 'EROFS', 'EIO', 'EBADF', 'ENOENT'].includes((error as NodeJS.ErrnoException).code ?? '')
+    return c.json(storageFailure
+      ? { error: '附件保存或读取失败，请检查磁盘空间及目录权限后重试。', code: 'ATTACHMENT_STORAGE_FAILED' }
+      : { error: '附件处理失败，请重试。', code: 'ATTACHMENT_INTERNAL' }, 500)
+  })
   async function scopeFor(raw: unknown) {
     const parsed = scopeSchema.safeParse(raw)
     if (!parsed.success) throw new AttachmentError('附件范围无效。')

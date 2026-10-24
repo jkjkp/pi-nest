@@ -39,7 +39,7 @@ it('decodes raster pixels, refuses MIME spoofing and damaged images, and keeps S
   const ref = await store.upload(stream(bytes), 'a', 'photo.png', 'image/png')
   expect(ref).toMatchObject({ kind: 'image', width: 1, height: 1 })
   await expect(store.upload(stream(bytes), 'a', 'photo.jpg', 'image/jpeg')).rejects.toThrow('不符')
-  await expect(store.upload(stream(bytes.subarray(0, 35)), 'a', 'photo.png', 'image/png')).rejects.toThrow('解码')
+  await expect(store.upload(stream(bytes.subarray(0, 35)), 'a', 'photo.png', 'image/png')).rejects.toMatchObject({ status: 415, code: 'ATTACHMENT_IMAGE_DECODE_FAILED', message: expect.stringContaining('解码'), cause: expect.any(Error) })
   const svg = await store.upload(stream('<svg onload="alert(1)"/>'), 'a', 'x.svg', 'image/svg+xml')
   expect(svg.kind).toBe('file')
   expect(readdirSync(directory).filter((name) => name.startsWith('tmp-'))).toEqual([])

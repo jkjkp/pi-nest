@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { constants, fsyncSync, fstatSync, readSync, chmodSync, existsSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { constants, fstatSync, readSync, chmodSync, existsSync, mkdirSync, openSync, closeSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { open, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -9,7 +9,7 @@ import type { AttachmentRef, AttachmentInput, PiQueuedInput } from '@pi-nest/con
 
 const MiB = 1024 * 1024
 export class AttachmentError extends Error {
-  constructor(message: string, readonly status: 400 | 403 | 404 | 409 | 413 | 415 | 500 = 400, readonly code = 'ATTACHMENT_INVALID') { super(message) }
+  constructor(message: string, readonly status: 400 | 403 | 404 | 409 | 413 | 415 | 500 = 400, readonly code = 'ATTACHMENT_INVALID', options?: ErrorOptions) { super(message, options) }
 }
 type ObjectRecord = { ref: AttachmentRef; digest: string; scopes: string[] }
 type Submission = { input: AttachmentInput; scopes: string[]; nativeMessage: string; state: 'prepared' | 'sending' | 'accepted'; deliveryType?: string; result?: unknown }
@@ -29,10 +29,25 @@ export class AttachmentStore {
   }
   private ensure() { mkdirSync(this.directory, { recursive: true, mode: 0o700 }); chmodSync(this.directory, 0o700) }
   private save(kind: string, id: string, value: unknown) {
+    this.write(kind, id, JSON.stringify(value))
+  }
+  private write(kind: string, id: string, bytes: string | Buffer) {
     this.ensure()
     const temporary = this.path('tmp', randomUUID())
-    try { writeFileSync(temporary, JSON.stringify(value), { mode: 0o600, flag: 'wx' }); const fd = openSync(temporary, 'r'); try { fsyncSync(fd) } finally { closeSync(fd) }; renameSync(temporary, this.path(kind, id)) }
-    finally { rmSync(temporary, { force: true }) }
+    let failed = false
+    try {
+      writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx', flush: true })
+      renameSync(temporary, this.path(kind, id))
+    } catch (cause) {
+      failed = true
+      throw cause
+    } finally {
+      try { rmSync(temporary, { force: true }) }
+      catch (cause) {
+        if (!failed) throw cause
+        console.error('Failed to remove attachment temporary file', { cause })
+      }
+    }
   }
   private load<T>(kind: string, id: string): T | undefined {
     try { return JSON.parse(readFileSync(this.path(kind, id), 'utf8')) as T }
@@ -74,14 +89,7 @@ export class AttachmentStore {
   }
   private commit(bytes: Buffer, scope: string, ref: AttachmentRef, id = ref.id) {
     this.ensure()
-    if (!existsSync(this.path('data', id))) {
-      const temporary = this.path('tmp', randomUUID())
-      try {
-        writeFileSync(temporary, bytes, { mode: 0o600, flag: 'wx' })
-        const fd = openSync(temporary, 'r'); try { fsyncSync(fd) } finally { closeSync(fd) }
-        renameSync(temporary, this.path('data', id))
-      } finally { rmSync(temporary, { force: true }) }
-    }
+    if (!existsSync(this.path('data', id))) this.write('data', id, bytes)
     const existing = this.load<ObjectRecord>('meta', id)
     if (existing?.scopes.includes(scope)) {
       if (existing.ref.name === '图片' && ref.name !== '图片') { this.save('meta', id, { ...existing, ref }); return ref }
@@ -95,38 +103,63 @@ export class AttachmentStore {
     const temporary = this.path('tmp', randomUUID())
     const file = await open(temporary, 'wx', 0o600)
     let length = 0
-    const reader = body?.getReader()
+    let failed = false
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
     try {
-      if (!reader) throw new AttachmentError('文件内容为空。')
-      while (true) {
-        signal?.throwIfAborted()
-        const { value, done } = await reader.read()
-        if (done) break
-        length += value.length
-        if (length > 25 * MiB) throw new AttachmentError('单个文件不能超过 25 MiB。', 413)
-        await file.writeFile(value)
+      try {
+        reader = body?.getReader()
+        if (!reader) throw new AttachmentError('文件内容为空。')
+        while (true) {
+          signal?.throwIfAborted()
+          const { value, done } = await reader.read()
+          if (done) break
+          length += value.length
+          if (length > 25 * MiB) throw new AttachmentError('单个文件不能超过 25 MiB。', 413)
+          await file.writeFile(value)
+        }
+        if (!length) throw new AttachmentError('不能上传空文件。')
+        await file.sync()
+      } catch (cause) {
+        failed = true
+        await reader?.cancel(cause).catch(() => undefined)
+        throw cause
+      } finally {
+        reader?.releaseLock()
+        await file.close().catch((cause) => {
+          if (!failed) throw cause
+          console.error('Failed to close attachment temporary file', { cause })
+        })
       }
-      if (!length) throw new AttachmentError('不能上传空文件。')
-      await file.sync()
-    } catch (cause) { await reader?.cancel(cause).catch(() => undefined); await rm(temporary, { force: true }); throw cause }
-    finally { reader?.releaseLock(); await file.close() }
-    try {
       const bytes = readFileSync(temporary)
       const mime = this.imageMime(bytes)
       let dimensions: { width: number; height: number } | undefined
       if (mime || declaredType.startsWith('image/') && declaredType !== 'image/svg+xml' || /\.(png|jpe?g|webp|gif)$/i.test(name)) {
         if (!mime || declaredType.startsWith('image/') && declaredType !== mime && !(declaredType === 'image/jpg' && mime === 'image/jpeg')) throw new AttachmentError('图片格式与内容不符。', 415)
         if (length > 10 * MiB) throw new AttachmentError('单张图片不能超过 10 MiB。', 413)
-        const size = imageSize(bytes)
-        if (!Number.isSafeInteger(size.width) || !Number.isSafeInteger(size.height) || size.width < 1 || size.height < 1 || size.width * size.height > 40_000_000) throw new AttachmentError('图片不能超过 4000 万像素。', 413)
-        const prepared = await preparePiImage(bytes, mime)
-        dimensions = { width: prepared.width, height: prepared.height }
+        try {
+          const size = imageSize(bytes)
+          if (!Number.isSafeInteger(size.width) || !Number.isSafeInteger(size.height) || size.width < 1 || size.height < 1 || size.width * size.height > 40_000_000) throw new AttachmentError('图片不能超过 4000 万像素。', 413)
+          const prepared = await preparePiImage(bytes, mime)
+          dimensions = { width: prepared.width, height: prepared.height }
+        } catch (cause) {
+          if (cause instanceof AttachmentError) throw cause
+          throw new AttachmentError('图片无法解码或压缩，请换一张图片。', 415, 'ATTACHMENT_IMAGE_DECODE_FAILED', { cause })
+        }
       }
       const id = randomUUID()
       const safeName = name.replace(/[\x00-\x1f\x7f/\\]/g, '_').slice(0, 240) || '附件'
       return this.commit(bytes, scope, { id, name: safeName, kind: mime ? 'image' : 'file', mediaType: mime ?? 'application/octet-stream', size: length, ...dimensions })
-    } finally { await rm(temporary, { force: true }) }
+    } catch (cause) {
+      failed = true
+      throw cause
+    } finally {
+      await rm(temporary, { force: true }).catch((cause) => {
+        if (!failed) throw cause
+        console.error('Failed to remove attachment temporary file', { cause })
+      })
+    }
   }
+
   async thumbnail(id: string, scope: string) {
     const { ref, bytes } = this.read(id, scope)
     if (ref.kind !== 'image') throw new AttachmentError('此附件不是图片。', 415)
