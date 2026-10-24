@@ -1,4 +1,5 @@
 import { AnswerActions } from './answer-actions.js'
+import { Check, Copy } from 'lucide-react'
 import { MessageAttachments } from './attachment-ui.js'
 import { ModelCallErrorNotice } from './model-call-error-notice.js'
 import { RenderErrorBoundary } from './render-error-boundary.js'
@@ -242,7 +243,37 @@ function FinalAnswer({ onBranch, isRunning, onStart, onStream, parts, turnId }: 
 function UserPrompt({ prompt, startedAt }: { prompt: string; startedAt: string }) {
   const [expanded, setExpanded] = useState(false)
   const [hasOverflow, setHasOverflow] = useState(false)
+  const [touchRevealed, setTouchRevealed] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [copying, setCopying] = useState(false)
+  const [copyError, setCopyError] = useState<string>()
+  const copyingRef = useRef(false)
   const content = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!copied) return
+    const timeout = window.setTimeout(() => setCopied(false), 2000)
+    return () => window.clearTimeout(timeout)
+  }, [copied])
+
+  async function copyPrompt() {
+    if (copyingRef.current) return
+    copyingRef.current = true
+    setCopying(true)
+    setCopyError(undefined)
+    setCopied(false)
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('当前浏览器不支持剪贴板写入。')
+      try { await navigator.clipboard.writeText(prompt) }
+      catch { throw new Error('复制失败，请检查浏览器剪贴板权限后重试。') }
+      setCopied(true)
+    } catch (cause) {
+      setCopyError(cause instanceof Error ? cause.message : '复制失败，请重试。')
+    } finally {
+      copyingRef.current = false
+      setCopying(false)
+    }
+  }
 
   useLayoutEffect(() => {
     const node = content.current
@@ -258,15 +289,21 @@ function UserPrompt({ prompt, startedAt }: { prompt: string; startedAt: string }
   }, [expanded, prompt])
 
   return (
-    <div className="ml-auto w-fit max-w-[min(72%,42rem)]">
-      <header className="mb-1 truncate text-right text-xs font-normal text-foreground">用户 · <time className="font-normal text-muted-foreground" dateTime={startedAt}>{formatUpdatedAt(startedAt)}</time></header>
-      <div className="ml-auto w-fit max-w-full rounded-[10px] bg-muted/75 px-4 py-3">
+    <div className="user-prompt ml-auto w-fit max-w-[min(72%,42rem)] rounded-[10px] focus-visible:outline-2 focus-visible:outline-ring" tabIndex={0} aria-label="用户消息" data-touch-revealed={touchRevealed} onPointerDown={(event) => {
+      if (event.pointerType === 'touch' && !(event.target as HTMLElement).closest('button')) setTouchRevealed((value) => !value)
+    }} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setTouchRevealed(false) }}>
+      <div className="ml-auto w-fit max-w-full rounded-[10px] bg-[var(--user-prompt-background)] px-4 py-3 text-[var(--user-prompt-foreground)]">
         <div className={`relative ${expanded ? '' : 'max-h-56 overflow-hidden'}`} ref={content}>
           <pre className="whitespace-pre-wrap break-words font-sans text-[15px] leading-[26px]">{prompt}</pre>
-          {!expanded && hasOverflow && <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-muted to-transparent" />}
+          {!expanded && hasOverflow && <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[var(--user-prompt-background)] to-transparent" />}
         </div>
-        {hasOverflow && <Button aria-expanded={expanded} className="mt-1 h-auto px-1 py-1 text-xs" onClick={() => setExpanded(!expanded)} size="sm" type="button" variant="ghost">{expanded ? '收起' : '显示更多'}</Button>}
+        {hasOverflow && <Button aria-expanded={expanded} className="mt-1 h-auto px-1 py-1 text-xs hover:bg-white/10 hover:text-inherit dark:hover:bg-white/10" onClick={() => setExpanded(!expanded)} size="sm" type="button" variant="ghost">{expanded ? '收起' : '显示更多'}</Button>}
       </div>
+      <div className="user-prompt-actions flex h-8 items-center justify-end gap-2 text-[15px] text-muted-foreground" role="group" aria-label="用户消息操作">
+        <time className="truncate text-xs" dateTime={startedAt}>{formatUpdatedAt(startedAt)}</time>
+        <Button type="button" variant="ghost" size="icon-sm" className="border-0 text-[length:inherit] hover:bg-transparent dark:hover:bg-transparent" aria-label={copied ? '已复制' : '复制消息'} title={copied ? '已复制' : '复制消息'} disabled={copying} onClick={() => void copyPrompt()}>{copied ? <Check aria-hidden="true" className="size-[1em]" /> : <Copy aria-hidden="true" className="size-[1em]" />}</Button>
+      </div>
+      {copyError && <p role="alert" className="text-right text-xs text-destructive">{copyError}</p>}
     </div>
   )
 }

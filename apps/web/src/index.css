@@ -12,6 +12,34 @@
   opacity: 1;
 }
 
+.user-prompt {
+  --user-prompt-background: #1b3f78;
+  --user-prompt-foreground: #f5f7fa;
+}
+
+.user-prompt-actions {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.user-prompt:focus-visible .user-prompt-actions,
+.user-prompt:has(:focus-visible) .user-prompt-actions,
+.user-prompt[data-touch-revealed="true"] .user-prompt-actions {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+@media (hover: hover) {
+  .user-prompt:hover .user-prompt-actions {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+}
+
 @theme inline {
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
   --text-xs--line-height: 18px;
