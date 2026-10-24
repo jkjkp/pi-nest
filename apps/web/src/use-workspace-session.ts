@@ -11,7 +11,7 @@ import type { SessionRunController } from './session-run-controller.js'
 import { stripAnsiLine } from './ansi-text.js'
 import { activeRuntimeTurn, isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
-import { branchSession, createSession, deleteSession, fetchProjects, fetchSessions, fetchPiConfiguration, renameSession, revealProjectInFinder } from './workspace-api.js'
+import { branchSession, createSession, deleteSession, fetchProjects, fetchSessions, fetchPiConfiguration, renameSession, openProjectFolder } from './workspace-api.js'
 import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, projectName, projectSessionGroupKey, planModePolicy, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
 
 const emptyProjects: PiProject[] = []
@@ -507,7 +507,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     mutatingSessionId, creatingDraft, draftError, controlError, models: isDraft ? draftModels : models, thinkingLevels: isDraft ? draftLevels : thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus: isDraft ? draftSettingsStatus : thinkingStatus, thinkingError: isDraft ? draftSettingsError : thinkingError, thinkingFailure, currentThinkingLevel: isDraft ? draftThinking : runtimeDetails[selectedSessionId]?.thinkingLevel,
     sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
     selectSession, createBranch, startDraft, openProject, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
-    readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel,
+    readTurnPrompt, jumpToUnloadedTurn, openProjectFolder, changeModel, changeThinkingLevel,
     loadEarlier, retryHistory,
   }
 }

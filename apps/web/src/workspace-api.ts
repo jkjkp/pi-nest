@@ -51,7 +51,7 @@ export async function createSession(cwd: string, prompt: string, attachments?: {
   return body.session
 }
 
-export async function revealProjectInFinder(cwd: string) {
+export async function openProjectFolder(cwd: string) {
   await configurationRequest('/api/projects/reveal', { body: JSON.stringify({ cwd }), method: 'POST' })
 }
 

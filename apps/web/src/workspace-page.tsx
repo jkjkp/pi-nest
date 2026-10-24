@@ -39,7 +39,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
     sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
     startDraft, openProject, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
-    readTurnPrompt, jumpToUnloadedTurn, revealProjectInFinder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
+    readTurnPrompt, jumpToUnloadedTurn, openProjectFolder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
   const [attachmentError, setAttachmentError] = useState<string>()
   const isHome = !selectedSessionId && !isDraft
@@ -95,7 +95,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       onProjectOrderChange={(projectOrder) => setNavigationOrder({ ...navigationOrder, projectOrder })}
       onRemoveProject={removeProject}
       onRename={handleRename}
-      onRevealProject={revealProjectInFinder}
+      onRevealProject={openProjectFolder}
       onSelect={selectSession}
       onSessionOrderChange={(projectKey, sessionOrder) =>
         setNavigationOrder({

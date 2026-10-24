@@ -1,7 +1,7 @@
-import { execFile, spawnSync } from 'node:child_process'
-import { existsSync, writeFileSync } from 'node:fs'
-import { unlink } from 'node:fs/promises'
-import { isAbsolute, resolve } from 'node:path'
+import { execFile, spawn, spawnSync } from 'node:child_process'
+import { constants, existsSync, writeFileSync } from 'node:fs'
+import { access, stat, unlink } from 'node:fs/promises'
+import { isAbsolute, resolve, win32 } from 'node:path'
 import { promisify } from 'node:util'
 
 import { SessionManager } from '@earendil-works/pi-coding-agent'
@@ -27,8 +27,9 @@ const executeFile = promisify(execFile)
 
 function validatedCwd(cwd: string) {
   const value = cwd.trim()
-  if (!isAbsolute(value)) throw new Error('Pi workspace path must be absolute')
-  return resolve(value)
+  const paths = process.platform === 'win32' ? win32 : { isAbsolute, resolve }
+  if (!paths.isAbsolute(value)) throw new Error('Pi workspace path must be absolute')
+  return paths.resolve(value)
 }
 
 function openBoundSession({ expectedCwd, expectedSessionId, sessionFile }: PiSessionMutationOptions) {
@@ -97,12 +98,35 @@ export function createPiSession(cwd: string): PiCreatedSession {
   }
 }
 
-/** Reveals a known local workspace in macOS Finder without modifying it. */
+/** Opens a known local workspace in the server's system file manager. */
 export async function revealPiWorkspace(cwd: string) {
   const workspace = validatedCwd(cwd)
+  if (!['darwin', 'win32', 'linux'].includes(process.platform)) {
+    throw Object.assign(new Error('Unsupported system file manager'), { code: 'PROJECT_FOLDER_UNSUPPORTED' })
+  }
   try {
-    await executeFile('/usr/bin/open', ['-R', workspace])
+    if (!(await stat(workspace)).isDirectory()) throw Object.assign(new Error('Not a directory'), { code: 'ENOTDIR' })
+    await access(workspace, constants.R_OK | (process.platform === 'win32' ? 0 : constants.X_OK))
   } catch (cause) {
-    throw new Error(`Failed to reveal Pi workspace ${workspace}`, { cause })
+    const code = (cause as NodeJS.ErrnoException).code
+    throw Object.assign(new Error(`Cannot access Pi workspace ${workspace}`, { cause }), {
+      code: code === 'EACCES' || code === 'EPERM' ? 'PROJECT_FOLDER_ACCESS_DENIED' : 'PROJECT_FOLDER_UNAVAILABLE',
+    })
+  }
+  try {
+    if (process.platform === 'win32') {
+      // Explorer hands off to an existing process; its exit code does not confirm whether the folder opened.
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(win32.join(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows', 'explorer.exe'), [workspace], {
+          shell: false, windowsHide: true, detached: true, stdio: 'ignore',
+        })
+        child.once('error', reject)
+        child.once('spawn', () => { child.unref(); resolve() })
+      })
+    } else {
+      await executeFile(process.platform === 'darwin' ? '/usr/bin/open' : 'xdg-open', [workspace], { timeout: 10_000, shell: false })
+    }
+  } catch (cause) {
+    throw Object.assign(new Error(`Failed to open Pi workspace ${workspace}`, { cause }), { code: 'PROJECT_FOLDER_OPEN_FAILED' })
   }
 }

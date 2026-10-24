@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 
 const open = vi.fn()
 const create = vi.fn()
@@ -7,11 +8,14 @@ const writeFileSync = vi.fn()
 const unlink = vi.fn()
 const execFile = vi.fn()
 const spawnSync = vi.fn()
+const spawn = vi.fn()
+const stat = vi.fn()
+const access = vi.fn()
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({ SessionManager: { create, open } }))
-vi.mock('node:child_process', () => ({ execFile, spawnSync }))
-vi.mock('node:fs', () => ({ existsSync, writeFileSync }))
-vi.mock('node:fs/promises', () => ({ unlink }))
+vi.mock('node:child_process', () => ({ execFile, spawn, spawnSync }))
+vi.mock('node:fs', async (original) => ({ ...await original<typeof import('node:fs')>(), existsSync, writeFileSync }))
+vi.mock('node:fs/promises', () => ({ access, stat, unlink }))
 
 const options = {
   expectedCwd: '/working',
@@ -23,6 +27,7 @@ describe('Pi session mutations', () => {
   const appendSessionInfo = vi.fn()
 
   beforeEach(() => {
+    vi.stubGlobal('process', { ...process, platform: 'darwin' })
     open.mockReset()
     create.mockReset()
     existsSync.mockReset()
@@ -30,6 +35,9 @@ describe('Pi session mutations', () => {
     unlink.mockReset()
     execFile.mockReset()
     spawnSync.mockReset()
+    spawn.mockReset()
+    stat.mockReset().mockResolvedValue({ isDirectory: () => true })
+    access.mockReset().mockResolvedValue(undefined)
     appendSessionInfo.mockReset()
     open.mockReturnValue({
       appendSessionInfo,
@@ -43,6 +51,7 @@ describe('Pi session mutations', () => {
       getSessionId: () => 'created-session',
     })
   })
+  afterEach(() => vi.unstubAllGlobals())
 
   it('appends a validated native session name', async () => {
     const { renamePiSession } = await import('./index.js')
@@ -78,12 +87,67 @@ describe('Pi session mutations', () => {
     expect(create).toHaveBeenCalledWith('/working')
   })
 
-  it('reveals an absolute workspace through Finder without deriving a path from UI text', async () => {
-    execFile.mockImplementation((_command: string, _args: string[], callback: (error: null, stdout: string, stderr: string) => void) => callback(null, '', ''))
+  it.each([['darwin', '/usr/bin/open'], ['linux', 'xdg-open']])('opens a folder on %s without invoking a shell', async (platform, command) => {
+    vi.stubGlobal('process', { ...process, platform })
+    execFile.mockImplementation((_command: string, _args: string[], _options: unknown, callback: (error: null, stdout: string, stderr: string) => void) => callback(null, '', ''))
     const { revealPiWorkspace } = await import('./index.js')
 
-    await revealPiWorkspace('/working')
-    expect(execFile).toHaveBeenCalledWith('/usr/bin/open', ['-R', '/working'], expect.any(Function))
+    const cwd = '/working/中文 project & $(test)'
+    await revealPiWorkspace(cwd)
+    expect(stat).toHaveBeenCalledWith(cwd)
+    expect(access).toHaveBeenCalledWith(cwd, 5)
+    expect(execFile).toHaveBeenCalledWith(command, [cwd], { timeout: 10_000, shell: false }, expect.any(Function))
+  })
+
+  it.each(['C:\\工作 project & test', '\\\\server\\share\\项目 folder'])('opens %s with Windows Explorer and does not wait for its handoff exit code', async (cwd) => {
+    vi.stubGlobal('process', { ...process, platform: 'win32', env: { ...process.env, SystemRoot: 'D:\\Windows' } })
+    const child = Object.assign(new EventEmitter(), { unref: vi.fn() })
+    spawn.mockImplementation(() => { queueMicrotask(() => child.emit('spawn')); return child })
+    const { revealPiWorkspace } = await import('./index.js')
+    await revealPiWorkspace(cwd)
+    expect(spawn).toHaveBeenCalledWith('D:\\Windows\\explorer.exe', [cwd], { shell: false, windowsHide: true, detached: true, stdio: 'ignore' })
+    expect(child.unref).toHaveBeenCalledOnce()
+    expect(access).toHaveBeenCalledWith(cwd, 4)
+    child.emit('exit', 1)
+    expect(execFile).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['ENOENT', 'PROJECT_FOLDER_UNAVAILABLE'], ['ENOTDIR', 'PROJECT_FOLDER_UNAVAILABLE'],
+    ['EACCES', 'PROJECT_FOLDER_ACCESS_DENIED'], ['EPERM', 'PROJECT_FOLDER_ACCESS_DENIED'],
+  ])('rejects inaccessible folders (%s) before launching the file manager', async (code, expected) => {
+    stat.mockRejectedValueOnce(Object.assign(new Error('filesystem error'), { code }))
+    const { revealPiWorkspace } = await import('./index.js')
+    await expect(revealPiWorkspace('/working')).rejects.toMatchObject({ code: expected, cause: { code } })
+    expect(execFile).not.toHaveBeenCalled()
+    expect(spawn).not.toHaveBeenCalled()
+  })
+
+  it('rejects files, relative paths, access failures and unsupported platforms', async () => {
+    const { revealPiWorkspace } = await import('./index.js')
+    await expect(revealPiWorkspace('relative')).rejects.toThrow('must be absolute')
+    expect(stat).not.toHaveBeenCalled()
+    stat.mockResolvedValueOnce({ isDirectory: () => false })
+    await expect(revealPiWorkspace('/working')).rejects.toMatchObject({ code: 'PROJECT_FOLDER_UNAVAILABLE' })
+    access.mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'EACCES' }))
+    await expect(revealPiWorkspace('/working')).rejects.toMatchObject({ code: 'PROJECT_FOLDER_ACCESS_DENIED' })
+    vi.stubGlobal('process', { ...process, platform: 'freebsd' })
+    await expect(revealPiWorkspace('/working')).rejects.toMatchObject({ code: 'PROJECT_FOLDER_UNSUPPORTED' })
+    expect(execFile).not.toHaveBeenCalled()
+    expect(spawn).not.toHaveBeenCalled()
+  })
+
+  it.each(['darwin', 'linux', 'win32'])('reports file manager launch failures on %s', async (platform) => {
+    vi.stubGlobal('process', { ...process, platform })
+    const cause = Object.assign(new Error('launcher missing'), { code: 'ENOENT' })
+    execFile.mockImplementation((_command: string, _args: string[], _options: unknown, callback: (error: Error) => void) => callback(cause))
+    spawn.mockImplementation(() => {
+      const child = new EventEmitter()
+      queueMicrotask(() => child.emit('error', cause))
+      return child
+    })
+    const { revealPiWorkspace } = await import('./index.js')
+    await expect(revealPiWorkspace(platform === 'win32' ? 'C:\\working' : '/working')).rejects.toMatchObject({ code: 'PROJECT_FOLDER_OPEN_FAILED', cause })
   })
 
   it('preserves binding failures as the rename cause', async () => {

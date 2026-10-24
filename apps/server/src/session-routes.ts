@@ -203,8 +203,12 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
       try {
         await revealPiWorkspace(parsed.data.cwd)
         return context.body(null, 204)
-      } catch {
-        return context.json({ error: 'Failed to reveal Pi workspace in Finder' }, 500)
+      } catch (cause) {
+        const code = (cause as NodeJS.ErrnoException).code
+        if (code === 'PROJECT_FOLDER_UNAVAILABLE') return context.json({ error: '项目文件夹不存在或该路径不是文件夹。', code }, 404)
+        if (code === 'PROJECT_FOLDER_ACCESS_DENIED') return context.json({ error: '没有访问项目文件夹的权限。', code }, 403)
+        if (code === 'PROJECT_FOLDER_UNSUPPORTED') return context.json({ error: '当前系统不支持打开项目文件夹。', code }, 501)
+        return context.json({ error: '无法启动系统文件管理器，请确认当前系统支持桌面操作。', code: 'PROJECT_FOLDER_OPEN_FAILED' }, 500)
       }
     })
     .get('/sessions/:sessionId/history', async (context) => {

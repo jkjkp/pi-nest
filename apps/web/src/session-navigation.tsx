@@ -173,10 +173,11 @@ export function SessionNavigation({
                     setRemovingProject(project)
                   }}
                   onReveal={async (cwd) => {
+                    setActionError(undefined)
                     try {
                       await onRevealProject(cwd)
-                    } catch {
-                      setActionError('无法在 Finder 中显示项目，请确认目录仍可访问。')
+                    } catch (cause) {
+                      setActionError(cause instanceof Error ? cause.message : '无法打开项目文件夹，请确认目录存在且可访问。')
                     }
                   }}
                   onRename={requestRename}
@@ -294,7 +295,7 @@ function SortableProject({
             <Button aria-label={`${project.name} 更多操作`} className={`size-7 border-0 transition-opacity motion-reduce:transition-none ${actionsClass}`} disabled={!project.cwd} onClick={stopProjectInteraction} onPointerDown={stopProjectInteraction} size="icon-sm" type="button" variant="ghost"><Ellipsis aria-hidden="true" /></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem disabled={!project.cwd} onSelect={() => { if (project.cwd) void onReveal(project.cwd) }}><FolderOpen aria-hidden="true" className="mr-2 size-3.5" />在 Finder 中显示</DropdownMenuItem>
+            <DropdownMenuItem disabled={!project.cwd} onSelect={() => { if (project.cwd) void onReveal(project.cwd) }}><FolderOpen aria-hidden="true" className="mr-2 size-3.5" />打开项目文件夹</DropdownMenuItem>
             <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={!project.cwd} onSelect={() => onRemove(project)}><Trash2 aria-hidden="true" className="mr-2 size-3.5" />移除项目</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

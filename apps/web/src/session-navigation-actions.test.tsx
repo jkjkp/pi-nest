@@ -4,6 +4,35 @@ import { createRoot } from 'react-dom/client'
 import { expect, it, vi } from 'vitest'
 import { SessionNavigation } from './session-navigation.js'
 
+it.each([undefined, '没有访问项目文件夹的权限。'])('opens the selected project folder and displays actionable failures (%s)', async (failure) => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  const openFolder = vi.fn(async () => { if (failure) throw new Error(failure) })
+  try {
+    await act(() => root.render(<SessionNavigation
+      collapsedProjectKeys={{}} error={null} isLoading={false} mutationSessionId={undefined}
+      onDelete={vi.fn(async () => {})} onSelect={vi.fn()} onRename={vi.fn(async () => {})}
+      onProjectOrderChange={vi.fn()} onNewConversation={vi.fn()} onAddProject={vi.fn()}
+      onRemoveProject={vi.fn()} onRevealProject={openFolder} onSessionOrderChange={vi.fn()}
+      onToggleProject={vi.fn()} projects={[{ key: 'cwd:/fixture', cwd: '/fixture', name: 'Fixture', sessions: [] }]} selectedSessionId="" runs={{}}
+    />))
+    const more = container.querySelector<HTMLButtonElement>('[aria-label="Fixture 更多操作"]')!
+    await act(() => more.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, ctrlKey: false })))
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((node) => node.textContent === '打开项目文件夹')!
+    expect(item).toBeDefined()
+    expect(document.querySelector('[role="menu"]')?.textContent).not.toContain('Finder')
+    await act(async () => item.click())
+    expect(openFolder).toHaveBeenCalledExactlyOnceWith('/fixture')
+    if (failure) expect(container.textContent).toContain(failure)
+  } finally {
+    await act(async () => { root.unmount(); await new Promise((done) => setTimeout(done, 0)) })
+    container.remove()
+    vi.unstubAllGlobals()
+  }
+})
+
 it('limits borderless project actions to header hover/focus and keeps an open menu usable', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const matchMedia = window.matchMedia.bind(window)

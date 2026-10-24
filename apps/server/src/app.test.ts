@@ -226,6 +226,20 @@ describe('Pi Nest API', () => {
     expect(revealPiWorkspace).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    ['PROJECT_FOLDER_UNAVAILABLE', 404, '项目文件夹不存在或该路径不是文件夹。'],
+    ['PROJECT_FOLDER_ACCESS_DENIED', 403, '没有访问项目文件夹的权限。'],
+    ['PROJECT_FOLDER_UNSUPPORTED', 501, '当前系统不支持打开项目文件夹。'],
+    ['PROJECT_FOLDER_OPEN_FAILED', 500, '无法启动系统文件管理器，请确认当前系统支持桌面操作。'],
+  ])('reports %s without exposing launcher or filesystem details', async (code, status, error) => {
+    revealPiWorkspace.mockRejectedValueOnce(Object.assign(new Error('private internal path'), { code }))
+    const response = await app().request('/api/projects/reveal', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd: '/working' }),
+    })
+    expect(response.status).toBe(status)
+    await expect(response.json()).resolves.toEqual({ code, error })
+  })
+
 })
 
 describe('branch creation', () => {
