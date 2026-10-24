@@ -46,7 +46,7 @@ it('clones the native snapshot after runtime shutdown writes, and keeps fork rev
   const response = await pending
   expect(response.status).toBe(201)
   const result = await response.json()
-  expect(result.session).toMatchObject({ cwd: directory, name: 'Shutdown metadata（副本）' })
+  expect(result.session).toMatchObject({ cwd: directory, name: 'Shutdown metadata（副本）', parentSessionId: 'source' })
   expect(result.session.id).not.toBe('source')
   expect(result.draft).toBe('')
   expect(result.session.sessionFile).toBeUndefined()

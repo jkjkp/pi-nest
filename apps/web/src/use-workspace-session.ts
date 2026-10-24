@@ -188,6 +188,8 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   useEffect(() => () => sessionRuns.releaseForeground(), [sessionRuns])
 
   function selectSession(sessionId: string) {
+    const session = queryClient.getQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'])?.find((session) => session.id === sessionId)
+    if (session) setProjectCollapsed(projectSessionGroupKey(session.cwd), false)
     setDraftPrompt('')
     setDraftError(undefined)
     setSearchParams({ session: sessionId })

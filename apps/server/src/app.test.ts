@@ -71,7 +71,7 @@ describe('Pi Nest API', () => {
   it('reports readiness and lists safe native session summaries', async () => {
     const health = await app().request('/api/health')
     await expect(health.json()).resolves.toEqual({ status: 'ok' })
-    const response = await app().request('/api/sessions')
+    const response = await createApp(runtimeMock() as unknown as PiRuntimeRegistry).request('/api/sessions')
     await expect(response.json()).resolves.toEqual({
       sessions: [{ createdAt: '2026-09-19T00:00:00.000Z', cwd: '/working', firstMessage: 'Original question', id: 'session-1', name: 'Existing session', updatedAt: nativeSession.updatedAt }],
     })
@@ -242,6 +242,24 @@ describe('Pi Nest API', () => {
 
 })
 
+it('lists native parent relationships without exposing file paths', async () => {
+  adapter.listPiSessions.mockResolvedValue([
+    nativeSession,
+    { ...nativeSession, id: 'child', sessionFile: '/private/child.jsonl', parentSessionPath: nativeSession.sessionFile },
+    { ...nativeSession, id: 'orphan', sessionFile: '/private/orphan.jsonl', parentSessionPath: '/private/missing.jsonl' },
+  ])
+  const response = await createApp(runtimeMock() as unknown as PiRuntimeRegistry).request('/api/sessions')
+  const body = await response.json()
+  expect(response.status).toBe(200)
+  expect(body.sessions[1].parentSessionId).toBe(nativeSession.id)
+  expect(body.sessions[2].parentSessionMissing).toBe(true)
+  expect(JSON.stringify(body)).not.toContain('/private/')
+  for (const session of body.sessions) {
+    expect(session).not.toHaveProperty('sessionFile')
+    expect(session).not.toHaveProperty('parentSessionPath')
+  }
+})
+
 describe('branch creation', () => {
   it('creates a native branch under the source mutation lock and returns only safe fields', async () => {
     adapter.listPiSessions.mockResolvedValue([nativeSession])
@@ -254,7 +272,7 @@ describe('branch creation', () => {
     const response = await createApp(registry as unknown as PiRuntimeRegistry).request('/api/sessions/session-1/branch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) }) })
     expect(response.status).toBe(201)
     const body = await response.json()
-    expect(body).toEqual({ session: { id: 'child', cwd: '/working', createdAt: 'now', updatedAt: 'now' }, draft: 'selected text' })
+    expect(body).toEqual({ session: { id: 'child', cwd: '/working', createdAt: 'now', updatedAt: 'now', parentSessionId: 'session-1' }, draft: 'selected text' })
     expect(adapter.readPiSessionForkSource).toHaveBeenCalledWith({ sessionFile: nativeSession.sessionFile, revision: 'a'.repeat(64) })
     expect(adapter.branchPiSession).toHaveBeenCalledWith({ expectedSessionId: nativeSession.id, expectedCwd: nativeSession.cwd, sessionFile: nativeSession.sessionFile, kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) }, source)
     expect(finish).toHaveBeenCalledOnce()

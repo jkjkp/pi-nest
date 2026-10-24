@@ -103,7 +103,7 @@ it('persists a fork before the first message even when no conversation entries r
   expect(child.getBranch()).toEqual([])
   expect(child.getHeader()?.parentSession).toBe(source.getSessionFile())
   expect(result.draft).toBe('first')
-  expect((await SessionManager.list(directory, join(directory, 'sessions'))).some((info) => info.id === result.session.id)).toBe(true)
+  expect((await SessionManager.list(directory, join(directory, 'sessions'))).find((info) => info.id === result.session.id)?.parentSessionPath).toBe(source.getSessionFile())
 })
 it('preserves pre-conversation settings in a fork before the first user message', () => {
   const model = source.appendModelChange('fixture', 'test')

@@ -1,3 +1,4 @@
+import { resolveSessionLineage } from './session-lineage.js'
 import { AttachmentError } from './attachment-store.js'
 import { HistorySnapshotExpired } from './session-history-snapshots.js'
 import { runtimeSettingsSchema } from './configuration-schema.js'
@@ -88,10 +89,10 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
   return new Hono()
     .get('/sessions', async (context) => {
       try {
-        const sessions = await listPiSessions()
+        const sessions = resolveSessionLineage(await listPiSessions())
 
         return context.json({
-          sessions: sessions.map(({ id, cwd, name, firstMessage, createdAt, updatedAt }) => ({ id, cwd, name, firstMessage: runtime.attachments.displayPrompt(firstMessage, id), createdAt, updatedAt })),
+          sessions: sessions.map(({ id, cwd, name, firstMessage, createdAt, updatedAt, parentSessionId, parentSessionMissing }) => ({ id, cwd, name, firstMessage: runtime.attachments.displayPrompt(firstMessage, id), createdAt, updatedAt, parentSessionId, parentSessionMissing })),
         } satisfies PiSessionsResponse)
       } catch {
         return context.json({ error: 'Failed to list Pi sessions' }, 500)
@@ -185,7 +186,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
             draftText = projected.content.flatMap((block: any) => block.type === 'text' ? [block.text] : []).join('')
           }
         }
-        return context.json({ session: { id, cwd, createdAt, updatedAt: createdAt, name, firstMessage: runtime.attachments.displayPrompt(firstMessage, id) }, draft: draftText, ...(attachments?.length ? { attachments } : {}) }, 201)
+        return context.json({ session: { id, cwd, createdAt, updatedAt: createdAt, name, parentSessionId: resolved.session.id, firstMessage: runtime.attachments.displayPrompt(firstMessage, id) }, draft: draftText, ...(attachments?.length ? { attachments } : {}) }, 201)
       } catch (cause) {
         if (historyRevisionChanged(cause)) return context.json({ error: '会话历史已变化，请点击“刷新位置”后重新选择分叉消息。', code: 'HISTORY_REVISION_CHANGED' }, 409)
         if (cause instanceof PiSessionBranchTargetError) return context.json({ error: cause.message, code: 'INVALID_BRANCH_TARGET' }, 400)

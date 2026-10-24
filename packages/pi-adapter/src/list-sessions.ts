@@ -1,6 +1,7 @@
 import { SessionManager } from '@earendil-works/pi-coding-agent'
 
 export type PiSessionSummary = {
+  parentSessionPath?: string
   createdAt?: string
   id: string
   name: string | undefined
@@ -33,6 +34,7 @@ export async function listPiSessions(): Promise<PiSessionSummary[]> {
       name: session.name || undefined,
       firstMessage: sessionFirstMessage(session.firstMessage),
       sessionFile: session.path,
+      parentSessionPath: session.parentSessionPath,
       cwd: session.cwd || undefined,
       updatedAt: session.modified.toISOString(),
     }))

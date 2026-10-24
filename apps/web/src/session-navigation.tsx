@@ -10,18 +10,19 @@ import {
   useSensors,
 } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { ChevronRight, Ellipsis, Folder, FolderOpen, Pencil, Plus, Search, SquarePen, Trash2 } from 'lucide-react'
+import { ChevronRight, Ellipsis, Folder, FolderOpen, List, ListTree, Plus, Search, SquarePen, Trash2 } from 'lucide-react'
 
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { SessionRenameDialog } from './session-rename-dialog.js'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { useWorkspaceStore } from './workspace-store.js'
-import { SessionStatusIndicator } from './session-status-indicator.js'
+import { SessionNavigationRow } from './session-navigation-row.js'
+import { SessionTreeNavigation } from './session-tree-navigation.js'
+import { buildSessionTree, reorderSessionSiblings } from './session-tree.js'
 import { NavigationTitle } from './navigation-title.js'
 import { isRunActive, type SessionRunSummary } from './session-run-model.js'
 import { filterProjectsByQuery, type PiSessionSummary, type ProjectSessionGroup, sessionDisplayName } from './workspace.js'
@@ -79,8 +80,15 @@ export function SessionNavigation({
   const deleteBlocked = deleteBusy || isRunActive(runs[deleting?.id ?? '']?.status ?? (deletingNotification?.pendingRunId ? 'running' : 'idle'))
   const [removingProject, setRemovingProject] = useState<ProjectSessionGroup>()
   const [actionError, setActionError] = useState<string>()
+  const navigationView = useWorkspaceStore((state) => state.navigationView)
+  const setNavigationView = useWorkspaceStore((state) => state.setNavigationView)
   const [searchValue, setSearchValue] = useState('')
-  const visibleProjects = useMemo(() => filterProjectsByQuery(projects, searchValue), [projects, searchValue])
+  const visibleProjects = useMemo(() => {
+    const filtered = filterProjectsByQuery(projects, searchValue)
+    if (navigationView === 'list' || !searchValue.trim()) return filtered
+    const keys = new Set(filtered.map((project) => project.key))
+    return projects.filter((project) => keys.has(project.key))
+  }, [projects, searchValue, navigationView])
   const isFiltering = searchValue.trim().length > 0
 
   function requestRename(session: PiSessionSummary) {
@@ -116,6 +124,11 @@ export function SessionNavigation({
     if (kind !== 'session' || event.active.data.current?.projectKey !== over.data.current?.projectKey) return
     const project = projects.find((candidate) => candidate.key === event.active.data.current?.projectKey)
     if (!project) return
+    if (navigationView === 'tree') {
+      const order = reorderSessionSiblings(buildSessionTree(project.sessions), String(event.active.id).slice('session:'.length), String(over.id).slice('session:'.length))
+      if (order) onSessionOrderChange(project.key, order)
+      return
+    }
     const activeIndex = project.sessions.findIndex((session) => `session:${session.id}` === event.active.id)
     const overIndex = project.sessions.findIndex((session) => `session:${session.id}` === over.id)
     if (activeIndex >= 0 && overIndex >= 0) {
@@ -144,7 +157,13 @@ export function SessionNavigation({
       </div>
       <div className="flex shrink-0 items-center justify-between px-4 pt-3 pb-1">
         <h3 className="text-xs font-normal text-muted-foreground">项目</h3>
+        <div className="flex items-center gap-1">
+        <div role="group" aria-label="会话显示方式" className="flex items-center rounded-md border p-0.5">
+          <Button aria-label="列表视图" title="列表视图" aria-pressed={navigationView === 'list'} size="icon-sm" className="size-6" variant={navigationView === 'list' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('list')}><List aria-hidden="true" className="size-3.5" /></Button>
+          <Button aria-label="树状视图" title="树状视图" aria-pressed={navigationView === 'tree'} size="icon-sm" className="size-6" variant={navigationView === 'tree' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('tree')}><ListTree aria-hidden="true" className="size-3.5" /></Button>
+        </div>
         <Button aria-label="创建项目" size="icon-sm" variant="ghost" onClick={onAddProject}><Plus aria-hidden="true" className="size-4" /></Button>
+        </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-1 p-2">
@@ -153,11 +172,17 @@ export function SessionNavigation({
           {actionError && !renaming && !deleting && !removingProject && <p className="px-3 py-1 text-xs text-destructive" role="alert">{actionError}</p>}
           {!isLoading && !error && projects.length === 0 && <p className="p-3 text-sm text-muted-foreground">未发现本机 Pi 会话</p>}
           {!isLoading && !error && projects.length > 0 && visibleProjects.length === 0 && <p className="p-3 text-sm text-muted-foreground">未找到匹配的项目或会话</p>}
-          <DndContext collisionDetection={closestCenter} onDragEnd={reorder} sensors={sensors}>
+          <DndContext collisionDetection={(args) => closestCenter({ ...args, droppableContainers: args.droppableContainers.filter((container) => {
+            const active = args.active.data.current
+            const target = container.data.current
+            return active?.kind === target?.kind && (active?.kind === 'project' || active?.projectKey === target?.projectKey && (navigationView !== 'tree' || active?.parentId === target?.parentId))
+          }) })} onDragEnd={reorder} sensors={sensors}>
             <SortableContext items={visibleProjects.map((project) => `project:${project.key}`)} strategy={verticalListSortingStrategy}>
               {visibleProjects.map((project, index) => (
                 <SortableProject
-                  collapsed={collapsedProjectKeys[project.key] ?? !project.sessions.some((session) => session.id === selectedSessionId)}
+                  collapsed={!isFiltering && (collapsedProjectKeys[project.key] ?? !project.sessions.some((session) => session.id === selectedSessionId))}
+                  navigationView={navigationView}
+                  searchValue={searchValue}
                   disabled={isFiltering}
                   index={index}
                   key={project.key}
@@ -225,6 +250,8 @@ export function SessionNavigation({
 }
 
 function SortableProject({
+  navigationView,
+  searchValue,
   collapsed,
   disabled,
   index,
@@ -240,6 +267,8 @@ function SortableProject({
   runs,
   selectedSessionId,
 }: {
+  navigationView: 'list' | 'tree'
+  searchValue: string
   collapsed: boolean
   disabled: boolean
   index: number
@@ -304,9 +333,9 @@ function SortableProject({
       </div>
       {expanded && (
         <div className="space-y-1 pl-2" id={sessionListId}>
-          <SortableContext items={project.sessions.map((session) => `session:${session.id}`)} strategy={verticalListSortingStrategy}>
+          {navigationView === 'tree' ? <SessionTreeNavigation sessions={project.sessions} projectKey={project.key} searchValue={searchValue} projectMatches={Boolean(searchValue.trim()) && `${project.name} ${project.cwd ?? ''}`.toLocaleLowerCase().includes(searchValue.trim().toLocaleLowerCase())} disabled={disabled} mutationSessionId={mutationSessionId} onDelete={onDelete} onRename={onRename} onSelect={onSelect} runs={runs} selectedSessionId={selectedSessionId} /> : <SortableContext items={project.sessions.map((session) => `session:${session.id}`)} strategy={verticalListSortingStrategy}>
             {project.sessions.map((session) => (
-              <SortableSession
+              <SessionNavigationRow
                 key={session.id}
                 disabled={disabled}
                 mutationSessionId={mutationSessionId}
@@ -319,73 +348,9 @@ function SortableProject({
                 session={session}
               />
             ))}
-          </SortableContext>
+          </SortableContext>}
         </div>
       )}
     </section>
-  )
-}
-
-function SortableSession({
-  disabled,
-  mutationSessionId,
-  onDelete,
-  onRename,
-  onSelect,
-  projectKey,
-  run,
-  selected,
-  session,
-}: {
-  disabled: boolean
-  mutationSessionId: string | undefined
-  onDelete: (session: PiSessionSummary) => void
-  onRename: (session: PiSessionSummary) => void
-  onSelect: (sessionId: string) => void
-  projectKey: string
-  run: SessionRunSummary | undefined
-  selected: boolean
-  session: PiSessionSummary
-}) {
-  const { attributes, listeners, setActivatorNodeRef, setNodeRef, transform, transition, isDragging } = useSortable({
-    data: { kind: 'session', projectKey },
-    disabled,
-    id: `session:${session.id}`,
-  })
-  const [menuOpen, setMenuOpen] = useState(false)
-  const notification = useWorkspaceStore((state) => state.sessionNotifications[session.id])
-  const unread = Boolean(notification?.completedRunId && notification.completedRunId !== notification.readRunId)
-  const status = run?.status ?? (notification?.pendingRunId ? 'running' : 'idle')
-  const cannotDelete = isRunActive(status) || mutationSessionId === session.id
-
-  return (
-    <ContextMenu onOpenChange={setMenuOpen}>
-      <ContextMenuTrigger asChild>
-        <div className={`group/session flex items-center gap-1 rounded-lg ${selected ? 'bg-primary/10' : 'hover:bg-muted/50'}`} ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
-          <Button
-            aria-current={selected ? 'page' : undefined}
-            className="h-9 min-w-0 flex-1 justify-start border-0 bg-transparent px-2 text-left hover:bg-transparent"
-            onClick={() => onSelect(session.id)}
-            ref={setActivatorNodeRef}
-            variant="ghost"
-            {...attributes}
-            {...listeners}
-          >
-            <NavigationTitle className="text-sm font-normal" stopped={isDragging || menuOpen}>{sessionDisplayName(session)}</NavigationTitle>
-            <SessionStatusIndicator status={status} unread={unread} />
-          </Button>
-          <Button aria-label={`删除 ${sessionDisplayName(session)}`} title={isRunActive(status) ? '运行中的会话无法删除' : '删除会话'} className="pointer-events-none mr-1 shrink-0 text-muted-foreground opacity-0 hover:text-destructive disabled:opacity-0 group-hover/session:pointer-events-auto group-hover/session:opacity-100 group-hover/session:disabled:opacity-50 focus-visible:pointer-events-auto focus-visible:opacity-100" disabled={cannotDelete} onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onDelete(session) }} size="icon-sm" type="button" variant="ghost"><Trash2 aria-hidden="true" className="size-3.5" /></Button>
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent>
-        <ContextMenuItem disabled={mutationSessionId === session.id} onSelect={() => onRename(session)}>
-          <Pencil aria-hidden="true" className="mr-2 size-3.5" />重命名
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={cannotDelete} onSelect={() => onDelete(session)}>
-          <Trash2 aria-hidden="true" className="mr-2 size-3.5" />删除
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
   )
 }

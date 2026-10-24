@@ -61,12 +61,25 @@ it('restores project and session manual orders from local storage on a fresh sto
   const first = (await import('./workspace-store.js')).useWorkspaceStore
   const order = reconcileNavigationOrder({ projectOrder: ['cwd:/alpha', 'cwd:/beta'], sessionOrderByProject: { 'cwd:/alpha': ['old', 'new'] } }, groupSessionsByProject(sessions))
   first.getState().setNavigationOrder(order)
+  first.getState().setNavigationView('tree')
+  first.getState().setSessionCollapsed('parent', false)
   expect(saved.has('pi-nest-navigation-order')).toBe(true)
   vi.resetModules()
   const restarted = (await import('./workspace-store.js')).useWorkspaceStore
   await restarted.persist.rehydrate()
   expect(restarted.getState().navigationOrder).toEqual(order)
+  expect(restarted.getState().navigationView).toBe('tree')
+  expect(restarted.getState().collapsedSessionIds).toEqual({ parent: false })
   const restored = applyNavigationOrder(groupSessionsByProject([...sessions].reverse(), restarted.getState().navigationOrder.projectCreatedAt), restarted.getState().navigationOrder)
   expect(restored.map((project) => project.key)).toEqual(['cwd:/alpha', 'cwd:/beta'])
   expect(restored[0]?.sessions.map((session) => session.id)).toEqual(['old', 'new'])
+})
+
+it('loads old preferences with list view and no session collapse overrides', async () => {
+  vi.stubGlobal('window', { localStorage: { getItem: () => JSON.stringify({ state: { navigationOrder: emptyNavigationOrder }, version: 0 }), setItem: vi.fn(), removeItem: vi.fn() } })
+  vi.resetModules()
+  const store = (await import('./workspace-store.js')).useWorkspaceStore
+  await store.persist.rehydrate()
+  expect(store.getState().navigationView).toBe('list')
+  expect(store.getState().collapsedSessionIds).toEqual({})
 })

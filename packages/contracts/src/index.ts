@@ -62,6 +62,8 @@ export type PiRuntimeModel = { id: string; name?: string; provider: string }
 export type PiRuntimeCommand = { name: string; description?: string; source: 'extension' | 'prompt' | 'skill' }
 
 export type PiSessionSummary = {
+  parentSessionId?: string
+  parentSessionMissing?: boolean
   createdAt?: string
   cwd?: string
   firstMessage?: string

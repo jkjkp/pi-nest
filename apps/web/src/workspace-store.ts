@@ -31,6 +31,11 @@ type WorkspaceState = {
   finishNotification: (sessionId: string, runId: string, unread: boolean, successful: boolean) => void
   markSessionRead: (sessionId: string, runId: string) => void
   removeSessionNotification: (sessionId: string) => void
+  navigationView: 'list' | 'tree'
+  setNavigationView: (view: 'list' | 'tree') => void
+  collapsedSessionIds: Record<string, boolean>
+  setSessionCollapsed: (id: string, collapsed: boolean) => void
+  expandSessionAncestors: (ids: string[]) => void
   collapsedProjectKeys: Record<string, boolean>
   drafts: Record<string, string>
   extensionStatuses: Record<string, Record<string, string>>
@@ -113,6 +118,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     const { [sessionId]: _removed, ...sessionNotifications } = state.sessionNotifications
     return { sessionNotifications }
   }),
+  navigationView: 'list',
+  setNavigationView: (navigationView) => set({ navigationView }),
+  collapsedSessionIds: {},
+  setSessionCollapsed: (id, collapsed) => set((state) => ({ collapsedSessionIds: { ...state.collapsedSessionIds, [id]: collapsed } })),
+  expandSessionAncestors: (ids) => set((state) => ids.every((id) => state.collapsedSessionIds[id] === false) ? state : ({ collapsedSessionIds: { ...state.collapsedSessionIds, ...Object.fromEntries(ids.map((id) => [id, false])) } })),
   collapsedProjectKeys: {},
   drafts: {},
   extensionStatuses: {},
@@ -345,7 +355,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
       storage: createJSONStorage(() => (typeof window === 'undefined' ? unavailableStorage : window.localStorage)),
     },
   ),
