@@ -28,6 +28,8 @@ describe('Pi session mutations', () => {
 
   beforeEach(() => {
     vi.stubGlobal('process', { ...process, platform: 'darwin' })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'info').mockImplementation(() => {})
     open.mockReset()
     create.mockReset()
     existsSync.mockReset()
@@ -51,7 +53,7 @@ describe('Pi session mutations', () => {
       getSessionId: () => 'created-session',
     })
   })
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
   it('appends a validated native session name', async () => {
     const { renamePiSession } = await import('./index.js')
@@ -105,10 +107,11 @@ describe('Pi session mutations', () => {
     spawn.mockImplementation(() => { queueMicrotask(() => child.emit('spawn')); return child })
     const { revealPiWorkspace } = await import('./index.js')
     await revealPiWorkspace(cwd)
-    expect(spawn).toHaveBeenCalledWith('D:\\Windows\\explorer.exe', [cwd], { shell: false, windowsHide: true, detached: true, stdio: 'ignore' })
+    expect(spawn).toHaveBeenCalledWith('D:\\Windows\\explorer.exe', [cwd], { shell: false, windowsHide: false, detached: true, stdio: 'ignore' })
     expect(child.unref).toHaveBeenCalledOnce()
     expect(access).toHaveBeenCalledWith(cwd, 4)
-    child.emit('exit', 1)
+    child.emit('exit', 1, null)
+    expect(console.info).toHaveBeenCalledWith('Windows Explorer exited; window visibility is unknown', { executable: 'D:\\Windows\\explorer.exe', code: 1, signal: null })
     expect(execFile).not.toHaveBeenCalled()
   })
 
@@ -148,6 +151,29 @@ describe('Pi session mutations', () => {
     })
     const { revealPiWorkspace } = await import('./index.js')
     await expect(revealPiWorkspace(platform === 'win32' ? 'C:\\working' : '/working')).rejects.toMatchObject({ code: 'PROJECT_FOLDER_OPEN_FAILED', cause })
+    expect(console.error).toHaveBeenCalledWith('Failed to launch system file manager', expect.objectContaining({ platform, code: 'ENOENT', message: 'launcher missing', executable: expect.any(String), cause }))
+  })
+
+
+  it('logs Windows Explorer errors after handoff without retrying the open request', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'win32' })
+    const child = Object.assign(new EventEmitter(), { unref: vi.fn() })
+    spawn.mockImplementation(() => { queueMicrotask(() => child.emit('spawn')); return child })
+    const { revealPiWorkspace } = await import('./index.js')
+    await revealPiWorkspace('D:\\project')
+    const cause = Object.assign(new Error('late failure'), { code: 'EPERM', errno: -1, syscall: 'kill' })
+    child.emit('error', cause)
+    expect(console.error).toHaveBeenCalledWith('Windows Explorer error after launch', expect.objectContaining({ platform: 'win32', executable: expect.any(String), cause }))
+    expect(spawn).toHaveBeenCalledOnce()
+  })
+
+  it('logs synchronous Windows launch errors with the original system details', async () => {
+    vi.stubGlobal('process', { ...process, platform: 'win32' })
+    const cause = Object.assign(new Error('blocked'), { code: 'EACCES', errno: -4092, syscall: 'spawn' })
+    spawn.mockImplementation(() => { throw cause })
+    const { revealPiWorkspace } = await import('./index.js')
+    await expect(revealPiWorkspace('D:\\project')).rejects.toMatchObject({ code: 'PROJECT_FOLDER_OPEN_FAILED', cause })
+    expect(console.error).toHaveBeenCalledWith('Failed to launch system file manager', expect.objectContaining({ platform: 'win32', code: 'EACCES', errno: -4092, syscall: 'spawn', message: 'blocked', cause }))
   })
 
   it('preserves binding failures as the rename cause', async () => {

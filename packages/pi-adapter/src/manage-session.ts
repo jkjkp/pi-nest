@@ -98,7 +98,7 @@ export function createPiSession(cwd: string): PiCreatedSession {
   }
 }
 
-/** Opens a known local workspace in the server's system file manager. */
+/** Requests that the server's system file manager open a known local workspace. */
 export async function revealPiWorkspace(cwd: string) {
   const workspace = validatedCwd(cwd)
   if (!['darwin', 'win32', 'linux'].includes(process.platform)) {
@@ -113,20 +113,30 @@ export async function revealPiWorkspace(cwd: string) {
       code: code === 'EACCES' || code === 'EPERM' ? 'PROJECT_FOLDER_ACCESS_DENIED' : 'PROJECT_FOLDER_UNAVAILABLE',
     })
   }
+  const executable = process.platform === 'win32'
+    ? win32.join(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows', 'explorer.exe')
+    : process.platform === 'darwin' ? '/usr/bin/open' : 'xdg-open'
   try {
     if (process.platform === 'win32') {
       // Explorer hands off to an existing process; its exit code does not confirm whether the folder opened.
       await new Promise<void>((resolve, reject) => {
-        const child = spawn(win32.join(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows', 'explorer.exe'), [workspace], {
-          shell: false, windowsHide: true, detached: true, stdio: 'ignore',
+        let launched = false
+        const child = spawn(executable, [workspace], {
+          shell: false, windowsHide: false, detached: true, stdio: 'ignore',
         })
-        child.once('error', reject)
-        child.once('spawn', () => { child.unref(); resolve() })
+        child.on('error', (cause) => {
+          if (!launched) reject(cause)
+          else console.error('Windows Explorer error after launch', { platform: process.platform, executable, cause })
+        })
+        child.once('exit', (code, signal) => console.info('Windows Explorer exited; window visibility is unknown', { executable, code, signal }))
+        child.once('spawn', () => { launched = true; child.unref(); resolve() })
       })
     } else {
-      await executeFile(process.platform === 'darwin' ? '/usr/bin/open' : 'xdg-open', [workspace], { timeout: 10_000, shell: false })
+      await executeFile(executable, [workspace], { timeout: 10_000, shell: false })
     }
   } catch (cause) {
+    const error = cause as NodeJS.ErrnoException
+    console.error('Failed to launch system file manager', { platform: process.platform, executable, code: error.code, errno: error.errno, syscall: error.syscall, message: error.message, cause })
     throw Object.assign(new Error(`Failed to open Pi workspace ${workspace}`, { cause }), { code: 'PROJECT_FOLDER_OPEN_FAILED' })
   }
 }

@@ -81,6 +81,7 @@ export function SessionNavigation({
   const deleteBusy = deletePending || Boolean(deleting && mutationSessionId === deleting.id)
   const deleteBlocked = deleteBusy || isRunActive(runs[deleting?.id ?? '']?.status ?? (deletingNotification?.pendingRunId ? 'running' : 'idle'))
   const [removingProject, setRemovingProject] = useState<ProjectSessionGroup>()
+  const [folderNotice, setFolderNotice] = useState<string>()
   const [actionError, setActionError] = useState<string>()
   const navigationView = useWorkspaceStore((state) => state.navigationView)
   const setNavigationView = useWorkspaceStore((state) => state.setNavigationView)
@@ -172,6 +173,7 @@ export function SessionNavigation({
           {isLoading && Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-16" />)}
           {error && <p className="p-3 text-sm text-destructive">会话列表不可用</p>}
           {actionError && !renaming && !deleting && !removingProject && <p className="px-3 py-1 text-xs text-destructive" role="alert">{actionError}</p>}
+          {folderNotice && <p className="px-3 py-1 text-xs text-muted-foreground" role="status">{folderNotice}</p>}
           {!isLoading && !error && projects.length === 0 && <p className="p-3 text-sm text-muted-foreground">未发现本机 Pi 会话</p>}
           {!isLoading && !error && projects.length > 0 && visibleProjects.length === 0 && <p className="p-3 text-sm text-muted-foreground">未找到匹配的项目或会话</p>}
           <DndContext collisionDetection={(args) => closestCenter({ ...args, droppableContainers: args.droppableContainers.filter((container) => {
@@ -206,9 +208,11 @@ export function SessionNavigation({
                     setRemovingProject(project)
                   }}
                   onReveal={async (cwd) => {
+                    setFolderNotice(undefined)
                     setActionError(undefined)
                     try {
                       await onRevealProject(cwd)
+                      setFolderNotice('已请求系统打开项目文件夹')
                     } catch (cause) {
                       setActionError(cause instanceof Error ? cause.message : '无法打开项目文件夹，请确认目录存在且可访问。')
                     }
