@@ -25,10 +25,8 @@ it.each([undefined, '没有访问项目文件夹的权限。'])('opens the selec
     expect(document.querySelector('[role="menu"]')?.textContent).not.toContain('Finder')
     await act(async () => item.click())
     expect(openFolder).toHaveBeenCalledExactlyOnceWith('/fixture')
-    if (failure) {
-      expect(container.textContent).toContain(failure)
-      expect(container.textContent).not.toContain('已请求系统打开项目文件夹')
-    } else expect(container.querySelector('[role="status"]')?.textContent).toBe('已请求系统打开项目文件夹')
+    if (failure) expect(container.textContent).toContain(failure)
+    expect(container.textContent).not.toContain('已请求系统打开项目文件夹')
   } finally {
     await act(async () => { root.unmount(); await new Promise((done) => setTimeout(done, 0)) })
     container.remove()

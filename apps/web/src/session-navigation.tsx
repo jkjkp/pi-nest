@@ -81,7 +81,6 @@ export function SessionNavigation({
   const deleteBusy = deletePending || Boolean(deleting && mutationSessionId === deleting.id)
   const deleteBlocked = deleteBusy || isRunActive(runs[deleting?.id ?? '']?.status ?? (deletingNotification?.pendingRunId ? 'running' : 'idle'))
   const [removingProject, setRemovingProject] = useState<ProjectSessionGroup>()
-  const [folderNotice, setFolderNotice] = useState<string>()
   const [actionError, setActionError] = useState<string>()
   const navigationView = useWorkspaceStore((state) => state.navigationView)
   const setNavigationView = useWorkspaceStore((state) => state.setNavigationView)
@@ -165,7 +164,7 @@ export function SessionNavigation({
           <Button aria-label="列表视图" title="列表视图" aria-pressed={navigationView === 'list'} size="icon-sm" className="size-6 border-0" variant={navigationView === 'list' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('list')}><List aria-hidden="true" className="size-3.5" /></Button>
           <Button aria-label="树状视图" title="树状视图" aria-pressed={navigationView === 'tree'} size="icon-sm" className="size-6 border-0" variant={navigationView === 'tree' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('tree')}><ListTree aria-hidden="true" className="size-3.5" /></Button>
         </div>
-        <Button aria-label="创建项目" size="icon-sm" variant="ghost" onClick={onAddProject}><Plus aria-hidden="true" className="size-4" /></Button>
+        <Button aria-label="创建项目" className="border-0" size="icon-sm" variant="ghost" onClick={onAddProject}><Plus aria-hidden="true" className="size-4" /></Button>
         </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
@@ -173,7 +172,6 @@ export function SessionNavigation({
           {isLoading && Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-16" />)}
           {error && <p className="p-3 text-sm text-destructive">会话列表不可用</p>}
           {actionError && !renaming && !deleting && !removingProject && <p className="px-3 py-1 text-xs text-destructive" role="alert">{actionError}</p>}
-          {folderNotice && <p className="px-3 py-1 text-xs text-muted-foreground" role="status">{folderNotice}</p>}
           {!isLoading && !error && projects.length === 0 && <p className="p-3 text-sm text-muted-foreground">未发现本机 Pi 会话</p>}
           {!isLoading && !error && projects.length > 0 && visibleProjects.length === 0 && <p className="p-3 text-sm text-muted-foreground">未找到匹配的项目或会话</p>}
           <DndContext collisionDetection={(args) => closestCenter({ ...args, droppableContainers: args.droppableContainers.filter((container) => {
@@ -208,11 +206,9 @@ export function SessionNavigation({
                     setRemovingProject(project)
                   }}
                   onReveal={async (cwd) => {
-                    setFolderNotice(undefined)
                     setActionError(undefined)
                     try {
                       await onRevealProject(cwd)
-                      setFolderNotice('已请求系统打开项目文件夹')
                     } catch (cause) {
                       setActionError(cause instanceof Error ? cause.message : '无法打开项目文件夹，请确认目录存在且可访问。')
                     }
