@@ -13,7 +13,7 @@ beforeEach(() => {
   document.body.append(container)
   root = createRoot(container)
 })
-afterEach(async () => { await act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(async () => { await act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers() })
 function button(label: string) { return container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)! }
 
 it('copies the original reply with borderless icons matching the text size', async () => {
@@ -23,20 +23,48 @@ it('copies the original reply with borderless icons matching the text size', asy
   expect(button('复制回复').classList.contains('border-0')).toBe(true)
   expect(button('分支到聊天').classList.contains('border-0')).toBe(true)
   expect(button('复制回复').querySelector('svg')?.classList.contains('size-[1em]')).toBe(true)
+  const icon = button('复制回复').querySelector('svg')!.outerHTML
   await act(async () => button('复制回复').click())
   expect(writeText).toHaveBeenCalledExactlyOnceWith('**原文**\n第二段')
-  expect(button('已复制')).not.toBeNull()
+  expect(button('复制回复').querySelector('svg')!.outerHTML).toBe(icon)
+  expect(button('复制回复').title).toBe('复制回复')
+  expect(button('已复制')).toBeNull()
+  await act(async () => button('复制回复').click())
+  expect(writeText).toHaveBeenCalledTimes(2)
 })
 
-it('shows clipboard failure and disables branching without a persisted target', async () => {
-  vi.spyOn(navigator, 'clipboard', 'get').mockReturnValue({ writeText: vi.fn(async () => { throw new Error('denied') }) } as unknown as Clipboard)
+it.each([true, false])('shows a one-second toast on copy failure without inline text (clipboard available: %s)', async (available) => {
+  vi.useFakeTimers()
+  vi.spyOn(navigator, 'clipboard', 'get').mockReturnValue((available ? { writeText: vi.fn(async () => { throw new Error('denied') }) } : undefined) as unknown as Clipboard)
   await act(() => root.render(<AnswerActions text="answer" />))
   expect(button('分支到聊天').disabled).toBe(true)
   await act(async () => button('复制回复').click())
-  expect(container.querySelector('[role="alert"]')?.textContent).toContain('剪贴板权限')
+  expect(container.querySelector('[role="alert"]')).toBeNull()
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe('复制失败')
+  await act(() => vi.advanceTimersByTime(999))
+  expect(document.querySelector('[role="alert"]')).not.toBeNull()
+  await act(() => vi.advanceTimersByTime(1))
+  expect(document.querySelector('[role="alert"]')).toBeNull()
 })
 
-it('prevents duplicate branches, displays errors, and allows retry', async () => {
+
+it('restarts the toast duration on another copy failure and removes it on unmount', async () => {
+  vi.useFakeTimers()
+  vi.spyOn(navigator, 'clipboard', 'get').mockReturnValue({ writeText: vi.fn(async () => { throw new Error('denied') }) } as unknown as Clipboard)
+  await act(() => root.render(<AnswerActions text="answer" />))
+  await act(async () => button('复制回复').click())
+  await act(() => vi.advanceTimersByTime(800))
+  await act(async () => button('复制回复').click())
+  await act(() => vi.advanceTimersByTime(800))
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe('复制失败')
+  await act(() => root.render(null))
+  expect(document.querySelector('[role="alert"]')).toBeNull()
+  await act(() => vi.advanceTimersByTime(1000))
+  expect(document.querySelector('[role="alert"]')).toBeNull()
+})
+
+it('prevents duplicate branches, shows a one-second failure toast, and allows retry', async () => {
+  vi.useFakeTimers()
   let reject!: (cause: Error) => void
   const onBranch = vi.fn<() => Promise<void>>().mockImplementationOnce(() => new Promise((_, fail) => { reject = fail })).mockResolvedValue(undefined)
   await act(() => root.render(<AnswerActions text="answer" onBranch={onBranch} />))
@@ -44,7 +72,12 @@ it('prevents duplicate branches, displays errors, and allows retry', async () =>
   expect(onBranch).toHaveBeenCalledTimes(1)
   expect(button('分支到聊天').disabled).toBe(true)
   await act(async () => reject(new Error('历史已变化，请刷新')))
-  expect(container.querySelector('[role="alert"]')?.textContent).toBe('历史已变化，请刷新')
+  expect(container.querySelector('[role="alert"]')).toBeNull()
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe('分支失败')
+  await act(() => vi.advanceTimersByTime(999))
+  expect(document.querySelector('[role="alert"]')).not.toBeNull()
+  await act(() => vi.advanceTimersByTime(1))
+  expect(document.querySelector('[role="alert"]')).toBeNull()
   await act(async () => button('分支到聊天').click())
   expect(onBranch).toHaveBeenCalledTimes(2)
   expect(container.querySelector('[role="alert"]')).toBeNull()
