@@ -203,7 +203,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
       if (workspace === 'registered' && (!security.acceptsOrigin(context.req.header('origin')) || !security.acceptsToken(context.req.header('x-pi-nest-token')))) return context.json({ error: '项目访问被拒绝' }, 403)
       try {
         await revealPiWorkspace(parsed.data.cwd)
-        return context.body(null, 204)
+        return context.json({ requested: true })
       } catch (cause) {
         const code = (cause as NodeJS.ErrnoException).code
         if (code === 'PROJECT_FOLDER_UNAVAILABLE') return context.json({ error: '项目文件夹不存在或该路径不是文件夹。', code }, 404)

@@ -215,9 +215,12 @@ describe('Pi Nest API', () => {
   })
 
   it('reveals only a cwd that still belongs to a discovered Pi project', async () => {
-    expect((await app().request('/api/projects/reveal', {
+    const response = await app().request('/api/projects/reveal', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd: '/working' }),
-    })).status).toBe(204)
+    })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('application/json')
+    await expect(response.json()).resolves.toEqual({ requested: true })
     expect(revealPiWorkspace).toHaveBeenCalledWith('/working')
 
     expect((await app().request('/api/projects/reveal', {
