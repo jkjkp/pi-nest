@@ -1,3 +1,4 @@
+import { clampSidebarWidth } from './sidebar-width.js'
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 
@@ -71,6 +72,7 @@ type WorkspaceState = {
   setInspectorWidth: (width: number) => void
   hideProject: (cwd: string) => void
   setNavigationOpen: (open: boolean) => void
+  setNavigationWidth: (width: number) => void
   setNavigationOrder: (order: NavigationOrder) => void
   setProjectCollapsed: (projectKey: string, collapsed: boolean) => void
   restoreProject: (cwd: string) => void
@@ -315,6 +317,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   setInspectorOpen: (inspectorOpen) => set({ inspectorOpen }),
   setInspectorWidth: (width) => set({ inspectorWidth: Number.isFinite(width) ? Math.max(240, width) : 300 }),
   hideProject: (cwd) => set((state) => ({ hiddenProjectCwds: { ...state.hiddenProjectCwds, [cwd]: true } })),
+  setNavigationWidth: (width) => set({ navigationWidth: clampSidebarWidth(width, Infinity, 'navigation') }),
   setNavigationOpen: (navigationOpen) => set({ navigationOpen }),
   setNavigationOrder: (navigationOrder) => set({ navigationOrder }),
   setProjectCollapsed: (projectKey, collapsed) =>
@@ -355,7 +358,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ navigationWidth: state.navigationWidth, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
       storage: createJSONStorage(() => (typeof window === 'undefined' ? unavailableStorage : window.localStorage)),
     },
   ),

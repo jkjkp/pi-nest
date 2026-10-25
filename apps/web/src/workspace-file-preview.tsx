@@ -4,7 +4,7 @@ import { PanelRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
 import { filePreviewKey } from './file-preview-state.js'
-import { FilePreviewResizeHandle } from './file-preview-resize-handle.js'
+import { SidebarResizeHandle } from './sidebar-resize-handle.js'
 import { SessionFilePreview } from './session-file-preview.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
@@ -38,7 +38,7 @@ export function WorkspaceFilePreview({ preview, isHome, containerRef }: { previe
       </SheetContent>
     </Sheet>}
     <aside aria-hidden={!visible} className={`relative hidden min-h-0 min-w-0 bg-card/60 xl:block ${visible ? 'border-l' : 'pointer-events-none'}`} inert={!visible}>
-      {visible && <FilePreviewResizeHandle containerRef={containerRef} navigationWidth={navigationWidth} width={width} onWidthChange={setWidth} />}
+      {visible && <SidebarResizeHandle panel="preview" containerRef={containerRef} navigationWidth={navigationWidth} width={width} onWidthChange={setWidth} />}
       <div className="h-full min-h-0 overflow-hidden">{wide && content}</div>
     </aside>
   </>

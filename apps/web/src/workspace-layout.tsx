@@ -1,7 +1,9 @@
-import { type CSSProperties, type ReactNode, type RefObject } from 'react'
+import { useLayoutEffect, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import { Menu } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+import { SidebarResizeHandle } from './sidebar-resize-handle.js'
+import { clampSidebarWidth } from './sidebar-width.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
 export function WorkspaceLayout({ title, titleTooltip, navigation, preview, previewOpen, children, containerRef }: {
@@ -16,6 +18,18 @@ export function WorkspaceLayout({ title, titleTooltip, navigation, preview, prev
   const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
   const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
+  const setNavigationWidth = useWorkspaceStore((state) => state.setNavigationWidth)
+  const [availableWidth, setAvailableWidth] = useState(Infinity)
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const measure = () => setAvailableWidth(container.getBoundingClientRect().width)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [containerRef])
+  const displayedNavigationWidth = clampSidebarWidth(navigationWidth, availableWidth, 'navigation')
   const previewWidth = useWorkspaceStore((state) => state.inspectorWidth)
   return <main className="relative flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
     <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-card px-3 sm:px-4 md:hidden">
@@ -36,10 +50,10 @@ export function WorkspaceLayout({ title, titleTooltip, navigation, preview, prev
     </header>
     <div className="workspace-grid grid min-h-0 flex-1" ref={containerRef} style={{
       '--inspector-width': `${previewWidth}px`,
-      '--navigation-width': `${navigationWidth}px`,
+      '--navigation-width': `${displayedNavigationWidth}px`,
       '--side-panel-width': previewOpen ? `min(${Number.isFinite(previewWidth) ? previewWidth : 300}px, calc((100% - var(--navigation-width)) / 2))` : '0px',
     } as CSSProperties}>
-      <aside className="hidden min-h-0 border-r bg-card/60 md:block">{navigation}</aside>
+      <aside className="relative hidden min-h-0 min-w-0 border-r bg-card/60 md:block">{navigation}<SidebarResizeHandle panel="navigation" containerRef={containerRef} width={navigationWidth} onWidthChange={setNavigationWidth} /></aside>
       {children}
       {preview}
     </div>

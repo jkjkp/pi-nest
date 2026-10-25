@@ -180,6 +180,12 @@ body {
     grid-template-columns: var(--navigation-width) minmax(0, 1fr);
   }
 
+  .workspace-grid:has([data-resizing="true"]) {
+    transition: none;
+    cursor: col-resize;
+    user-select: none;
+  }
+
   .conversation-stage {
     width: min(82%, calc(100% - 72px));
   }
@@ -189,12 +195,6 @@ body {
   .workspace-grid {
     grid-template-columns: var(--navigation-width) minmax(0, 1fr) minmax(0, min(var(--side-panel-width), calc((100% - var(--navigation-width)) / 2)));
     transition: grid-template-columns 150ms ease;
-  }
-
-  .workspace-grid:has([data-resizing="true"]) {
-    transition: none;
-    cursor: col-resize;
-    user-select: none;
   }
 }
 

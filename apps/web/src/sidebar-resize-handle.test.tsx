@@ -2,7 +2,7 @@
 import { act, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { FilePreviewResizeHandle } from './file-preview-resize-handle.js'
+import { SidebarResizeHandle } from './sidebar-resize-handle.js'
 
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 const container = document.createElement('div')
@@ -23,13 +23,13 @@ beforeEach(() => {
 })
 afterEach(async () => { await act(async () => root.unmount()); root = createRoot(container); vi.unstubAllGlobals() })
 
-function View() {
+function View({ panel = 'preview' }: { panel?: 'navigation' | 'preview' }) {
   const ref = useRef<HTMLDivElement>(null)
-  const [width, setWidth] = useState(300)
+  const [width, setWidth] = useState(panel === 'navigation' ? 272 : 300)
   return <div ref={(node) => {
     ref.current = node
     if (node) node.getBoundingClientRect = () => ({ width: gridWidth } as DOMRect)
-  }} data-width={width}><FilePreviewResizeHandle containerRef={ref} navigationWidth={272} width={width} onWidthChange={(next) => { changed(next); setWidth(next) }} /></div>
+  }} data-width={width}><SidebarResizeHandle panel={panel} containerRef={ref} navigationWidth={272} width={width} onWidthChange={(next) => { changed(next); setWidth(next) }} /></div>
 }
 
 async function pointer(handle: HTMLElement, type: string, x: number, extras = {}) {
@@ -37,8 +37,8 @@ async function pointer(handle: HTMLElement, type: string, x: number, extras = {}
   await act(async () => handle.dispatchEvent(event))
   return event
 }
-async function setup() {
-  await act(async () => root.render(<View />))
+async function setup(panel: 'navigation' | 'preview' = 'preview') {
+  await act(async () => root.render(<View panel={panel} />))
   const handle = container.querySelector<HTMLElement>('[role="separator"]')!
   handle.setPointerCapture = vi.fn()
   handle.hasPointerCapture = vi.fn(() => true)
@@ -104,4 +104,41 @@ it('supports keyboard adjustment and preserves the preferred width when the wind
   expect(changed).toHaveBeenLastCalledWith(240)
   await act(async () => root.render(null))
   expect(measurements.size).toBe(0)
+})
+
+it('resizes navigation in the opposite direction and keeps at least 360px for chat', async () => {
+  const handle = await setup('navigation')
+  expect(handle.getAttribute('aria-valuemin')).toBe('220')
+  expect(handle.getAttribute('aria-valuemax')).toBe('480')
+  await pointer(handle, 'pointerdown', 272)
+  await pointer(handle, 'pointermove', 400)
+  expect(changed).toHaveBeenLastCalledWith(400)
+  await pointer(handle, 'pointermove', 900)
+  expect(changed).toHaveBeenLastCalledWith(480)
+  await pointer(handle, 'pointermove', 50)
+  expect(changed).toHaveBeenLastCalledWith(220)
+  await pointer(handle, 'pointercancel', 50)
+  changed.mockClear()
+  await pointer(handle, 'pointermove', 400)
+  expect(changed).not.toHaveBeenCalled()
+  const key = async (value: string, shiftKey = false) => { await act(() => handle.dispatchEvent(new KeyboardEvent('keydown', { key: value, shiftKey, bubbles: true }))) }
+  await key('ArrowRight')
+  expect(changed).toHaveBeenLastCalledWith(230)
+  await key('ArrowRight', true)
+  expect(changed).toHaveBeenLastCalledWith(280)
+  await key('ArrowLeft')
+  expect(changed).toHaveBeenLastCalledWith(270)
+  await key('End')
+  expect(changed).toHaveBeenLastCalledWith(480)
+  changed.mockClear()
+  gridWidth = 768
+  await act(() => measurements.forEach((measure) => measure()))
+  expect(handle.getAttribute('aria-valuenow')).toBe('408')
+  expect(handle.getAttribute('aria-valuemax')).toBe('408')
+  expect(changed).not.toHaveBeenCalled()
+  gridWidth = 1472
+  await act(() => measurements.forEach((measure) => measure()))
+  expect(handle.getAttribute('aria-valuenow')).toBe('480')
+  await key('Home')
+  expect(changed).toHaveBeenLastCalledWith(220)
 })
