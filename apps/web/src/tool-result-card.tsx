@@ -5,9 +5,9 @@ import { searchMatches, type ToolResult } from './tool-result-model.js'
 
 import { OpenToolFile } from './tool-file-context.js'
 
-export function ToolFilePath({ path, line, searchRoot, label = path }: { path: string; line?: number; searchRoot?: string; label?: string }) {
+export function ToolFilePath({ path, line, searchRoot, label = path, className = '', title }: { path: string; line?: number; searchRoot?: string; label?: string; className?: string; title?: string }) {
   const open = useContext(OpenToolFile)
-  return open ? <button type="button" className="break-all text-left text-link underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={(event) => { event.currentTarget.focus({ preventScroll: true }); open(path, line, searchRoot) }} title="查看当前文件（可能与历史内容不同）">{label}{line ? `:${line}` : ''}</button> : <span className="break-all">{label}{line ? `:${line}` : ''}</span>
+  return open ? <button type="button" className={`break-all text-left text-link underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${className}`} onClick={(event) => { event.currentTarget.focus({ preventScroll: true }); open(path, line, searchRoot) }} title={title ?? '查看当前文件（可能与历史内容不同）'}>{label}{line ? `:${line}` : ''}</button> : <span className={`break-all ${className}`} title={title}>{label}{line ? `:${line}` : ''}</span>
 }
 
 function TextResult({ text, diff = false }: { text: string; diff?: boolean }) {

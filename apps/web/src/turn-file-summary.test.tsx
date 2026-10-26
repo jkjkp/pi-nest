@@ -78,12 +78,14 @@ it('shows only a compact first-three file list with working current-file preview
   expect([...container.querySelectorAll('button')].some((button) => /复制|撤销/.test(button.textContent ?? ''))).toBe(false)
 })
 
-it('flags partial completion and project-external files without expanding historical details', async () => {
+it('keeps partial completion visible while moving per-file descriptions to hover', async () => {
   const files = projectTurnFiles([tool('one', '../outside.md', 'write'), tool('two', '../outside.md', 'write', '失败')], '/project')
   await act(async () => root.render(<TurnFileSummary files={files} state="aborted" />))
   expect(container.textContent).toContain('任务已中断')
-  expect(container.textContent).toContain('后续操作失败')
-  expect(container.textContent).toContain('项目外')
+  expect(container.textContent).not.toContain('后续操作失败')
+  expect(container.textContent).not.toContain('项目外')
+  expect(container.querySelector('li')?.title).toContain('后续操作失败')
+  expect(container.querySelector('li')?.title).toContain('项目外')
   expect(container.textContent).not.toContain('recorded file')
   expect(container.textContent).not.toContain('operation failed')
   expect(container.textContent).not.toContain('查看变更')
@@ -148,9 +150,10 @@ it('explains unavailable statistics for each file without pretending they are ze
     { version: 1, path: '/project/large.log', sequence: 2, reason: 'too_large' },
   ])
   await act(() => root.render(<TurnFileSummary files={files} state="complete" />))
-  expect(container.textContent).toContain('行数未记录')
-  expect(container.textContent).toContain('二进制文件')
-  expect(container.textContent).toContain('文件过大，未统计')
+  expect(container.querySelectorAll('li [aria-hidden="true"]')).toHaveLength(3)
+  expect(container.querySelector('[title="行数未记录"]')?.textContent).toContain('—')
+  expect(container.querySelector('[title="二进制文件"]')?.textContent).toContain('—')
+  expect(container.querySelector('[title="文件过大，未统计"]')?.textContent).toContain('—')
   expect(container.textContent).not.toContain('+0')
 })
 
@@ -161,4 +164,26 @@ it.each([
   const files = projectTurnFiles([tool('one', relative, 'write')], cwd, [{ version: 1, path: absolute, sequence: 1, added: 2, removed: 0, changeType: 'created' }])
   expect(files).toHaveLength(1)
   expect(files[0]).toMatchObject({ changes: { added: 2, removed: 0 }, outsideProject: false })
+})
+
+
+it('keeps long file rows on one line, truncates names and paths, and reserves space for counts', async () => {
+  const name = 'long-file-name-'.repeat(20) + '.ts'
+  const path = `/project/${'nested/'.repeat(30)}${name}`
+  const files = projectTurnFiles([tool('long', path)], '/project')
+  const openFile = vi.fn()
+  await act(() => root.render(<OpenToolFile value={openFile}><TurnFileSummary files={files} state="complete" /></OpenToolFile>))
+  const row = container.querySelector('li')!
+  const link = row.querySelector('button')!
+  expect(row.classList.contains('flex')).toBe(true)
+  expect(row.classList.contains('flex-wrap')).toBe(false)
+  expect(link.classList.contains('truncate')).toBe(true)
+  expect(link.title).toBe(path)
+  expect(link.nextElementSibling?.classList.contains('truncate')).toBe(true)
+  expect(link.nextElementSibling?.getAttribute('title')).toBe(path)
+  expect(row.lastElementChild?.classList.contains('shrink-0')).toBe(true)
+  expect(row.lastElementChild?.textContent).toBe('+1 −1')
+  expect(row.textContent).not.toContain('已编辑')
+  await act(() => link.click())
+  expect(openFile).toHaveBeenCalledWith(path, undefined, undefined)
 })
