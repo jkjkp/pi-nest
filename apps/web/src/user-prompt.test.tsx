@@ -77,3 +77,32 @@ it('toggles touch actions without hiding them when tapping copy', async () => {
   await tap(bubble)
   expect(bubble.dataset.touchRevealed).toBe('false')
 })
+
+
+it('keeps the prompt toggle transparent in both states with a small directional chevron', async () => {
+  vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(300)
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(224)
+  await renderPrompt()
+  const toggle = container.querySelector<HTMLButtonElement>('[aria-expanded="false"]')!
+  const transparent = () => {
+    for (const style of ['border-0', 'bg-transparent', 'hover:bg-transparent', 'dark:hover:bg-transparent', 'aria-expanded:bg-transparent', 'aria-expanded:text-inherit']) {
+      expect(toggle.classList.contains(style)).toBe(true)
+    }
+    expect(toggle.querySelector('span')?.classList.contains('text-xs')).toBe(true)
+    expect(toggle.querySelector('svg')?.classList.contains('size-[1em]')).toBe(true)
+  }
+  transparent()
+  expect(toggle.textContent).toBe('显示更多')
+  expect(toggle.querySelector('svg')?.classList.contains('rotate-180')).toBe(false)
+  expect(container.querySelector('.bg-gradient-to-t')).not.toBeNull()
+  await act(() => toggle.click())
+  transparent()
+  expect(toggle.textContent).toBe('收起')
+  expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  expect(toggle.querySelector('svg')?.classList.contains('rotate-180')).toBe(true)
+  expect(container.querySelector('.bg-gradient-to-t')).toBeNull()
+  await act(() => toggle.click())
+  expect(toggle.getAttribute('aria-expanded')).toBe('false')
+  expect(toggle.textContent).toBe('显示更多')
+  expect(container.querySelector('.bg-gradient-to-t')).not.toBeNull()
+})
