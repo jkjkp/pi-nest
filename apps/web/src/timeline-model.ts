@@ -1,5 +1,6 @@
 import { messageAttachments } from './session-run-model.js'
-import type { AttachmentRef } from '@pi-nest/contracts'
+import { fileChangeStatistics } from './file-change-statistics.js'
+import type { AttachmentRef, PiFileChange } from '@pi-nest/contracts'
 import { modelCallError, type ModelCallError } from './model-call-error.js'
 import type { RuntimeTurn } from './session-run-model.js'
 import type { PiSessionHistoryEntry } from './history.js'
@@ -33,6 +34,7 @@ export type TimelinePart =
   | { arguments?: Record<string, unknown>; events: TimelineEvent[]; kind: 'tool'; toolCallId: string | undefined; toolName: string }
 
 export type TimelineItem = {
+  fileChanges?: PiFileChange[]
   attachmentWarning?: string
   attachments?: AttachmentRef[]
   steering?: RuntimeTurn['steering']
@@ -293,9 +295,17 @@ function historyItems(entries: PiSessionHistoryEntry[]): TimelineItem[] {
       projectEvent(active, event)
       continue
     }
+    if (entry.type === 'custom' && entry.raw.customType === 'pi-nest-file-changes') continue
     if (active) projectEvent(active, event)
   }
   if (active) items.push(active)
+  const byId = new Map(items.map((item) => [item.id, item]))
+  for (const entry of entries) {
+    if (entry.type !== 'custom' || entry.raw.customType !== 'pi-nest-file-changes') continue
+    const data = record(entry.raw.data)
+    const target = data?.version === 1 && typeof data.turnId === 'string' && byId.get(data.turnId)
+    if (target && Array.isArray(data?.files)) target.fileChanges = data.files.flatMap((value) => { const stats = fileChangeStatistics(value); return stats ? [stats] : [] })
+  }
   return items
 }
 
@@ -342,6 +352,7 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
       return Date.parse(item.startedAt) >= Date.parse(turn.submittedAt ?? turn.startedAt) - 2_000
     })
     const item = newTurn(persisted?.id ?? turn.id, turn.prompt ?? promptFrom(turn.events), persisted?.startedAt ?? turn.startedAt, runtimeTiming)
+    item.fileChanges = persisted?.fileChanges
     item.attachments = turn.attachments ?? persisted?.attachments
     item.displayId = `${turn.id}:${turn.submittedAt ?? turn.startedAt}`
     item.steering = turn.steering ? { ...turn.steering, ...(persisted ? { status: 'applied' as const } : {}) } : undefined

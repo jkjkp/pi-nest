@@ -114,3 +114,51 @@ it('shows the filename followed by the full path in each changed-file row', asyn
   await act(async () => link.click())
   expect(openFile).toHaveBeenCalledWith('/project/docs/TODOTask.md', undefined, undefined)
 })
+
+it('shows persisted net counts for repeated writes and edits instead of adding operation totals', async () => {
+  const write = tool('one', 'a.ts', 'write')
+  write.result!.fileChange = { version: 1, path: '/project/a.ts', sequence: 1, added: 20, removed: 10, changeType: 'modified' }
+  const edit = tool('two', './a.ts')
+  edit.result!.fileChange = { version: 1, path: '/project/a.ts', sequence: 2, added: 3, removed: 2, changeType: 'modified' }
+  const files = projectTurnFiles([write, edit], '/project')
+  expect(files).toHaveLength(1)
+  expect(files[0]?.changes).toEqual({ added: 3, removed: 2 })
+  await act(() => root.render(<TurnFileSummary files={files} state="complete" />))
+  expect(container.textContent).toContain('+3')
+  expect(container.textContent).toContain('−2')
+  expect(container.textContent).not.toContain('+23')
+  const reordered = projectTurnFiles([edit, write], '/project')
+  expect(reordered[0]?.changes).toEqual({ added: 3, removed: 2 })
+})
+
+it('uses the final snapshot for deletion and reversion, and retains partial writes after failure', () => {
+  const write = tool('one', 'a.ts', 'write', '失败')
+  write.result!.fileChange = { version: 1, path: '/project/a.ts', sequence: 1, added: 1, removed: 1, changeType: 'modified' }
+  expect(projectTurnFiles([write], '/project')[0]?.changes).toEqual({ added: 1, removed: 1 })
+  const deleted = projectTurnFiles([write], '/project', [{ version: 1, path: '/project/a.ts', sequence: 2, added: 0, removed: 5, changeType: 'deleted' }])
+  expect(deleted[0]).toMatchObject({ changes: { added: 0, removed: 5 }, status: '已删除 · 含失败操作' })
+  const reverted = projectTurnFiles([tool('done', 'a.ts')], '/project', [{ version: 1, path: '/project/a.ts', sequence: 3, added: 0, removed: 0, changeType: 'unchanged' }])
+  expect(reverted[0]?.changes).toEqual({ added: 0, removed: 0 })
+  expect(reverted[0]?.status).toContain('无净变化')
+})
+
+it('explains unavailable statistics for each file without pretending they are zero', async () => {
+  const files = projectTurnFiles([tool('old', 'old.ts', 'write')], '/project', [
+    { version: 1, path: '/project/image.png', sequence: 1, reason: 'binary' },
+    { version: 1, path: '/project/large.log', sequence: 2, reason: 'too_large' },
+  ])
+  await act(() => root.render(<TurnFileSummary files={files} state="complete" />))
+  expect(container.textContent).toContain('行数未记录')
+  expect(container.textContent).toContain('二进制文件')
+  expect(container.textContent).toContain('文件过大，未统计')
+  expect(container.textContent).not.toContain('+0')
+})
+
+it.each([
+  { cwd: 'D:\\Project', relative: 'src\\a.ts', absolute: 'd:/project/src/a.ts' },
+  { cwd: '\\\\server\\share\\Project', relative: 'src\\a.ts', absolute: '//server/share/Project/src/a.ts' },
+])('matches Windows absolute statistics with the same relative tool path (%s)', ({ cwd, relative, absolute }) => {
+  const files = projectTurnFiles([tool('one', relative, 'write')], cwd, [{ version: 1, path: absolute, sequence: 1, added: 2, removed: 0, changeType: 'created' }])
+  expect(files).toHaveLength(1)
+  expect(files[0]).toMatchObject({ changes: { added: 2, removed: 0 }, outsideProject: false })
+})

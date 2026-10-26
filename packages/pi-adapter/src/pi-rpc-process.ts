@@ -46,11 +46,13 @@ export class PiRpcProcess {
 
   constructor(private readonly options: PiRpcProcessOptions) {
     const useNode = options.piExecutable === undefined && process.platform === 'win32'
+    const extension = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './file-change-extension.ts' : './file-change-extension.js', import.meta.url))
+    const args = ['--mode', 'rpc', '--session', options.sessionFile, '--extension', extension]
     const connectionOptions: PiRpcConnectionOptions = {
       cwd: options.cwd,
       executable: options.piExecutable ?? (useNode ? process.execPath : defaultPiExecutable()),
       // Windows cannot execute the Unix .bin/pi shim directly.
-      args: useNode ? [join(getPackageDir(), 'dist/bundle/cli.js'), '--mode', 'rpc', '--session', options.sessionFile] : undefined,
+      args: useNode ? [join(getPackageDir(), 'dist/bundle/cli.js'), ...args] : args,
       sessionFile: options.sessionFile,
       spawnProcess: options.spawnProcess,
     }

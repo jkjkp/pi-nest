@@ -65,7 +65,7 @@ describe('PiRpcProcess', () => {
 
     try {
       await expect(rpc.start()).resolves.toMatchObject({ sessionId: 'session-1' })
-      const args = ['--mode', 'rpc', '--session', sessionFile]
+      const args = ['--mode', 'rpc', '--session', sessionFile, '--extension', fileURLToPath(new URL('./file-change-extension.ts', import.meta.url))]
       expect(spawnProcess).toHaveBeenCalledWith(
         platform === 'win32' ? process.execPath : resolve(dirname(fileURLToPath(import.meta.url)), '../..', 'node_modules/.bin/pi'),
         platform === 'win32' ? [join(getPackageDir(), 'dist/bundle/cli.js'), ...args] : args,
@@ -83,7 +83,7 @@ describe('PiRpcProcess', () => {
     try {
       await rpc.start()
       expect(spawnProcess).toHaveBeenCalledWith(
-        '/fixture/pi', ['--mode', 'rpc', '--session', '/fixture/session.jsonl'],
+        '/fixture/pi', ['--mode', 'rpc', '--session', '/fixture/session.jsonl', '--extension', fileURLToPath(new URL('./file-change-extension.ts', import.meta.url))],
         { cwd: '/fixture', stdio: 'pipe', ...(platform === 'win32' ? { windowsHide: true } : {}) },
       )
     } finally { await rpc.close() }
@@ -100,7 +100,7 @@ describe('PiRpcProcess', () => {
     })
     expect(spawnProcess).toHaveBeenCalledWith(
       '/fixture/pi',
-      ['--mode', 'rpc', '--session', '/fixture/session.jsonl'],
+      ['--mode', 'rpc', '--session', '/fixture/session.jsonl', '--extension', fileURLToPath(new URL('./file-change-extension.ts', import.meta.url))],
       { cwd: '/fixture', stdio: 'pipe', ...(globalThis.process.platform === 'win32' ? { windowsHide: true } : {}) },
     )
     await process.close()

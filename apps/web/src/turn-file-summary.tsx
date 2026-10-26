@@ -5,6 +5,7 @@ import { ToolFilePath } from './tool-result-card.js'
 import type { TurnFileChange, TurnFileSummaryState } from './turn-execution-model.js'
 
 export function TurnFileSummary({ files, state }: { files: TurnFileChange[]; state: TurnFileSummaryState }) {
+  const unavailable = { binary: '二进制文件', too_large: '文件过大，未统计', unreadable: '文件不可读，未统计', unrecorded: '行数未记录', diff_limit: '差异过大，未统计' }
   const [expanded, setExpanded] = useState(false)
   const listId = useId()
   if (!files.length) return null
@@ -19,6 +20,7 @@ export function TurnFileSummary({ files, state }: { files: TurnFileChange[]; sta
         <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1"><ToolFilePath path={file.path} label={file.displayPath.split('/').at(-1) || file.displayPath} /><span className="break-all text-xs text-muted-foreground">{file.path}</span>{file.outsideProject && <span className="ml-2 text-xs text-muted-foreground">项目外</span>}</div>
         <span className="text-xs text-muted-foreground">{file.status}</span>
         {file.changes && <span className="shrink-0 font-mono text-xs"><span className="text-success">+{file.changes.added}</span>{' '}<span className="text-destructive">−{file.changes.removed}</span></span>}
+        {!file.changes && <span className="shrink-0 text-xs text-muted-foreground">{unavailable[file.statistics && 'reason' in file.statistics ? file.statistics.reason : 'unrecorded']}</span>}
       </div>
     </li>)}</ul>
     {files.length > 3 && <Button className="mx-2 mb-2" type="button" size="sm" variant="ghost" aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(!expanded)}>{expanded ? '收起文件列表' : `再显示 ${files.length - 3} 个文件`}<ChevronDown aria-hidden="true" className={`size-4 ${expanded ? 'rotate-180' : ''}`} /></Button>}

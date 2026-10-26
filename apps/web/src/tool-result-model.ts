@@ -1,3 +1,5 @@
+import type { PiFileChange } from '@pi-nest/contracts'
+import { fileChangeStatistics } from './file-change-statistics.js'
 import { toolStatus, type TimelinePart } from './timeline-model.js'
 
 export type ToolResult = {
@@ -11,6 +13,7 @@ export type ToolResult = {
   diff?: string
   patch?: string
   changes?: { added: number; removed: number }
+  fileChange?: PiFileChange
   notices: string[]
 }
 
@@ -77,7 +80,7 @@ export function projectToolResult(part: Extract<TimelinePart, { kind: 'tool' }>,
   const successfulEdit = view === 'edit' && status === '完成'
   const patch = successfulEdit && typeof details.patch === 'string' ? details.patch : undefined
   const diff = successfulEdit && typeof details.diff === 'string' ? details.diff : undefined
-  return { name, view, args, status, output, details, notices, path: typeof args.path === 'string' ? args.path : undefined, patch, diff, changes: patch ? patchChanges(patch) : undefined }
+  return { name, view, args, status, output, details, notices, path: typeof args.path === 'string' ? args.path : undefined, patch, diff, fileChange: fileChangeStatistics(details.piNestFileChange), changes: patch ? patchChanges(patch) : undefined }
 }
 
 export type SearchMatch = { path: string; line: number; text: string }

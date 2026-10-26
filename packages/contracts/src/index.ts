@@ -157,3 +157,8 @@ export type PiDiscoveredModel = { id: string; name?: string }
 
 export type PiSessionBranchRequest = { kind: 'clone' } | { kind: 'fork'; entryId: string; revision: string }
 export type PiSessionBranchResponse = { session: PiSessionSummary; draft: string; attachments?: AttachmentRef[] }
+
+export type PiFileChange = { version: 1; path: string; sequence: number } & (
+  | { added: number; removed: number; changeType: 'created' | 'deleted' | 'modified' | 'unchanged' }
+  | { reason: 'binary' | 'too_large' | 'unreadable' | 'unrecorded' | 'diff_limit' }
+)

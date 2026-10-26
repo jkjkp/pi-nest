@@ -330,6 +330,9 @@ importers:
       '@pi-nest/contracts':
         specifier: workspace:*
         version: link:../contracts
+      diff:
+        specifier: 8.0.4
+        version: 8.0.4
     devDependencies:
       '@types/node':
         specifier: 22.19.19
