@@ -1,44 +1,27 @@
-import { SessionManager } from '@earendil-works/pi-coding-agent'
+import {
+  discoverPiSessionFiles,
+  mapLimit,
+  readPiSessionSummary,
+  SUMMARY_CONCURRENCY,
+  type PiSessionSummary,
+} from './session-files.js'
 
-export type PiSessionSummary = {
-  parentSessionPath?: string
-  createdAt?: string
-  id: string
-  name: string | undefined
-  firstMessage: string | undefined
-  sessionFile: string
-  cwd: string | undefined
-  updatedAt: string | undefined
+export type { PiSessionSummary } from './session-files.js'
+
+function modifiedTime(summary: PiSessionSummary) {
+  const time = summary.updatedAt ? new Date(summary.updatedAt).getTime() : Number.NaN
+  return Number.isNaN(time) ? 0 : time
 }
 
-const NO_MESSAGES = '(no messages)'
-const FIRST_MESSAGE_LIMIT = 120
-
-function sessionFirstMessage(raw: string | undefined) {
-  const collapsed = raw?.replace(/\s+/g, ' ').trim()
-  if (!collapsed || collapsed === NO_MESSAGES) return undefined
-
-  const characters = Array.from(collapsed)
-  return characters.length > FIRST_MESSAGE_LIMIT
-    ? `${characters.slice(0, FIRST_MESSAGE_LIMIT).join('')}…`
-    : collapsed
-}
-
-export async function listPiSessions(): Promise<PiSessionSummary[]> {
-  try {
-    const sessions = await SessionManager.listAll()
-
-    return sessions.map((session) => ({
-      id: session.id,
-      createdAt: session.created.toISOString(),
-      name: session.name || undefined,
-      firstMessage: sessionFirstMessage(session.firstMessage),
-      sessionFile: session.path,
-      parentSessionPath: session.parentSessionPath,
-      cwd: session.cwd || undefined,
-      updatedAt: session.modified.toISOString(),
-    }))
-  } catch (cause) {
-    throw new Error('Failed to discover Pi sessions with SessionManager.listAll()', { cause })
-  }
+/**
+ * One-shot discovery used by scripts and diagnostics. The server keeps its own
+ * shared index instead of calling this for each request.
+ */
+export async function listPiSessions(sessionsDirectory?: string): Promise<PiSessionSummary[]> {
+  const discovery = await discoverPiSessionFiles(sessionsDirectory)
+  const reads = await mapLimit(discovery.files, SUMMARY_CONCURRENCY, (file) => readPiSessionSummary(file))
+  return reads
+    .filter((read): read is NonNullable<typeof read> => read !== undefined)
+    .map((read) => read.summary)
+    .sort((left, right) => modifiedTime(right) - modifiedTime(left))
 }

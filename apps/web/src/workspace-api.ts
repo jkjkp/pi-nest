@@ -1,6 +1,7 @@
 import type { PiProject, PiSessionInitialSettings, PiSessionBranchRequest, PiSessionBranchResponse, PiRuntimeSettings, PiSettingsSnapshot, PiSessionsResponse } from '@pi-nest/contracts'
 import { historyPageSize, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
 import type { PiSessionSummary } from './workspace.js'
+import { runtimeBootstrap } from './runtime-bootstrap.js'
 
 export type { PiRuntimeSettings, PiSettingsSnapshot } from '@pi-nest/contracts'
 
@@ -82,15 +83,24 @@ export async function saveSessionSettings(sessionId: string, settings: Partial<P
 }
 
 export async function configurationResponse(path: string, init: RequestInit = {}) {
-  const bootstrap = await fetch('/api/runtime/bootstrap', { method: 'POST', signal: init.signal })
-  if (!bootstrap.ok) throw new Error('无法验证访问权限')
-  const { token } = await bootstrap.json() as { token: string }
-  const response = await fetch(path, { ...init, headers: { 'content-type': 'application/json', 'x-pi-nest-token': token, ...init.headers }, cache: 'no-store' })
-  if (!response.ok) {
+  let credentials = await runtimeBootstrap.get(init.signal ?? undefined)
+  for (let attempt = 0; ; attempt++) {
+    init.signal?.throwIfAborted()
+    const headers = new Headers(init.headers)
+    if (!headers.has('content-type')) headers.set('content-type', 'application/json')
+    headers.set('x-pi-nest-token', credentials.token)
+    const response = await fetch(path, { ...init, headers, cache: 'no-store' })
+    if (response.ok) return response
     const body = await response.json().catch(() => undefined)
+    init.signal?.throwIfAborted()
+    if (response.status === 403 && body?.code === 'RUNTIME_TOKEN_INVALID') {
+      if (attempt === 0) {
+        credentials = await runtimeBootstrap.refresh(credentials, init.signal ?? undefined)
+        if (!(init.body instanceof ReadableStream)) continue
+      } else runtimeBootstrap.invalidate(credentials)
+    }
     throw Object.assign(new Error(typeof body?.error === 'string' ? body.error : '请求失败，请重试。'), { code: body?.code, sessionId: body?.sessionId })
   }
-  return response
 }
 
 export async function configurationRequest<T>(path: string, init: RequestInit = {}): Promise<T> {

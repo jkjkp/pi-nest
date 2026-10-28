@@ -62,7 +62,13 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
       <div className="conversation-stage">
         <div className="conversation-stage-content">
           <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) setPendingJump({ sessionId: selectedSessionId, turnId: planTurnId }) }} onRetryPlan={retryHistory} /></div>
-          <PendingInputs inputs={(currentRun?.pendingInputs ?? []).filter((input) => !currentRun?.turns.some((turn) => (turn.steering?.queuedInputId === input.id || input.submissionId && turn.submissionId === input.submissionId && turn.steering) && turn.steering?.status !== 'failed'))} key={selectedSessionId} onResume={(inputId) => { void sessionRuns.resumeQueued(selectedSessionId, inputId).catch((cause) => onError(cause.message)) }} onSteer={steerQueued} disabled={submittingInput || status !== 'running'} />
+          <PendingInputs inputs={(currentRun?.pendingInputs ?? []).filter((input) => !currentRun?.turns.some((turn) => (turn.steering?.queuedInputId === input.id || input.submissionId && turn.submissionId === input.submissionId && turn.steering) && turn.steering?.status !== 'failed'))} key={selectedSessionId} onResume={(inputId) => { void sessionRuns.resumeQueued(selectedSessionId, inputId).catch((cause) => onError(cause.message)) }} onSteer={steerQueued} onDrop={(input) => {
+            void sessionRuns.dropQueued(selectedSessionId, input.id).catch((cause) => onError(cause.message))
+            // Restore the text into an empty composer so a failed attachment costs a re-upload, not a retype.
+            if (prompt.trim()) return
+            if (isDraft) setDraftPrompt(input.message)
+            else setDraft(selectedSessionId, input.message)
+          }} disabled={submittingInput || status !== 'running'} />
           <ComposerAttachments draft={attachmentDraft} />
           {error && <p role="alert" className="pointer-events-auto mb-2 text-xs text-destructive">{error}<Button variant="ghost" size="sm" onClick={() => onError(undefined)}>关闭</Button></p>}
           <CommandNotice notice={commands.notice} />
@@ -120,12 +126,12 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
   )
 }
 
-export function PendingInputs({ inputs, onSteer, onResume, disabled = false }: { inputs: PendingInput[]; onResume?: (inputId: string) => void; onSteer?: (inputId: string) => void; disabled?: boolean }) {
+export function PendingInputs({ inputs, onSteer, onResume, onDrop, disabled = false }: { inputs: PendingInput[]; onResume?: (inputId: string) => void; onSteer?: (inputId: string) => void; onDrop?: (input: PendingInput) => void; disabled?: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const pending = inputs.filter((input) => input.mode === 'follow_up' || input.mode === 'steer' && input.attachments?.length)
   if (pending.length === 0) return null
   return <section aria-label="待处理消息" aria-live="polite" className="pointer-events-auto mb-2 rounded-xl border bg-background/95 px-3 py-2 text-xs">
-    <ul className="max-h-32 space-y-1 overflow-y-auto">{(expanded ? pending : pending.slice(0, 2)).map((input) => <li className="flex min-w-0 items-center gap-2" key={input.id}><span className="shrink-0 text-muted-foreground">{input.submitting ? '正在提交' : input.mode === 'steer' ? '引导待生效' : '已排队'}</span><span className={expanded ? 'min-w-0 flex-1 whitespace-pre-wrap break-words' : 'min-w-0 flex-1 truncate'} title={input.message}>{input.message}{input.attachments?.length ? ` · ${input.attachments.length} 个附件` : ''}</span>{input.recoveryRequired && onResume ? <Button type="button" size="sm" variant="outline" onClick={() => onResume(input.id)}>确认继续</Button> : input.mode === 'follow_up' && onSteer && <Button className="h-auto shrink-0 px-2 py-1 text-xs" disabled={disabled || input.submitting} onClick={() => onSteer(input.id)} type="button" variant="ghost">引导</Button>}</li>)}</ul>
+    <ul className="max-h-32 space-y-1 overflow-y-auto">{(expanded ? pending : pending.slice(0, 2)).map((input) => <li className="flex min-w-0 items-start gap-2" key={input.id}><span className="shrink-0 text-muted-foreground">{input.submitting ? '正在提交' : input.mode === 'steer' ? '引导待生效' : input.error ? '需要处理' : '已排队'}</span><span className="min-w-0 flex-1"><span className={expanded ? 'block whitespace-pre-wrap break-words' : 'block truncate'} title={input.message}>{input.message}{input.attachments?.length ? ` · ${input.attachments.length} 个附件` : ''}</span>{input.error && <span className="mt-0.5 block text-destructive">{input.error}</span>}</span>{onDrop && input.error ? <Button className="h-auto shrink-0 px-2 py-1 text-xs" onClick={() => onDrop(input)} type="button" variant="outline">移除</Button> : input.recoveryRequired && onResume ? <Button type="button" size="sm" variant="outline" onClick={() => onResume(input.id)}>确认继续</Button> : input.mode === 'follow_up' && onSteer && <Button className="h-auto shrink-0 px-2 py-1 text-xs" disabled={disabled || input.submitting} onClick={() => onSteer(input.id)} type="button" variant="ghost">引导</Button>}</li>)}</ul>
     {pending.length > 2 && <Button className="mt-1 h-auto p-0 text-xs text-muted-foreground" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} type="button" variant="ghost">{expanded ? '收起' : `还有 ${pending.length - 2} 条`}</Button>}
   </section>
 }

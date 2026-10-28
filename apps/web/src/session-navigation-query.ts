@@ -1,4 +1,4 @@
-import { fetchHistoryView } from './history-view.js'
+import { fetchHistoryView, readCachedTurnIndex } from './history-view.js'
 import type { QueryClient } from '@tanstack/react-query'
 import { sessionHistoryQueryKey, sessionTurnIndexQueryKey } from './history.js'
 import { fetchSessionTurnIndex, RequestError } from './workspace-api.js'
@@ -12,7 +12,7 @@ export async function fetchSessionNavigation(sessionId: string, revision: string
   }
   const view = await fetchHistoryView(sessionId, signal, queryClient)
   const history = view.pages.at(-1)!
-  const index = await fetchSessionTurnIndex(sessionId, history.revision, signal)
+  const index = await readCachedTurnIndex(sessionId, history.revision, signal, queryClient)
   signal.throwIfAborted()
   await queryClient.cancelQueries({ queryKey: sessionHistoryQueryKey(sessionId) })
   signal.throwIfAborted()

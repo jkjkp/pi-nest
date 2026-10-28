@@ -1,7 +1,20 @@
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
 import { fetchSessionHistory, fetchSessionTurnIndex } from './workspace-api.js'
-import { mergeSessionHistoryPages, sessionHistoryQueryKey, type PiSessionHistoryResponse } from './history.js'
+import { mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
 export type HistoryPages = InfiniteData<PiSessionHistoryResponse, { before?: string; revision?: string }>
+
+export async function readCachedTurnIndex(sessionId: string, revision: string, signal: AbortSignal, client: QueryClient) {
+  signal.throwIfAborted()
+  const key = sessionTurnIndexQueryKey(sessionId, revision)
+  const cached = client.getQueryData<PiSessionTurnIndex>(key)
+  if (cached?.revision === revision) return cached
+  // Navigation recovery can call this from the same query; fetchQuery here could wait on itself.
+  const index = await fetchSessionTurnIndex(sessionId, revision, signal)
+  signal.throwIfAborted()
+  if (index.revision !== revision) throw new Error('轮次索引版本不一致')
+  client.setQueryData(key, index)
+  return index
+}
 
 /** Replace a snapshot only after the reader's loaded range is available in the new version. */
 export async function fetchHistoryView(sessionId: string, signal: AbortSignal, client: QueryClient): Promise<HistoryPages> {
@@ -15,7 +28,7 @@ export async function fetchHistoryView(sessionId: string, signal: AbortSignal, c
     const previous = mergeSessionHistoryPages(client.getQueryData<HistoryPages>(sessionHistoryQueryKey(sessionId))?.pages)
     const oldest = previous?.entries.find((entry) => entry.type === 'message' && (entry.raw.message as Record<string, unknown> | undefined)?.role === 'user')?.id
     if (!oldest || pages.some((page) => page.entries.some((entry) => entry.id === oldest))) break
-    index ??= await fetchSessionTurnIndex(sessionId, latest.revision, signal)
+    index ??= await readCachedTurnIndex(sessionId, latest.revision, signal, client)
     if (!index.entries.some((entry) => entry.id === oldest)) break
     const before = pages[0]!.beforeCursor
     if (!before || seen.has(before)) throw new Error('历史分页游标无效')

@@ -4,9 +4,10 @@ import { Hono } from 'hono'
 import { PiRuntimeRegistry } from './pi-runtime-registry.js'
 import { RuntimeSecurity } from './runtime-security.js'
 import { RuntimeWebSocketBroker } from './runtime-websocket.js'
+import type { SessionIndex } from './session-index.js'
 
-export function createRuntimeRoutes(runtime: PiRuntimeRegistry, security: RuntimeSecurity) {
-  const broker = new RuntimeWebSocketBroker(runtime)
+export function createRuntimeRoutes(runtime: PiRuntimeRegistry, security: RuntimeSecurity, sessions: SessionIndex) {
+  const broker = new RuntimeWebSocketBroker(runtime, sessions)
   const upgrade = upgradeWebSocket(() => ({
     onClose: (_event, socket) => broker.close(socket),
     onMessage: (event, socket) => { void broker.message(socket, event.data) },
@@ -15,6 +16,7 @@ export function createRuntimeRoutes(runtime: PiRuntimeRegistry, security: Runtim
 
   return new Hono()
     .post('/runtime/bootstrap', (context) => {
+      context.header('Cache-Control', 'no-store')
       if (!security.acceptsOrigin(context.req.header('origin'))) return context.json({ error: 'Invalid runtime origin' }, 403)
       return context.json({ runtimeId: security.runtimeId, token: security.token, websocketPath: '/api/runtime' })
     })

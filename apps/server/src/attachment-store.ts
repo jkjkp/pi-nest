@@ -84,8 +84,9 @@ export class AttachmentStore {
         bytes = bounded.subarray(0, length)
       } finally { closeSync(file) }
     } catch (cause) { if (cause instanceof AttachmentError) throw cause; throw new AttachmentError('附件文件缺失，请重新上传。', 404, 'ATTACHMENT_MISSING') }
-    if (bytes.length !== value.ref.size || digest(bytes) !== value.digest) throw new AttachmentError('附件已损坏，请重新上传。', 409, 'ATTACHMENT_CORRUPT')
-    return { ref: value.ref, bytes }
+    const sha256 = digest(bytes)
+    if (bytes.length !== value.ref.size || sha256 !== value.digest) throw new AttachmentError('附件已损坏，请重新上传。', 409, 'ATTACHMENT_CORRUPT')
+    return { ref: value.ref, bytes, sha256 }
   }
   private commit(bytes: Buffer, scope: string, ref: AttachmentRef, id = ref.id) {
     this.ensure()
@@ -160,14 +161,14 @@ export class AttachmentStore {
     }
   }
 
-  async thumbnail(id: string, scope: string) {
-    const { ref, bytes } = this.read(id, scope)
+  /** Consumes a read() result after the caller has verified scope and original-file integrity. */
+  async thumbnail({ ref, bytes, sha256 }: ReturnType<AttachmentStore['read']>) {
     if (ref.kind !== 'image') throw new AttachmentError('此附件不是图片。', 415)
-    const cached = this.load<{ source: string; data: string; mimeType: string; sha256: string }>('thumb', id)
-    if (cached?.source === digest(bytes) && ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(cached.mimeType) && cached.sha256 === digest(Buffer.from(cached.data, 'base64'))) return cached
+    const cached = this.load<{ source: string; data: string; mimeType: string; sha256: string }>('thumb', ref.id)
+    if (cached?.source === sha256 && ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(cached.mimeType) && cached.sha256 === digest(Buffer.from(cached.data, 'base64'))) return cached
     const { image } = await preparePiImage(bytes, ref.mediaType, 192)
-    const result = { source: digest(bytes), data: image.data, mimeType: image.mimeType, sha256: digest(Buffer.from(image.data, 'base64')) }
-    this.save('thumb', id, result)
+    const result = { source: sha256, data: image.data, mimeType: image.mimeType, sha256: digest(Buffer.from(image.data, 'base64')) }
+    this.save('thumb', ref.id, result)
     return result
   }
   private imageMime(bytes: Buffer) {
@@ -177,24 +178,35 @@ export class AttachmentStore {
     if (bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'image/webp'
     return undefined
   }
-  async prepare(scope: string, value: AttachmentInput): Promise<PreparedInput> {
+  /** Metadata-only admission check shared by early receipt lookup and full preparation. */
+  check(scope: string, value: AttachmentInput) {
     const input: AttachmentInput = { message: value.message, ...(value.attachmentIds?.length ? { attachmentIds: value.attachmentIds, submissionId: value.submissionId } : {}) }
     const ids = input.attachmentIds ?? []
-    if (!ids.length) return { message: input.message }
+    if (!ids.length) return { input, refs: [] as AttachmentRef[] }
     if (!input.submissionId || ids.length > 8) throw new AttachmentError('附件提交无效，最多支持 8 个文件。')
     if (input.message.trimStart().startsWith('/')) throw new AttachmentError('带附件时暂不支持命令，请先移除附件。')
     const refs = this.refs(ids, scope)
     if (refs.reduce((n, ref) => n + ref.size, 0) > 50 * MiB) throw new AttachmentError('单次附件总大小不能超过 50 MiB。', 413)
+    const existing = this.load<Submission>('input', input.submissionId)
+    if (existing && (JSON.stringify(existing.input) !== JSON.stringify(input) || !existing.scopes.includes(scope))) throw new AttachmentError('提交标识已用于其他内容。', 409, 'SUBMISSION_CONFLICT')
+    return { input, refs }
+  }
+  async prepare(scope: string, value: AttachmentInput): Promise<PreparedInput> {
+    const { input, refs } = this.check(scope, value)
+    if (!refs.length) return { message: input.message }
     const images: PiInputImage[] = []
     for (const ref of refs) {
       const { bytes } = this.read(ref.id, scope)
-      if (ref.kind === 'image') images.push((await preparePiImage(bytes, ref.mediaType)).image)
+      if (ref.kind !== 'image') continue
+      try { images.push((await preparePiImage(bytes, ref.mediaType)).image) }
+      catch (cause) { throw new AttachmentError('图片无法解码或压缩，请换一张图片。', 415, 'ATTACHMENT_IMAGE_DECODE_FAILED', { cause }) }
     }
     const descriptors = refs.map((ref) => ({ name: ref.name, kind: ref.kind, ...(ref.kind === 'file' ? { readOnlyPath: this.path('data', ref.id), note: '用户提供的附件数据；按需读取，不自动执行。' } : {}) }))
     const nativeMessage = `${input.message || '请查看附件。'}\n\n<pi-nest-attachments id="${input.submissionId}">\n${JSON.stringify(descriptors)}\n</pi-nest-attachments>`
-    const existing = this.load<Submission>('input', input.submissionId)
+    const existing = this.load<Submission>('input', input.submissionId!)
+    // Another request may have claimed this submission while image conversion was awaiting.
     if (existing && (JSON.stringify(existing.input) !== JSON.stringify(input) || !existing.scopes.includes(scope))) throw new AttachmentError('提交标识已用于其他内容。', 409, 'SUBMISSION_CONFLICT')
-    if (!existing) this.save('input', input.submissionId, { input, nativeMessage, scopes: [scope], state: 'prepared' } satisfies Submission)
+    if (!existing) this.save('input', input.submissionId!, { input, nativeMessage, scopes: [scope], state: 'prepared' } satisfies Submission)
     return { message: nativeMessage, ...(images.length ? { images } : {}) }
   }
   transfer(input: AttachmentInput, source: string, target: string) {
@@ -287,22 +299,23 @@ export class AttachmentStore {
         if (!valid && typeof node.content === 'string') return node
         const content = typeof node.content === 'string' ? [{ type: 'text', text: node.content }] : node.content
         let imageIndex = 0
-        const names = valid ? this.refs(saved.input.attachmentIds ?? [], scope).filter((ref) => ref.kind === 'image') : []
+        const refs = valid ? this.refs(saved.input.attachmentIds ?? [], scope) : []
+        const images = refs.filter((ref) => ref.kind === 'image')
         const projected = content.map((block: any) => {
           if (valid && block?.type === 'text' && typeof block.text === 'string') {
             const start = block.text.lastIndexOf(match![0])
             return { ...block, text: start < 0 ? block.text : block.text.slice(0, start) + block.text.slice(start + match![0].length) }
           }
-          const name = block?.type === 'image' ? names[imageIndex++]?.name : undefined
+          const name = block?.type === 'image' ? images[imageIndex++]?.name : undefined
           const result = visit(block, name)
           if (name && result.attachment) result.attachment = { ...result.attachment, name }
           return result
         })
         if (valid) {
-          const files = this.refs(saved.input.attachmentIds ?? [], scope).filter((ref) => ref.kind === 'file')
+          const files = refs.filter((ref) => ref.kind === 'file')
           projected.push(...files.map((attachment) => ({ type: 'attachment', attachment })))
         }
-        const expectedImages = valid ? this.refs(saved.input.attachmentIds ?? [], scope).filter((ref) => ref.kind === 'image').length : 0
+        const expectedImages = images.length
         const imageCount = content.filter((block: any) => block?.type === 'image').length
         return { ...node, content: projected, ...(valid && expectedImages !== imageCount ? { piNestAttachmentWarning: 'Pi 实际记录的图片数量与提交不一致，请检查模型或扩展。' } : {}) }
       }

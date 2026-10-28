@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
-import { latestCacheHitRate, runtimeStatisticsSchema } from './runtime-statistics.js'
+import { cacheHitRateFromUsage, latestCacheHitRate, runtimeStatisticsSchema } from './runtime-statistics.js'
 
 it('allows unknown context and strips native paths and other internal statistics', () => {
   const data = runtimeStatisticsSchema.parse({ tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 }, cost: 0.1, contextUsage: { tokens: null, percent: null, contextWindow: 1000000 }, autoCompactionEnabled: true, sessionFile: '/private/session', sessionId: 'native' })
@@ -23,4 +23,9 @@ it('uses only the latest assistant request across native branches, not a cumulat
     expect(latestCacheHitRate(path)).toBeUndefined()
     expect(latestCacheHitRate(join(directory, 'missing'))).toBeUndefined()
   } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+it('computes cache hit rate from the same usage shape used by native events', () => {
+  expect(cacheHitRateFromUsage({ input: 1, cacheRead: 998, cacheWrite: 1 })).toBeCloseTo(99.8)
+  expect(cacheHitRateFromUsage({ input: 0, cacheRead: 0, cacheWrite: 0 })).toBeUndefined()
 })

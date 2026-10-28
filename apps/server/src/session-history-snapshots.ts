@@ -1,4 +1,4 @@
-import { capturePiSessionHistory, historyFromSnapshot, turnIndexFromSnapshot, type PiSessionHistorySnapshot, type PiSessionHistoryOptions, type PiSessionSummary } from '@pi-nest/pi-adapter'
+import { capturePiSessionHistory, readPiSessionHistorySourceSignature, samePiSessionHistorySourceSignature, historyFromSnapshot, turnIndexFromSnapshot, type PiSessionHistorySourceSignature, type PiSessionHistorySnapshot, type PiSessionHistoryOptions, type PiSessionSummary } from '@pi-nest/pi-adapter'
 
 type Session = Pick<PiSessionSummary, 'id' | 'cwd' | 'sessionFile'>
 type Saved = { binding: string; snapshot: PiSessionHistorySnapshot }
@@ -7,6 +7,7 @@ export class HistorySnapshotExpired extends Error {}
 /** Disposable read projections of Pi files. Active versions are never evicted. */
 export class SessionHistorySnapshots {
   private readonly versions = new Map<string, Saved>()
+  private readonly latest = new Map<string, { key: string; signature: PiSessionHistorySourceSignature }>()
   private readonly pinned = new Map<string, string>()
   private readonly runs = new Map<string, { binding: string; before: Set<string> }>()
   private readonly identities = new Map<string, { runId: string; runIndex: number }>()
@@ -16,7 +17,11 @@ export class SessionHistorySnapshots {
   private binding(session: Session) { return JSON.stringify([session.id, session.cwd, session.sessionFile]) }
   private get(session: Session, revision?: string): PiSessionHistorySnapshot {
     const binding = this.binding(session)
-    const key = revision ? `${binding}:${revision}` : this.pinned.get(binding)
+    let key = revision ? `${binding}:${revision}` : this.pinned.get(binding)
+    if (!revision && !key) {
+      const latest = this.latest.get(binding)
+      if (latest && samePiSessionHistorySourceSignature(latest.signature, readPiSessionHistorySourceSignature(session.sessionFile))) key = latest.key
+    }
     const saved = key && this.versions.get(key)
     if (saved) {
       this.versions.delete(key!); this.versions.set(key!, saved)
@@ -26,7 +31,12 @@ export class SessionHistorySnapshots {
     if (revision && snapshot.revision !== revision) throw new HistorySnapshotExpired('History snapshot expired')
     const nextKey = `${binding}:${snapshot.revision}`
     const existing = this.versions.get(nextKey)
-    if (existing) return existing.snapshot
+    this.latest.delete(binding)
+    if (existing) {
+      this.versions.delete(nextKey); this.versions.set(nextKey, existing)
+      if (snapshot.sourceSignature) this.latest.set(binding, { key: nextKey, signature: snapshot.sourceSignature })
+      return existing.snapshot
+    }
     if (snapshot.bytes > this.maxBytes) throw new Error('History snapshot exceeds capacity')
     while (this.bytes + snapshot.bytes > this.maxBytes || this.versions.size >= this.maxVersions) {
       const evict = [...this.versions.keys()].find((candidate) => ![...this.pinned.values()].includes(candidate))
@@ -34,11 +44,13 @@ export class SessionHistorySnapshots {
       this.bytes -= this.versions.get(evict)!.snapshot.bytes
       const removed = this.versions.get(evict)!
       this.versions.delete(evict)
+      if (this.latest.get(removed.binding)?.key === evict) this.latest.delete(removed.binding)
       const kept = new Set([...this.versions.values()].filter((saved) => saved.binding === removed.binding).flatMap((saved) => saved.snapshot.entries.map((entry) => entry.id)))
       if (removed.binding === binding) for (const entry of snapshot.entries) kept.add(entry.id)
       for (const entry of removed.snapshot.entries) if (!kept.has(entry.id)) this.identities.delete(`${removed.binding}:${entry.id}`)
     }
     this.versions.set(nextKey, { binding, snapshot }); this.bytes += snapshot.bytes
+    if (snapshot.sourceSignature) this.latest.set(binding, { key: nextKey, signature: snapshot.sourceSignature })
     return snapshot
   }
 
@@ -70,5 +82,5 @@ export class SessionHistorySnapshots {
     return { ...page, entries: page.entries.map((entry) => ({ ...entry, ...this.identities.get(`${this.binding(session)}:${entry.id}`) })) }
   }
   index(session: Session, revision?: string) { return turnIndexFromSnapshot(this.get(session, revision)) }
-  clear() { this.versions.clear(); this.pinned.clear(); this.runs.clear(); this.identities.clear(); this.bytes = 0 }
+  clear() { this.latest.clear(); this.versions.clear(); this.pinned.clear(); this.runs.clear(); this.identities.clear(); this.bytes = 0 }
 }

@@ -3,7 +3,13 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { preparePiImage } from '@pi-nest/pi-adapter'
 import { AttachmentStore } from './attachment-store.js'
+
+vi.mock('@pi-nest/pi-adapter', async (original) => {
+  const actual = await original<typeof import('@pi-nest/pi-adapter')>()
+  return { ...actual, preparePiImage: vi.fn(actual.preparePiImage) }
+})
 
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
 let directory: string
@@ -58,6 +64,21 @@ it('prepares ordered images and read-on-demand files, and rejects any invalid me
   expect(() => store.read(image.id, 'a')).not.toThrow()
 })
 
+it('checks submission membership, order, and scope without reading attachment data', async () => {
+  const first = await upload('one')
+  const second = await upload('two')
+  const input = { message: 'look', attachmentIds: [first.id, second.id], submissionId: randomUUID() }
+  await store.prepare('a', input)
+  expect(store.check('a', input).refs.map((ref) => ref.id)).toEqual([first.id, second.id])
+  expect(() => store.check('a', { ...input, message: 'different' })).toThrow('其他内容')
+  expect(() => store.check('a', { ...input, attachmentIds: [second.id, first.id] })).toThrow('其他内容')
+  expect(() => store.check('b', input)).toThrow('不属于')
+  rmSync(join(directory, `data-${first.id}`))
+  expect(() => store.check('a', input)).not.toThrow()
+  expect(store.receipt('a', input)).toBeUndefined()
+  expect(JSON.parse(readFileSync(join(directory, `input-${input.submissionId}`), 'utf8')).state).toBe('prepared')
+})
+
 it('does not send a batch twice on duplicate or lost-ack retries, including concurrent retries', async () => {
   const ref = await upload()
   const input = { message: 'look', attachmentIds: [ref.id], submissionId: randomUUID() }
@@ -69,6 +90,38 @@ it('does not send a batch twice on duplicate or lost-ack retries, including conc
   expect(send).toHaveBeenCalledTimes(1)
   await expect(store.deliver('a', input, send, undefined, 'steer')).rejects.toThrow('其他发送方式')
   await expect(store.prepare('a', { ...input, message: 'different' })).rejects.toThrow('其他内容')
+})
+
+it('rejects conflicting submissions committed while image preparation is pending', async () => {
+  const image = await store.upload(stream(Buffer.from(png, 'base64')), 'a', 'x.png', 'image/png')
+  const input = { message: 'first', attachmentIds: [image.id], submissionId: randomUUID() }
+  const other = { ...input, message: 'second' }
+  let release!: () => void
+  let started!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const preparing = new Promise<void>((resolve) => { started = resolve })
+  const convert = vi.mocked(preparePiImage).getMockImplementation()!
+  vi.mocked(preparePiImage).mockImplementationOnce(async (...args) => {
+    const result = await convert(...args)
+    started()
+    await gate
+    return result
+  })
+
+  const first = store.prepare('a', input)
+  try {
+    await preparing
+    await store.prepare('a', other)
+    const rejected = expect(first).rejects.toMatchObject({ code: 'SUBMISSION_CONFLICT' })
+    release()
+    await rejected
+    expect(JSON.parse(readFileSync(join(directory, `input-${input.submissionId}`), 'utf8')).input).toEqual(other)
+    await expect(store.prepare('a', other)).resolves.toMatchObject({ message: expect.stringContaining('second') })
+  } finally {
+    release()
+    await Promise.allSettled([first])
+    vi.mocked(preparePiImage).mockImplementation(convert)
+  }
 })
 
 it('keeps uncertain delivery blocked after restart rather than silently executing twice', async () => {
@@ -101,6 +154,61 @@ it('projects native CLI images without base64 and lets the child retain verified
   expect(JSON.parse(readFileSync(meta, 'utf8')).scopes).toEqual(['a', 'child'])
 })
 
+it('reads attachment metadata once per message and preserves image names and file order', async () => {
+  const first = await store.upload(stream(Buffer.from(png, 'base64')), 'a', 'first.png', 'image/png')
+  const second = await store.upload(stream(Buffer.from(png, 'base64')), 'a', 'second.png', 'image/png')
+  const file = await upload()
+  const input = { message: 'look', attachmentIds: [first.id, file.id, second.id], submissionId: randomUUID() }
+  const prepared = await store.prepare('a', input)
+  const raw = { role: 'user', content: [
+    { type: 'text', text: prepared.message },
+    { type: 'image', data: png, mimeType: 'image/png' },
+    { type: 'image', data: png, mimeType: 'image/png' },
+  ] }
+  const refs = vi.spyOn(store, 'refs')
+
+  const projected = store.project(raw, 'a') as any
+  expect(refs).toHaveBeenCalledExactlyOnceWith(input.attachmentIds, 'a')
+  expect(projected.content[0].text).toBe('look')
+  expect(projected.content.slice(1).map((block: any) => block.attachment.name)).toEqual(['first.png', 'second.png', file.name])
+  expect(projected.content[3].attachment.id).toBe(file.id)
+  expect(projected).not.toHaveProperty('piNestAttachmentWarning')
+  expect(JSON.stringify(projected)).not.toContain(png)
+
+  refs.mockClear()
+  store.project([raw, raw], 'a')
+  expect(refs).toHaveBeenCalledTimes(2)
+})
+
+it('checks image counts using the same metadata read', async () => {
+  const image = await store.upload(stream(Buffer.from(png, 'base64')), 'a', 'photo.png', 'image/png')
+  const input = { message: 'look', attachmentIds: [image.id], submissionId: randomUUID() }
+  const prepared = await store.prepare('a', input)
+  const refs = vi.spyOn(store, 'refs')
+
+  const projected = store.project({ role: 'user', content: prepared.message }, 'a') as any
+  expect(refs).toHaveBeenCalledExactlyOnceWith(input.attachmentIds, 'a')
+  expect(projected.piNestAttachmentWarning).toContain('图片数量与提交不一致')
+})
+
+it('does not read metadata for invalid markers and still rejects missing metadata for valid messages', async () => {
+  const file = await upload()
+  const input = { message: 'look', attachmentIds: [file.id], submissionId: randomUUID() }
+  const prepared = await store.prepare('a', input)
+  const raw = { role: 'user', content: prepared.message }
+  const refs = vi.spyOn(store, 'refs')
+
+  expect(store.project(raw, 'b')).toEqual(raw)
+  const forged = { role: 'user', content: prepared.message.replace('readOnlyPath', 'otherPath') }
+  expect(store.project(forged, 'a')).toEqual(forged)
+  store.project({ role: 'user', content: 'ordinary text' }, 'a')
+  expect(refs).not.toHaveBeenCalled()
+
+  rmSync(join(directory, `meta-${file.id}`))
+  expect(() => store.project(raw, 'a')).toThrow('不属于')
+  expect(refs).toHaveBeenCalledExactlyOnceWith(input.attachmentIds, 'a')
+})
+
 it('does not trust a copied marker in a different session and rebuilds native image caches', async () => {
   const file = await upload()
   const input = { message: 'look', attachmentIds: [file.id], submissionId: randomUUID() }
@@ -129,9 +237,11 @@ it('keeps the new-session scope after committing its draft delivery receipt', as
 
 it('checks thumbnail cache integrity and preserves quoted markers when projecting a new attachment input', async () => {
   const image = await store.upload(stream(Buffer.from(png, 'base64')), 'a', 'x.png', 'image/png')
-  const thumbnail = await store.thumbnail(image.id, 'a')
+  const source = store.read(image.id, 'a')
+  const thumbnail = await store.thumbnail(source)
+  expect(thumbnail.source).toBe(source.sha256)
   writeFileSync(join(directory, `thumb-${image.id}`), JSON.stringify({ ...thumbnail, data: 'corrupted' }))
-  expect((await store.thumbnail(image.id, 'a')).data).toBe(png)
+  expect((await store.thumbnail(store.read(image.id, 'a'))).data).toBe(png)
   const first = { message: 'first', attachmentIds: [image.id], submissionId: randomUUID() }
   const one = await store.prepare('a', first)
   const second = { message: `quoted: ${one.message}`, attachmentIds: [image.id], submissionId: randomUUID() }

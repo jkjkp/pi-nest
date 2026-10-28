@@ -2,9 +2,10 @@ import { Hono, type MiddlewareHandler } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { z } from 'zod'
 import { homedir } from 'node:os'
-import { discoverPiModels, diagnosePiMcp, listPiSessions, PiConfigurationConflict, PiConfigurationInvalid, readPiConfiguration, updatePiConfiguration } from '@pi-nest/pi-adapter'
+import { discoverPiModels, diagnosePiMcp, PiConfigurationConflict, PiConfigurationInvalid, readPiConfiguration, updatePiConfiguration } from '@pi-nest/pi-adapter'
 import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
 import type { RuntimeSecurity } from './runtime-security.js'
+import type { SessionIndex } from './session-index.js'
 import { configurationUpdateSchema } from './configuration-schema.js'
 import { ProjectRegistry } from './project-registry.js'
 
@@ -12,25 +13,25 @@ export function configurationSecurity(security: RuntimeSecurity): MiddlewareHand
   return async (context, next) => {
     context.header('Cache-Control', 'no-store')
     const origin = context.req.header('origin')
-    if ((origin && !security.acceptsOrigin(origin)) || (!['GET', 'HEAD'].includes(context.req.method) && !security.acceptsOrigin(origin)) || !security.acceptsToken(context.req.header('x-pi-nest-token'))) return context.json({ error: '设置访问被拒绝' }, 403)
+    if ((origin && !security.acceptsOrigin(origin)) || (!['GET', 'HEAD'].includes(context.req.method) && !security.acceptsOrigin(origin))) return context.json({ error: '设置访问被拒绝' }, 403)
+    if (!security.acceptsToken(context.req.header('x-pi-nest-token'))) return context.json({ error: '设置访问被拒绝', code: 'RUNTIME_TOKEN_INVALID' }, 403)
     await next()
   }
 }
 
-export function createConfigurationRoutes(runtime: PiRuntimeRegistry, security: RuntimeSecurity, projects = new ProjectRegistry()) {
+export function createConfigurationRoutes(runtime: PiRuntimeRegistry, security: RuntimeSecurity, projects = new ProjectRegistry(), sessions: SessionIndex) {
   const routes = new Hono().use('*', configurationSecurity(security))
   routes.use('*', bodyLimit({ maxSize: 1_000_000 }))
   async function cwdFor(sessionId?: string) {
     if (!sessionId) return homedir()
-    const session = (await listPiSessions()).find((candidate) => candidate.id === sessionId)
-    return session?.cwd
+    return (await sessions.resolve(sessionId))?.cwd
   }
   return routes
     .get('/', async (context) => {
       try {
         const project = context.req.query('project')
         if (project && context.req.query('session')) return context.json({ error: '请选择项目或会话之一' }, 400)
-        if (project && !(await listPiSessions()).some((session) => session.cwd === project) && !projects.has(project)) return context.json({ error: '找不到项目' }, 404)
+        if (project && !(await sessions.hasWorkspace(project)) && !projects.has(project)) return context.json({ error: '找不到项目' }, 404)
         const cwd = project || await cwdFor(context.req.query('session'))
         if (!cwd) return context.json({ error: '找不到项目会话' }, 404)
         return context.json(await readPiConfiguration(cwd))

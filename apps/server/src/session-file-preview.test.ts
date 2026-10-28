@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -6,24 +6,24 @@ import { join } from 'node:path'
 import { createSessionFilePreviewRoutes, readSessionFilePreview, readSessionImagePreview } from './session-file-preview.js'
 import { RuntimeSecurity } from './runtime-security.js'
 import { createApp } from './app.js'
+import { createSessionIndexFixture } from './test-fixtures/session-index.js'
 
-const adapter = vi.hoisted(() => ({ listPiSessions: vi.fn() }))
-vi.mock('@pi-nest/pi-adapter', async (original) => ({ ...await original<typeof import('@pi-nest/pi-adapter')>(), ...adapter }))
 let directory: string
 let cwd: string
+let sessionIndex: ReturnType<typeof createSessionIndexFixture>
 beforeEach(() => {
   directory = realpathSync(mkdtempSync(join(tmpdir(), 'pi-nest-preview-')))
   cwd = join(directory, 'project')
   mkdirSync(cwd)
   writeFileSync(join(cwd, 'a.ts'), 'hello\nworld')
   writeFileSync(join(directory, 'outside'), 'private')
-  adapter.listPiSessions.mockResolvedValue([{ id: 'one', cwd }])
+  sessionIndex = createSessionIndexFixture([{ id: 'one', cwd, firstMessage: undefined, name: undefined, sessionFile: join(directory, 'session.jsonl'), updatedAt: undefined }])
 })
 afterEach(() => rmSync(directory, { recursive: true, force: true }))
 
 it('reads current text through a session-authorized route and rejects forged origins and bodies', async () => {
   const security = new RuntimeSecurity('http://localhost:31415')
-  const app = createApp(undefined, security)
+  const app = createApp(undefined, security, undefined, sessionIndex.index)
   const request = (headers: Record<string, string>, body = { path: 'a.ts' }) => app.request('/api/sessions/one/file-preview', { method: 'POST', headers, body: JSON.stringify(body) })
   const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }
   expect((await request({})).status).toBe(403)
@@ -39,7 +39,7 @@ it('reads current text through a session-authorized route and rejects forged ori
   expect((await request(headers, { path: 'a\0.ts' })).status).toBe(400)
   expect(await (await request(headers, { path: join(directory, 'outside') })).json()).toEqual({ path: join(directory, 'outside'), content: 'private' })
   expect((await request({ ...headers, origin: 'https://evil.example' }, { path: join(directory, 'outside') })).status).toBe(403)
-  const routes = createSessionFilePreviewRoutes(security)
+  const routes = createSessionFilePreviewRoutes(security, sessionIndex.index)
   expect((await routes.request('/sessions/missing/file-preview', { method: 'POST', headers, body: JSON.stringify({ path: 'a.ts' }) })).status).toBe(404)
 })
 
@@ -90,7 +90,7 @@ const pixelWebp = Buffer.from('UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA
 it('authorizes image bytes independently and chooses MIME from actual data rather than the extension', async () => {
   writeFileSync(join(cwd, '像素.jpg'), pixelPng)
   const security = new RuntimeSecurity('http://localhost:31415')
-  const app = createApp(undefined, security)
+  const app = createApp(undefined, security, undefined, sessionIndex.index)
   const request = (headers: Record<string, string>, body: object = { path: '像素.jpg' }) => app.request('/api/sessions/one/file-preview/image', { method: 'POST', headers, body: JSON.stringify(body) })
   const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }
   expect((await request({})).status).toBe(403)

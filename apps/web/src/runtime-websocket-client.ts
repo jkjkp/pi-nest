@@ -1,4 +1,5 @@
 import type { PiRuntimeCommand, PiRuntimeStatistics, PiRuntimeEvent, RuntimeError, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel, RuntimeMessage, RuntimeCommandPayload } from '@pi-nest/contracts'
+import { createRuntimeBootstrap, runtimeBootstrap } from './runtime-bootstrap.js'
 export type { PiRuntimeEvent, RuntimeError, RuntimeLifecycle, RuntimeFailureKind, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel } from '@pi-nest/contracts'
 
 type RuntimeSocket = Pick<WebSocket, 'close' | 'readyState' | 'send'> & { addEventListener: WebSocket['addEventListener'] }
@@ -95,9 +96,11 @@ export class RuntimeWebSocketClient {
   private runtimeId: string | undefined
   private socket: RuntimeSocket | undefined
   private readonly options: RuntimeWebSocketClientOptions
+  private readonly bootstrap: ReturnType<typeof createRuntimeBootstrap>
 
   constructor(options: RuntimeWebSocketClientOptions = {}) {
     this.options = options
+    this.bootstrap = options.fetchFn ? createRuntimeBootstrap(options.fetchFn) : runtimeBootstrap
     for (const [sessionId, watch] of savedWatches()) this.watched.set(sessionId, watch)
   }
 
@@ -159,6 +162,7 @@ export class RuntimeWebSocketClient {
   followUp(sessionId: string, message: string, input?: { attachmentIds: string[]; submissionId: string }) { return this.command({ type: 'follow_up', sessionId, message, ...input }) }
   steerQueued(sessionId: string, message: string, index: number, inputId?: string) { return this.command({ type: 'steer_queued', sessionId, message, index, ...(inputId ? { inputId } : {}) }) }
   resumeQueued(sessionId: string, inputId: string) { return this.command({ type: 'resume_queued', sessionId, inputId }) }
+  dropQueued(sessionId: string, inputId: string) { return this.command<{ message: string }>({ type: 'drop_queued', sessionId, inputId }) }
   setModel(sessionId: string, provider: string, modelId: string) { return this.command({ type: 'set_model', sessionId, modelId, provider }) }
   setThinkingLevel(sessionId: string, level: string) { return this.command({ type: 'set_thinking_level', sessionId, level }) }
   compact(sessionId: string, customInstructions?: string) { return this.command({ type: 'compact', sessionId, ...(customInstructions ? { customInstructions } : {}) }) }
@@ -194,10 +198,7 @@ export class RuntimeWebSocketClient {
 
   private async open() {
     try {
-      const response = await (this.options.fetchFn ?? fetch)('/api/runtime/bootstrap', { method: 'POST' })
-      if (!response.ok) throw new Error('Pi runtime bootstrap failed')
-      const bootstrap = await response.json() as { runtimeId?: unknown; token?: unknown; websocketPath?: unknown }
-      if (typeof bootstrap.runtimeId !== 'string' || typeof bootstrap.token !== 'string' || typeof bootstrap.websocketPath !== 'string') throw new Error('Pi runtime bootstrap was invalid')
+      const bootstrap = await this.bootstrap.refresh()
       const previousRuntimeId = this.runtimeId ?? savedRuntimeId()
       const changedRuntime = previousRuntimeId !== undefined && previousRuntimeId !== bootstrap.runtimeId
       this.runtimeId = bootstrap.runtimeId
@@ -297,7 +298,7 @@ export class RuntimeWebSocketClient {
       sessionId: message.sessionId,
     }
     for (const listener of this.sessionSnapshots) listener(snapshot)
-    this.applyRuntimeStatus({ ...snapshot.runtime, sessionId: snapshot.sessionId })
+    this.applyRuntimeStatus({ ...snapshot.runtime, ...(completedRun ? { completedRun } : {}), sessionId: snapshot.sessionId })
   }
 
   private handleRuntimeStatus(message: { type: 'runtime_status' } & RuntimeStatus) {

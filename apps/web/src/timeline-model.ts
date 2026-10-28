@@ -63,6 +63,7 @@ export type TimelineNavigationEntry = {
 
 const emptyHistory: PiSessionHistoryEntry[] = []
 const emptyTimeline: TimelineItem[] = []
+const runtimeItemCache = new WeakMap<RuntimeTurn, { item: TimelineItem; userMessages: Record<string, unknown>[] }>()
 const historyItemCache = new WeakMap<PiSessionHistoryEntry[], TimelineItem[]>()
 const timelineItemCache = new WeakMap<PiSessionHistoryEntry[], WeakMap<RuntimeTurn[], TimelineItem[]>>()
 const navigationCache = new WeakMap<TimelineItem[], TimelineNavigationEntry[]>()
@@ -214,6 +215,13 @@ function isMetadata(type: string) {
   return type === 'context_edit' || type === 'model_change' || type === 'thinking_level_change' || type === 'thinking_level_changed' || type.startsWith('compaction') || type === 'turn_start' || type === 'turn_end' || type === 'agent_start' || type === 'agent_end' || type === 'agent_settled' || type === 'aborted'
 }
 
+function projectUserAttachments(item: TimelineItem, nativeMessage: Record<string, unknown>) {
+  if (typeof nativeMessage.piNestAttachmentWarning === 'string') item.attachmentWarning = nativeMessage.piNestAttachmentWarning
+  const attachments = messageAttachments(nativeMessage)
+  if (item.attachments?.length && attachments.length !== item.attachments.length) item.attachmentWarning = 'Pi 实际记录的附件与提交不一致，请检查模型或扩展。'
+  if (attachments.length || item.attachments) item.attachments = attachments
+}
+
 function projectEvent(item: TimelineItem, event: TimelineEvent) {
   item.events.push(event)
   const type = eventType(event)
@@ -257,10 +265,7 @@ function projectEvent(item: TimelineItem, event: TimelineEvent) {
     return diagnostic(item, event, 'unrenderable_message')
   }
   if ((type === 'message' || type === 'message_start' || type === 'message_end') && nativeMessage?.role === 'user') {
-    if (typeof nativeMessage.piNestAttachmentWarning === 'string') item.attachmentWarning = nativeMessage.piNestAttachmentWarning
-    const attachments = messageAttachments(nativeMessage)
-    if (item.attachments?.length && attachments.length !== item.attachments.length) item.attachmentWarning = 'Pi 实际记录的附件与提交不一致，请检查模型或扩展。'
-    if (attachments.length || item.attachments) item.attachments = attachments
+    projectUserAttachments(item, nativeMessage)
     return
   }
   if ((type === 'message' || type === 'message_end') && nativeMessage?.role === 'toolResult') {
@@ -317,6 +322,24 @@ function memoizedHistoryItems(entries: PiSessionHistoryEntry[]) {
   return items
 }
 
+function runtimeItem(turn: RuntimeTurn) {
+  const cached = runtimeItemCache.get(turn)
+  if (cached) return cached
+  const item = newTurn(turn.id, turn.prompt ?? promptFrom(turn.events), turn.startedAt)
+  const userMessages: Record<string, unknown>[] = []
+  for (const saved of turn.events) {
+    const event = runtimeEvent(saved)
+    projectEvent(item, event)
+    if (event.event.type === 'message' || event.event.type === 'message_start' || event.event.type === 'message_end') {
+      const native = message(event)
+      if (native?.role === 'user') userMessages.push(native)
+    }
+  }
+  const projection = { item, userMessages }
+  runtimeItemCache.set(turn, projection)
+  return projection
+}
+
 export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turns: RuntimeTurn[], _systemEvents: PiRuntimeEvent[]): TimelineItem[] {
   const historyKey = history ?? emptyHistory
   let cachedForHistory = timelineItemCache.get(historyKey)
@@ -351,12 +374,14 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
       if (turn.historyAnchorId && anchorIndex >= 0) return index > anchorIndex
       return Date.parse(item.startedAt) >= Date.parse(turn.submittedAt ?? turn.startedAt) - 2_000
     })
-    const item = newTurn(persisted?.id ?? turn.id, turn.prompt ?? promptFrom(turn.events), persisted?.startedAt ?? turn.startedAt, runtimeTiming)
+    const projection = runtimeItem(turn)
+    // History-dependent fields belong to this merge, not the shared event projection.
+    const item: TimelineItem = { ...projection.item, id: persisted?.id ?? turn.id, startedAt: persisted?.startedAt ?? turn.startedAt, runtimeTiming, attachmentWarning: undefined }
     item.fileChanges = persisted?.fileChanges
     item.attachments = turn.attachments ?? persisted?.attachments
     item.displayId = `${turn.id}:${turn.submittedAt ?? turn.startedAt}`
     item.steering = turn.steering ? { ...turn.steering, ...(persisted ? { status: 'applied' as const } : {}) } : undefined
-    for (const event of turn.events) projectEvent(item, runtimeEvent(event))
+    for (const native of projection.userMessages) projectUserAttachments(item, native)
     if (persisted) {
       matchedHistory.add(persisted.id)
       item.modelErrors ??= persisted.modelErrors

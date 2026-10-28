@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { RuntimeWebSocketClient } from './runtime-websocket-client.js'
+import { createSessionRunController } from './session-run-controller.js'
+import { useWorkspaceStore } from './workspace-store.js'
 
 class FakeSocket {
   readyState = 0
@@ -199,7 +201,7 @@ describe('RuntimeWebSocketClient', () => {
     expect(snapshots[0]).toMatchObject({ completedRun: { runId: 'finished', stopReason: 'error' } })
     socket.receive({ type: 'session_snapshot', sessionId: 'session-a', atSequence: 3, completedRun: { runId: 42, stopReason: null }, extensionUi: { freshness: 'known', statuses: {}, widgets: {} }, runtime: { lifecycle: 'active', revision: 2 } })
     expect(snapshots.at(-1)).not.toHaveProperty('completedRun')
-    expect(statuses).toEqual([{ lifecycle: 'active', revision: 2, sessionId: 'session-a' }])
+    expect(statuses).toEqual([{ completedRun: { runId: 'finished', stopReason: 'error' }, lifecycle: 'active', revision: 2, sessionId: 'session-a' }])
     expect(events).toEqual([])
     expect(client.watchedSessions()).toEqual([{ after: 3, role: 'foreground', sessionId: 'session-a' }])
     socket.receive({ event: { type: 'live' }, observedAt: 'later', sequence: 4, sessionId: 'session-a', type: 'pi_event' })
@@ -320,4 +322,86 @@ it('rejects a failed statistics read without publishing a session run error', as
   await rejected
   expect(listener).not.toHaveBeenCalled()
   socket.close()
+})
+
+it('dedupes statistics for a completed snapshot that also dispatches a runtime status', async () => {
+  vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+  useWorkspaceStore.setState({ extensionStatuses: {}, extensionWidgets: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {}, runs: {}, sessionNotifications: {}, watchStates: {} })
+  const socket = new FakeSocket()
+  const factory = vi.fn(() => socket as never)
+  const client = new RuntimeWebSocketClient({
+    fetchFn: vi.fn(async () => new Response(JSON.stringify({ runtimeId: 'runtime-1', token: 'token', websocketPath: '/api/runtime' }))),
+    socketFactory: factory,
+  })
+  const stats = { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 }, cost: 0.01 }
+  const getStatistics = vi.spyOn(client, 'getSessionStatistics').mockResolvedValue(stats as never)
+  createSessionRunController({ invalidateHistory: vi.fn(), runtime: client })
+
+  const watch = client.watch('session-a')
+  await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce())
+  socket.open()
+  await vi.waitFor(() => expect(socket.sent).toContainEqual({ id: 'web-1', resume: { after: 0 }, sessionId: 'session-a', type: 'watch' }))
+  socket.receive({ command: 'watch', id: 'web-1', sessionId: 'session-a', type: 'ack' })
+  await watch
+
+  socket.receive({
+    atSequence: 0,
+    completedRun: { runId: 'run-1', stopReason: 'stop' },
+    extensionUi: { freshness: 'unknown', statuses: {}, widgets: {} },
+    runtime: { lifecycle: 'idle', revision: 1 },
+    sessionId: 'session-a',
+    type: 'session_snapshot',
+  })
+
+  await vi.waitFor(() => expect(getStatistics).toHaveBeenCalledTimes(1))
+  await vi.waitFor(() => expect(useWorkspaceStore.getState().runtimeStatistics['session-a']?.data).toEqual(stats))
+  expect(getStatistics).toHaveBeenCalledTimes(1)
+  vi.unstubAllGlobals()
+})
+
+it('shares HTTP credentials and refreshes them on WebSocket reconnect after a server restart', async () => {
+  vi.resetModules()
+  const { RuntimeWebSocketClient: Client } = await import('./runtime-websocket-client.js')
+  const { configurationResponse } = await import('./workspace-api.js')
+  vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+  let runtimeId = 'old-runtime'
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url) => url === '/api/runtime/bootstrap'
+    ? Response.json({ runtimeId, token: `${runtimeId}-token`, websocketPath: '/api/runtime' }) : Response.json({ ok: true }))
+  vi.stubGlobal('fetch', fetcher)
+  const first = new FakeSocket()
+  const second = new FakeSocket()
+  const factory = vi.fn().mockReturnValueOnce(first as never).mockReturnValueOnce(second as never)
+  const client = new Client({ socketFactory: factory, reconnectDelay: () => 0 })
+  const errors = vi.fn()
+  client.onError(errors)
+  try {
+    const watching = client.watch('session-a')
+    await vi.waitFor(() => expect(factory).toHaveBeenCalledTimes(1))
+    first.open()
+    await vi.waitFor(() => expect(first.sent).toHaveLength(1))
+    first.receive({ type: 'ack', id: first.sent[0]!.id, command: 'watch', sessionId: 'session-a' })
+    await watching
+    await configurationResponse('/configuration')
+    expect(fetcher.mock.calls.filter(([url]) => url === '/api/runtime/bootstrap')).toHaveLength(1)
+
+    runtimeId = 'new-runtime'
+    first.close()
+    await vi.waitFor(() => expect(factory).toHaveBeenCalledTimes(2))
+    expect(factory.mock.calls[1]![0]).toContain('token=new-runtime-token')
+    second.open()
+    await vi.waitFor(() => expect(second.sent).toHaveLength(1))
+    second.receive({ type: 'ack', id: second.sent[0]!.id, command: 'watch', sessionId: 'session-a' })
+    await vi.waitFor(() => expect(errors).toHaveBeenCalledWith(expect.objectContaining({ code: 'RUNTIME_RESTARTED', sessionId: 'session-a' })))
+    await configurationResponse('/configuration')
+    expect(fetcher.mock.calls.filter(([url]) => url === '/api/runtime/bootstrap')).toHaveLength(2)
+    expect(new Headers(fetcher.mock.calls.at(-1)![1]!.headers).get('x-pi-nest-token')).toBe('new-runtime-token')
+
+    const unwatch = client.unwatch('session-a')
+    await vi.waitFor(() => expect(second.sent.at(-1)?.type).toBe('unwatch'))
+    second.receive({ type: 'ack', id: second.sent.at(-1)!.id, command: 'unwatch', sessionId: 'session-a' })
+    await unwatch
+  } finally {
+    second.close()
+    vi.unstubAllGlobals()
+  }
 })

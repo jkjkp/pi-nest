@@ -10,6 +10,11 @@ export const runtimeStatisticsSchema = z.object({
   cacheHitRate: count.max(100).optional(),
 })
 
+export function cacheHitRateFromUsage(usage: { input: number; cacheRead: number; cacheWrite: number }) {
+  const total = usage.input + usage.cacheRead + usage.cacheWrite
+  return total > 0 ? usage.cacheRead / total * 100 : undefined
+}
+
 export function latestCacheHitRate(sessionFile: string) {
   try {
     const lines = readFileSync(sessionFile, 'utf8').trim().split('\n')
@@ -19,8 +24,7 @@ export function latestCacheHitRate(sessionFile: string) {
       if (entry.type !== 'message' || entry.message?.role !== 'assistant') continue
       const usage = entry.message.usage
       if (!usage || ![usage.input, usage.cacheRead, usage.cacheWrite].every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)) return undefined
-      const total = usage.input + usage.cacheRead + usage.cacheWrite
-      return total > 0 ? usage.cacheRead / total * 100 : undefined
+      return cacheHitRateFromUsage({ input: usage.input, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite })
     }
   } catch { /* Statistics remain usable if the native file is unavailable. */ }
   return undefined

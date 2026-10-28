@@ -1,7 +1,7 @@
 import type { PiRuntimeEvent, AttachmentRef, PiQueuedInput } from '@pi-nest/contracts'
 
 export type PromptStatus = 'idle' | 'submitted' | 'awaiting_agent' | 'awaiting_input' | 'running' | 'aborting' | 'aborted' | 'complete' | 'error'
-export type PendingInput = { id: string; message: string; mode: 'follow_up' | 'plan_implementation' | 'steer'; submittedAt: string; submitting?: boolean; attachments?: AttachmentRef[]; submissionId?: string; recoveryRequired?: boolean }
+export type PendingInput = { id: string; message: string; mode: 'follow_up' | 'plan_implementation' | 'steer'; submittedAt: string; submitting?: boolean; attachments?: AttachmentRef[]; error?: string; submissionId?: string; recoveryRequired?: boolean }
 
 export function reconcilePendingInputs(pending: PendingInput[], queue: { steering: string[]; followUp: string[]; inputs?: PiQueuedInput[]; steeringInputs?: PiQueuedInput[] }, key: string): PendingInput[] {
   if (queue.steeringInputs) {
@@ -79,10 +79,45 @@ export function runtimeMessageIdentity(event: PiRuntimeEvent) {
   const message = event.event.message ?? event.event.partial
   if (!message || typeof message !== 'object' || Array.isArray(message)) return undefined
   const value = message as Record<string, unknown>
-  const id = value.id ?? value.timestamp
-  return (typeof id === 'string' || typeof id === 'number') ? `${value.role}:${id}` : undefined
+  const hasId = typeof value.id === 'string' || typeof value.id === 'number'
+  const id = hasId ? value.id : value.timestamp
+  return (typeof id === 'string' || typeof id === 'number') ? JSON.stringify([value.role, hasId ? 'id' : 'timestamp', id]) : undefined
 }
 
+function turnRunId(turn: RuntimeTurn | undefined) {
+  return turn?.runId ?? turn?.events.find((saved) => saved.runId)?.runId
+}
+
+export function runtimeTurnAcceptsEvent(turn: RuntimeTurn, event: PiRuntimeEvent, turns: RuntimeTurn[]) {
+  const known = turnRunId(turn)
+  if (known && event.runId) return known === event.runId
+  const active = activeRuntimeTurn(turns)
+  if (known) return known === turnRunId(active)
+  if (event.runId && turnRunId(active) && event.runId !== turnRunId(active)) return false
+  // Only the live submission and steering submitted after it may acquire a missing identity.
+  if (turn.completedAt) return false
+  if (turn === active) return true
+  return !!active && !active.completedAt && turns.indexOf(turn) > turns.indexOf(active) && !!turn.steering && ['sending', 'accepted', 'unknown'].includes(turn.steering.status)
+}
+
+function toolCallId(event: PiRuntimeEvent) {
+  const id = event.event.toolCallId ?? (event.event.message as { toolCallId?: unknown } | undefined)?.toolCallId
+  return typeof id === 'string' ? id : undefined
+}
+
+export function runtimeEventOwner(turns: RuntimeTurn[], event: PiRuntimeEvent) {
+  const identity = runtimeMessageIdentity(event)
+  const tool = toolCallId(event)
+  if (!identity && !tool) return -1
+  const owners: number[] = []
+  for (const [index, turn] of turns.entries()) {
+    if (runtimeTurnAcceptsEvent(turn, event, turns) && turn.events.some((saved) =>
+      (identity !== undefined && runtimeMessageIdentity(saved) === identity) || (tool !== undefined && toolCallId(saved) === tool))) owners.push(index)
+  }
+  if (owners.length === 1) return owners[0]!
+  const linked = event.turnId ? owners.filter((index) => turns[index]!.id === event.turnId || turns[index]!.events.some((saved) => saved.turnId === event.turnId)) : []
+  return linked.length === 1 ? linked[0]! : -1
+}
 
 export function messageAttachments(message: unknown): AttachmentRef[] {
   if (!message || typeof message !== 'object') return []

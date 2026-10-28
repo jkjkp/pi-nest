@@ -1,7 +1,7 @@
 import type { PiSessionHistoryEntry, PiSessionHistory, PiSessionTurnIndexEntry, PiSessionTurnIndex } from '@pi-nest/contracts'
 export type { PiSessionHistoryEntry, PiSessionHistory, PiSessionTurnIndexEntry, PiSessionTurnIndex } from '@pi-nest/contracts'
 
-import { chmodSync, closeSync, fstatSync, openSync, readSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { chmodSync, closeSync, fstatSync, openSync, readSync, mkdtempSync, writeFileSync, rmSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -41,13 +41,30 @@ export class PiSessionHistoryRevisionError extends Error {
   }
 }
 
-export type PiSessionHistorySnapshot = { revision: string; bytes: number; entries: SessionEntry[] }
+export type PiSessionHistorySourceSignature = { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint }
+export type PiSessionHistorySnapshot = { revision: string; bytes: number; entries: SessionEntry[]; sourceSignature?: PiSessionHistorySourceSignature }
+
+export function readPiSessionHistorySourceSignature(file: string): PiSessionHistorySourceSignature | undefined {
+  try {
+    const info = statSync(file, { bigint: true })
+    return info.isFile() ? sourceSignature(info) : undefined
+  } catch { return undefined }
+}
+
+function sourceSignature({ dev, ino, size, mtimeNs, ctimeNs }: PiSessionHistorySourceSignature): PiSessionHistorySourceSignature {
+  return { dev, ino, size, mtimeNs, ctimeNs }
+}
+
+export function samePiSessionHistorySourceSignature(a: PiSessionHistorySourceSignature | undefined, b: PiSessionHistorySourceSignature | undefined) {
+  return !!a && !!b && a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs
+}
 
 function sourceBytes(file: string) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const fd = openSync(file, 'r')
     try {
-      const size = fstatSync(fd).size
+      const before = sourceSignature(fstatSync(fd, { bigint: true }))
+      const size = Number(before.size)
       const bytes = Buffer.alloc(size)
       let offset = 0
       while (offset < size) {
@@ -62,7 +79,8 @@ function sourceBytes(file: string) {
       if (readSync(fd, verify, 0, end, 0) !== end || !complete.equals(verify)) continue
       // Ignore only an unfinished final JSONL frame; malformed complete records are an error.
       for (const line of complete.toString('utf8').split('\n')) if (line.trim()) JSON.parse(line)
-      return complete
+      const after = sourceSignature(fstatSync(fd, { bigint: true }))
+      return { bytes: complete, signature: samePiSessionHistorySourceSignature(before, after) ? after : undefined }
     } finally { closeSync(fd) }
   }
   throw new PiSessionHistorySourceChangedError()
@@ -123,7 +141,7 @@ export function capturePiSessionHistory({ expectedCwd, expectedSessionId, sessio
   let temporaryDirectory: string | undefined
 
   try {
-    const bytes = sourceBytes(sessionFile)
+    const { bytes, signature } = sourceBytes(sessionFile)
     const revision = createHash('sha256').update(bytes).digest('hex')
     temporaryDirectory = mkdtempSync(join(tmpdir(), 'pi-nest-history-'))
     chmodSync(temporaryDirectory, 0o700)
@@ -142,7 +160,9 @@ export function capturePiSessionHistory({ expectedCwd, expectedSessionId, sessio
     }
 
     const branchEntries = session.getBranch()
-    return { entries: branchEntries, revision, bytes: bytes.length }
+    // Only associate the parsed copy with the source if both the descriptor and path stayed unchanged.
+    const sourceSignature = samePiSessionHistorySourceSignature(signature, readPiSessionHistorySourceSignature(sessionFile)) ? signature : undefined
+    return { entries: branchEntries, revision, bytes: bytes.length, ...(sourceSignature ? { sourceSignature } : {}) }
   } catch (cause) {
     if (cause instanceof PiSessionHistoryRevisionError || cause instanceof PiSessionHistorySourceChangedError || cause instanceof PiSessionHistoryCursorError) throw cause
     throw new Error('Failed to read Pi session history', { cause })

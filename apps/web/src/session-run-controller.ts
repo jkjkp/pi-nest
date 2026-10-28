@@ -33,6 +33,7 @@ export type SessionRunController = {
   start: (options: StartSessionRunOptions) => boolean
   steer: (sessionId: string, message: string, input?: InputAttachments) => Promise<void>
   resumeQueued: (sessionId: string, inputId: string) => Promise<void>
+  dropQueued: (sessionId: string, inputId: string) => Promise<void>
   steerQueued: (sessionId: string, inputId: string) => Promise<void>
   retrySteering: (sessionId: string, turnId: string) => Promise<void>
   stop: (sessionId: string) => Promise<boolean>
@@ -64,11 +65,28 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   const activeRuns = new Map<string, ActiveRun>()
   const awaitingAgentTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const statisticsRequests = new Map<string, number>()
+  const statisticsInFlight = new Map<string, Promise<void>>()
+  const statisticsRerun = new Set<string>()
+  const completedStatistics = new Map<string, string>()
+  const statisticsStateKeys = new Map<string, string>()
   let foregroundSessionId: string | undefined
   let nextPendingInputId = 0
   const queueSyncedSessions = new Set<string>()
 
-  async function getSessionStatistics(sessionId: string) {
+  function invalidateStatistics(sessionId: string) {
+    statisticsRequests.set(sessionId, (statisticsRequests.get(sessionId) ?? 0) + 1)
+    statisticsInFlight.delete(sessionId)
+    statisticsRerun.delete(sessionId)
+    completedStatistics.delete(sessionId)
+    statisticsStateKeys.delete(sessionId)
+  }
+
+  function requestStatistics(sessionId: string, rerun = false) {
+    const active = statisticsInFlight.get(sessionId)
+    if (active) {
+      if (rerun) statisticsRerun.add(sessionId)
+      return active
+    }
     const request = (statisticsRequests.get(sessionId) ?? 0) + 1
     statisticsRequests.set(sessionId, request)
     const write = (update: RuntimeStatisticsState) => {
@@ -77,8 +95,44 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
       store.setRuntimeStatistics(sessionId, { ...store.runtimeStatistics[sessionId], ...update })
     }
     write({ loading: true, error: undefined })
-    try { write({ data: await runtime.getSessionStatistics(sessionId), loading: false }) }
-    catch { write({ loading: false, error: '统计读取失败，请重试。' }) }
+    let promise!: Promise<void>
+    promise = (async () => {
+      try { write({ data: await runtime.getSessionStatistics(sessionId) }) }
+      catch { write({ error: '统计读取失败，请重试。' }) }
+      finally {
+        if (statisticsInFlight.get(sessionId) === promise) statisticsInFlight.delete(sessionId)
+        if (statisticsRequests.get(sessionId) === request) {
+          if (statisticsRerun.delete(sessionId)) {
+            write({ loading: true, error: undefined })
+            void requestStatistics(sessionId)
+          } else write({ loading: false })
+        }
+      }
+    })()
+    statisticsInFlight.set(sessionId, promise)
+    return promise
+  }
+
+  function getSessionStatistics(sessionId: string) {
+    return requestStatistics(sessionId)
+  }
+
+  async function refreshStatisticsNow(sessionId: string) {
+    const active = statisticsInFlight.get(sessionId)
+    if (active) await active.catch(() => undefined)
+    return requestStatistics(sessionId)
+  }
+
+  function requestStateStatistics(sessionId: string, key: string) {
+    if (statisticsStateKeys.get(sessionId) === key) return
+    statisticsStateKeys.set(sessionId, key)
+    void requestStatistics(sessionId, true)
+  }
+
+  function refreshCompletionStatistics(sessionId: string, runId: string | undefined) {
+    if (runId && completedStatistics.get(sessionId) === runId) return
+    if (runId) completedStatistics.set(sessionId, runId)
+    void requestStatistics(sessionId, true)
   }
 
   function clearAwaitingAgentCheck(sessionId: string) {
@@ -103,6 +157,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   }
 
   function finishRun(sessionId: string, runId: string | undefined, stopReason: string) {
+    refreshCompletionStatistics(sessionId, runId)
     const store = useWorkspaceStore.getState()
     // A fresh watch of old history must not create an unread reply.
     if (runId && store.sessionNotifications[sessionId]?.pendingRunId !== runId) return
@@ -114,7 +169,6 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     store.updateRun(sessionId, { status: stopReason === 'error' ? 'error' : stopReason === 'aborted' ? 'aborted' : 'complete', stopReason })
     const visible = foregroundSessionId === sessionId && (typeof document === 'undefined' || document.visibilityState === 'visible')
     if (runId) store.finishNotification(sessionId, runId, !visible, stopReason !== 'error' && stopReason !== 'aborted')
-    void getSessionStatistics(sessionId)
     void invalidateHistory(sessionId)
     if (runtime.watchedSessions().some((watch) => watch.sessionId === sessionId && watch.role === 'background')) void runtime.unwatch(sessionId)
   }
@@ -164,7 +218,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
         if (raw.method === 'setWidget' && typeof raw.widgetKey === 'string' && raw.widgetKey) store.setExtensionWidget(event.sessionId, raw.widgetKey, Array.isArray(raw.widgetLines) && raw.widgetLines.every((line) => typeof line === 'string') ? raw.widgetLines : undefined)
       }
     }
-    if (raw.type === 'auto_compaction_end' && runtime.shouldApplyExtensionUi(event)) void getSessionStatistics(event.sessionId)
+    if (raw.type === 'auto_compaction_end' && runtime.shouldApplyExtensionUi(event)) void requestStatistics(event.sessionId, true)
     let activeRun = activeRuns.get(event.sessionId)
     if (!activeRun && event.event.type === 'agent_start' && event.runId && store.sessionNotifications[event.sessionId]?.completedRunId !== event.runId) {
       clearAwaitingAgentCheck(event.sessionId)
@@ -213,7 +267,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   runtime.onError((error) => {
     flushStreamEvents()
     if (error.code === 'RUNTIME_RESTARTED' && error.sessionId) {
-      statisticsRequests.set(error.sessionId, (statisticsRequests.get(error.sessionId) ?? 0) + 1)
+      invalidateStatistics(error.sessionId)
       useWorkspaceStore.getState().clearRuntimeState(error.sessionId)
       activeRuns.delete(error.sessionId)
       clearAwaitingAgentCheck(error.sessionId)
@@ -236,7 +290,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
   })
 
   runtime.onResyncRequired((message) => {
-    statisticsRequests.set(message.sessionId, (statisticsRequests.get(message.sessionId) ?? 0) + 1)
+    invalidateStatistics(message.sessionId)
     useWorkspaceStore.getState().clearRuntimeState(message.sessionId)
     useWorkspaceStore.getState().clearExtensionUi(message.sessionId)
     clearAwaitingAgentCheck(message.sessionId)
@@ -260,7 +314,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     store.replaceExtensionUi(snapshot.sessionId, snapshot.extensionUi)
     store.setRuntimeState(snapshot.sessionId, snapshot.runtime)
     applyModelStatus({ ...snapshot.runtime, sessionId: snapshot.sessionId })
-    if (snapshot.runtime.lifecycle === 'idle' || snapshot.runtime.lifecycle === 'active') void getSessionStatistics(snapshot.sessionId)
+    if (!snapshot.completedRun && (snapshot.runtime.lifecycle === 'idle' || snapshot.runtime.lifecycle === 'active')) requestStateStatistics(snapshot.sessionId, `${snapshot.runtime.lifecycle}:${snapshot.runtime.revision}`)
     useWorkspaceStore.getState().setWatchState(snapshot.sessionId, 'ready')
     if (snapshot.completedRun) finishRun(snapshot.sessionId, snapshot.completedRun.runId, snapshot.completedRun.stopReason)
     if (snapshot.activeTurn) store.trackPendingRun(snapshot.sessionId, snapshot.activeTurn.runId)
@@ -287,10 +341,10 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     if (status.lifecycle === 'idle' && status.completedRun) finishRun(status.sessionId, status.completedRun.runId, status.completedRun.stopReason)
     if (status.lifecycle === 'notLoaded' || status.lifecycle === 'failed') {
       store.updateRun(status.sessionId, { pendingInputs: store.runs[status.sessionId]?.pendingInputs?.filter((input) => input.mode === 'plan_implementation' || input.recoveryRequired) ?? [] })
-      statisticsRequests.set(status.sessionId, (statisticsRequests.get(status.sessionId) ?? 0) + 1)
+      invalidateStatistics(status.sessionId)
       store.setRuntimeStatistics(status.sessionId, { ...store.runtimeStatistics[status.sessionId], loading: false, error: '等待 Pi 运行恢复后更新统计。' })
     }
-    if (status.lifecycle === 'idle') void getSessionStatistics(status.sessionId)
+    if (status.lifecycle === 'idle' && !status.completedRun) requestStateStatistics(status.sessionId, `idle:${status.revision}`)
     if (status.lifecycle === 'failed') store.clearExtensionUi(status.sessionId)
     if (status.lifecycle === 'active' && !activeRuns.has(status.sessionId)) {
       activeRuns.set(status.sessionId, { awaitingRunId: false, runId: undefined, stopReason: undefined })
@@ -392,7 +446,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
         operation.started = false
         try { await invalidateHistory(sessionId) }
         catch { /* The history query reports refresh errors; compaction has already succeeded. */ }
-        await getSessionStatistics(sessionId)
+        await refreshStatisticsNow(sessionId)
         return true
       } finally { unsubscribe(); compactions.delete(sessionId) }
     },
@@ -490,6 +544,7 @@ export function createSessionRunController({ invalidateHistory, runtime }: Sessi
     },
     steer: (sessionId, message, input) => submitRunningInput(sessionId, message, 'steer', input),
     resumeQueued: async (sessionId, inputId) => { await runtime.watch(sessionId); await runtime.resumeQueued(sessionId, inputId) },
+    dropQueued: async (sessionId, inputId) => { await runtime.watch(sessionId); await runtime.dropQueued(sessionId, inputId) },
     steerQueued,
     retrySteering: async (sessionId, turnId) => {
       const turn = useWorkspaceStore.getState().runs[sessionId]?.turns.find((turn) => turn.id === turnId)

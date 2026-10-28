@@ -54,7 +54,7 @@ it.each(['image', 'file'])('persists %s data and receipts under Windows flush ru
   const input = { message: '', attachmentIds: [ref.id], submissionId: randomUUID() }
   await store.prepare('session', input)
   await store.deliver('session', input, async () => ({ accepted: true }))
-  if (kind === 'image') expect((await store.thumbnail(ref.id, 'session')).mimeType).toBe('image/png')
+  if (kind === 'image') expect((await store.thumbnail(store.read(ref.id, 'session'))).mimeType).toBe('image/png')
   const restored = new AttachmentStore(directory)
   expect(restored.read(ref.id, 'session').bytes).toEqual(bytes)
   expect(restored.receipt('session', input)).toEqual({ accepted: true })

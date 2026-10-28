@@ -1,4 +1,4 @@
-import { latestCacheHitRate } from './runtime-statistics.js'
+import { cacheHitRateFromUsage, latestCacheHitRate } from './runtime-statistics.js'
 import type { PiRuntimeEvent, RuntimeFailureKind as PiRuntimeFailureKind } from '@pi-nest/contracts'
 import { PiRpcConnectionError, PiRpcProcess, type PiRpcProcessState, type PiInputImage } from '@pi-nest/pi-adapter'
 
@@ -96,6 +96,9 @@ export class PiRuntimeHost {
   private thinkingLevel: string | undefined
   private model: { id: string; provider: string } | undefined
   private started = false
+  private autoCompactionEnabled: boolean | undefined
+  private latestUsage: { input: number; cacheRead: number; cacheWrite: number } | undefined
+  private usageObserved = false
 
   constructor(
     readonly session: PiRuntimeSession,
@@ -136,6 +139,7 @@ export class PiRuntimeHost {
       this.startResult = state
       this.model = modelFrom(state.state)
       this.thinkingLevel = typeof state.state.thinkingLevel === 'string' ? state.state.thinkingLevel : undefined
+      if (typeof state.state.autoCompactionEnabled === 'boolean') this.autoCompactionEnabled = state.state.autoCompactionEnabled
       return state
     } catch (cause) {
       await this.close()
@@ -199,11 +203,13 @@ export class PiRuntimeHost {
       const state = stateFrom(await process.send({ type: 'get_state' }))
       this.model = modelFrom(state)
       this.thinkingLevel = typeof state.thinkingLevel === 'string' ? state.thinkingLevel : undefined
+      if (typeof state.autoCompactionEnabled === 'boolean') this.autoCompactionEnabled = state.autoCompactionEnabled
       // A handled extension command can already have started its own agent turn.
       if (state.isStreaming === true) await settled
       const finalState = stateFrom(await process.send({ type: 'get_state' }))
       this.model = modelFrom(finalState)
       this.thinkingLevel = typeof finalState.thinkingLevel === 'string' ? finalState.thinkingLevel : undefined
+      if (typeof finalState.autoCompactionEnabled === 'boolean') this.autoCompactionEnabled = finalState.autoCompactionEnabled
       return {
         model: modelFrom(finalState),
         stopReason: stopReason ?? (this.abortRequested ? 'aborted' : 'stop'),
@@ -234,13 +240,18 @@ export class PiRuntimeHost {
     }
     const response = await this.process.send(command) as Record<string, unknown>
     if (command.type === 'get_session_stats') {
-      const state = stateFrom(await this.process.send({ type: 'get_state' }))
-      return { ...response, data: { ...stateFrom(response), autoCompactionEnabled: state.autoCompactionEnabled, cacheHitRate: latestCacheHitRate(this.session.sessionFile) } }
+      if (this.autoCompactionEnabled === undefined) {
+        const state = stateFrom(await this.process.send({ type: 'get_state' }))
+        if (typeof state.autoCompactionEnabled === 'boolean') this.autoCompactionEnabled = state.autoCompactionEnabled
+      }
+      const cacheHitRate = this.usageObserved && this.latestUsage ? cacheHitRateFromUsage(this.latestUsage) : latestCacheHitRate(this.session.sessionFile)
+      return { ...response, data: { ...stateFrom(response), autoCompactionEnabled: this.autoCompactionEnabled, cacheHitRate } }
     }
     if (command.type === 'get_state') {
       const state = stateFrom(response)
       this.model = modelFrom(state)
       this.thinkingLevel = typeof state.thinkingLevel === 'string' ? state.thinkingLevel : undefined
+      if (typeof state.autoCompactionEnabled === 'boolean') this.autoCompactionEnabled = state.autoCompactionEnabled
     }
     if (command.type === 'set_model') this.model = modelFrom({ model: response.data }) ?? this.model
     return response
@@ -256,6 +267,9 @@ export class PiRuntimeHost {
     this.running = false
     this.started = false
     this.startResult = undefined
+    this.autoCompactionEnabled = undefined
+    this.latestUsage = undefined
+    this.usageObserved = false
     this.processUnsubscribe?.()
     this.processUnsubscribe = undefined
     this.processFailureUnsubscribe?.()
@@ -267,12 +281,30 @@ export class PiRuntimeHost {
 
   private publish(event: Record<string, unknown>) {
     if (event.type === 'thinking_level_changed' && typeof event.level === 'string') this.thinkingLevel = event.level
+    if (event.type === 'message_end') this.observeUsage(event)
     const envelope: PiRuntimeHostEvent = {
       event,
       observedAt: new Date().toISOString(),
       sessionId: this.session.id,
     }
     for (const listener of this.listeners) listener(envelope)
+  }
+
+  private observeUsage(event: Record<string, unknown>) {
+    const message = event.message
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return
+    const candidate = message as Record<string, unknown>
+    if (candidate.role !== 'assistant') return
+    this.usageObserved = false
+    this.latestUsage = undefined
+    const usage = candidate.usage
+    if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return
+    const { input, cacheRead, cacheWrite } = usage as Record<string, unknown>
+    if (typeof input !== 'number' || !Number.isFinite(input) || input < 0) return
+    if (typeof cacheRead !== 'number' || !Number.isFinite(cacheRead) || cacheRead < 0) return
+    if (typeof cacheWrite !== 'number' || !Number.isFinite(cacheWrite) || cacheWrite < 0) return
+    this.latestUsage = { input, cacheRead, cacheWrite }
+    this.usageObserved = true
   }
 
   private publishFailure(failure: PiRuntimeHostFailure) {

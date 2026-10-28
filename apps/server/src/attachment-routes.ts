@@ -1,9 +1,9 @@
 import { bodyLimit } from 'hono/body-limit'
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { listPiSessions } from '@pi-nest/pi-adapter'
 import type { RuntimeSecurity } from './runtime-security.js'
 import type { ProjectRegistry } from './project-registry.js'
+import type { SessionIndex } from './session-index.js'
 import { configurationSecurity } from './configuration-routes.js'
 import { AttachmentError, type AttachmentStore } from './attachment-store.js'
 
@@ -11,7 +11,7 @@ const scopeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('session'), sessionId: z.string().min(1).max(512) }).strict(),
   z.object({ kind: z.literal('draft'), draftId: z.string().uuid(), cwd: z.string().min(1).max(4096) }).strict(),
 ])
-export function createAttachmentRoutes(store: AttachmentStore, security: RuntimeSecurity, projects: ProjectRegistry) {
+export function createAttachmentRoutes(store: AttachmentStore, security: RuntimeSecurity, projects: ProjectRegistry, sessions: SessionIndex) {
   const routes = new Hono().use('*', configurationSecurity(security))
   routes.use('/:id/content', bodyLimit({ maxSize: 16_384 }))
   routes.use('/inspect', bodyLimit({ maxSize: 16_384 }))
@@ -28,10 +28,10 @@ export function createAttachmentRoutes(store: AttachmentStore, security: Runtime
     if (!parsed.success) throw new AttachmentError('附件范围无效。')
     const scope = parsed.data
     if (scope.kind === 'draft') {
-      if (!projects.has(scope.cwd) && !(await listPiSessions()).some((s) => s.cwd === scope.cwd)) throw new AttachmentError('项目未登记。', 403)
+      if (!projects.has(scope.cwd) && !(await sessions.hasWorkspace(scope.cwd))) throw new AttachmentError('项目未登记。', 403)
       return `draft:${scope.draftId}:${scope.cwd}`
     }
-    if (!(await listPiSessions()).some((s) => s.id === scope.sessionId)) throw new AttachmentError('会话不存在。', 404)
+    if (!(await sessions.resolve(scope.sessionId))) throw new AttachmentError('会话不存在。', 404)
     return scope.sessionId
   }
   routes.post('/', async (c) => {
@@ -48,8 +48,9 @@ export function createAttachmentRoutes(store: AttachmentStore, security: Runtime
   })
   routes.post('/:id/content', async (c) => {
     const scope = await scopeFor(await c.req.json().catch(() => undefined))
-    const { ref, bytes } = store.read(c.req.param('id'), scope)
-    const thumbnail = c.req.query('thumbnail') === '1' ? await store.thumbnail(ref.id, scope) : undefined
+    const attachment = store.read(c.req.param('id'), scope)
+    const { ref, bytes } = attachment
+    const thumbnail = c.req.query('thumbnail') === '1' ? await store.thumbnail(attachment) : undefined
     c.header('Content-Type', thumbnail?.mimeType ?? (ref.kind === 'image' ? ref.mediaType : 'application/octet-stream'))
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Cache-Control', 'private, no-store')

@@ -60,6 +60,23 @@ it('does not replace caches if the recovery request was aborted during a session
   client.clear()
 })
 
+it('reuses the index fetched while recovering a multi-page history range', async () => {
+  const client = new QueryClient()
+  const oldest = { id: 'oldest', parentId: null, type: 'message' as const, timestamp: 'now', raw: { message: { role: 'user', content: 'oldest' } } }
+  client.setQueryData(sessionHistoryQueryKey('session'), { pages: [{ ...history('old'), entries: [oldest] }], pageParams: [{}] })
+  const index = { revision: 'new', entries: [{ id: 'oldest', index: 1, promptPreview: 'oldest', startedAt: 'now' }] }
+  const fetch = vi.fn().mockResolvedValueOnce(json({ code: 'REVISION_CHANGED' }, 409))
+    .mockResolvedValueOnce(json({ ...history('new'), hasEarlier: true, beforeCursor: 'latest' }))
+    .mockResolvedValueOnce(json(index)).mockResolvedValueOnce(json({ ...history('new'), entries: [oldest] }))
+  vi.stubGlobal('fetch', fetch)
+  try {
+    expect(await fetchSessionNavigation('session', 'old', new AbortController().signal, client)).toEqual(index)
+    expect(fetch).toHaveBeenCalledTimes(4)
+    expect(fetch.mock.calls.filter(([url]) => url === '/api/sessions/session/turn-index?revision=new')).toHaveLength(1)
+    expect(client.getQueryData(sessionTurnIndexQueryKey('session', 'new'))).toEqual(index)
+  } finally { client.clear() }
+})
+
 it('retains the HTTP status when an error response is not JSON', async () => {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('Proxy error', { status: 502 })))
   await expect(fetchSessionHistory('session')).rejects.toMatchObject({ status: 502, code: undefined })

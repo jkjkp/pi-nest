@@ -1,13 +1,46 @@
 import { AttachmentStore } from './attachment-store.js'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { writeFileSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
+import { preparePiImage } from '@pi-nest/pi-adapter'
 import { RuntimeWebSocketBroker } from './runtime-websocket.js'
 import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
+import type { PiRuntimeHost } from './pi-runtime-host.js'
+import { createSessionIndexFixture } from './test-fixtures/session-index.js'
 
-const adapter = vi.hoisted(() => ({ listPiSessions: vi.fn() }))
-vi.mock('@pi-nest/pi-adapter', async (importOriginal) => ({ ...await importOriginal<typeof import('@pi-nest/pi-adapter')>(), ...adapter }))
+vi.mock('@pi-nest/pi-adapter', async (original) => {
+  const actual = await original<typeof import('@pi-nest/pi-adapter')>()
+  return { ...actual, capturePiSessionHistory: vi.fn(() => ({ entries: [], revision: 'a'.repeat(64), bytes: 1 })), preparePiImage: vi.fn(actual.preparePiImage) }
+})
 
-const nativeSession = { cwd: '/fixture', id: 'session-1', sessionFile: '/fixture/session.jsonl' }
+const nativeBinding = { cwd: '/fixture', id: 'session-1', sessionFile: '/fixture/session.jsonl' }
+const nativeSession = { ...nativeBinding, firstMessage: undefined, name: undefined, updatedAt: undefined }
+const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
+const imageStream = () => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(Buffer.from(png, 'base64')); c.close() } })
+const textStream = (text: string) => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(Buffer.from(text)); c.close() } })
+
+function nativeHost() {
+  const listeners = new Set<(event: { event: Record<string, unknown>; observedAt: string; sessionId: string }) => void>()
+  const failures = new Set<(failure: { kind: string; message: string }) => void>()
+  return {
+    abort: vi.fn().mockResolvedValue(true),
+    beginPrompt: vi.fn(() => ({ accepted: Promise.resolve(), settled: Promise.resolve({ model: undefined, stopReason: 'stop' }) })),
+    close: vi.fn().mockResolvedValue(undefined),
+    command: vi.fn().mockResolvedValue({}),
+    currentModel: undefined,
+    currentThinkingLevel: undefined,
+    onEvent: vi.fn((listener) => { listeners.add(listener); return () => listeners.delete(listener) }),
+    onFailure: vi.fn((listener) => { failures.add(listener); return () => failures.delete(listener) }),
+    start: vi.fn().mockResolvedValue({}),
+  }
+}
+
+function createBroker(registry: unknown, sessions = [nativeSession]) {
+  return new RuntimeWebSocketBroker(registry as never, createSessionIndexFixture(sessions).index)
+}
 
 function socket() {
   const sent: unknown[] = []
@@ -37,14 +70,9 @@ function runtime() {
 }
 
 describe('RuntimeWebSocketBroker', () => {
-  beforeEach(() => {
-    adapter.listPiSessions.mockReset()
-    adapter.listPiSessions.mockResolvedValue([nativeSession])
-  })
-
   it('requires watch, acknowledges commands, and sends complete unknown Pi events unchanged', async () => {
     const registry = runtime()
-    const broker = new RuntimeWebSocketBroker(registry as never)
+    const broker = createBroker(registry)
     const client = socket()
     broker.open(client)
 
@@ -55,7 +83,7 @@ describe('RuntimeWebSocketBroker', () => {
     await broker.message(client, JSON.stringify({ id: 'p2', message: 'hello', sessionId: 'session-1', type: 'prompt' }))
     expect(client.sent).toContainEqual({ command: 'watch', id: 'a1', sessionId: 'session-1', type: 'ack' })
     expect(client.sent).toContainEqual({ command: 'prompt', data: { runId: 'run-1' }, id: 'p2', sessionId: 'session-1', type: 'ack' })
-    expect(registry.beginPrompt).toHaveBeenCalledWith(nativeSession, 'hello')
+    expect(registry.beginPrompt).toHaveBeenCalledWith(nativeBinding, 'hello', undefined)
 
     const unknown = { type: 'future_pi_event', value: { retained: true } }
     registry.emit({ event: unknown, observedAt: 'now', sequence: 7, sessionId: 'session-1' })
@@ -64,9 +92,8 @@ describe('RuntimeWebSocketBroker', () => {
 
   it('allows a connection to watch multiple sessions and disconnects without aborting Pi', async () => {
     const registry = runtime()
-    const broker = new RuntimeWebSocketBroker(registry as never)
+    const broker = createBroker(registry, [nativeSession, { ...nativeSession, id: 'session-2', sessionFile: '/fixture/session-2.jsonl' }])
     const client = socket()
-    adapter.listPiSessions.mockResolvedValue([{ ...nativeSession }, { ...nativeSession, id: 'session-2' }])
     broker.open(client)
 
     await broker.message(client, JSON.stringify({ id: 'a1', sessionId: 'session-1', type: 'watch' }))
@@ -79,7 +106,7 @@ describe('RuntimeWebSocketBroker', () => {
 
   it('makes unwatch idempotent for one socket', async () => {
     const registry = runtime()
-    const broker = new RuntimeWebSocketBroker(registry as never)
+    const broker = createBroker(registry)
     const client = socket()
     broker.open(client)
 
@@ -95,7 +122,7 @@ describe('RuntimeWebSocketBroker', () => {
   it('returns capacity exhaustion before accepting a direct prompt', async () => {
     const registry = runtime()
     registry.resume.mockRejectedValueOnce(new PiRuntimeCapacityError())
-    const broker = new RuntimeWebSocketBroker(registry as never)
+    const broker = createBroker(registry)
     const client = socket()
     broker.open(client)
 
@@ -108,7 +135,7 @@ describe('RuntimeWebSocketBroker', () => {
 
   it('replaces a subscription when watch resumes after a newer sequence', async () => {
     const registry = runtime()
-    const broker = new RuntimeWebSocketBroker(registry as never)
+    const broker = createBroker(registry)
     const client = socket()
     broker.open(client)
 
@@ -122,7 +149,7 @@ describe('RuntimeWebSocketBroker', () => {
 
   it('resubscribes when watch repeats with the same cursor so replays stay possible', async () => {
     const registry = runtime()
-    const broker = new RuntimeWebSocketBroker(registry as never)
+    const broker = createBroker(registry)
     const client = socket()
     broker.open(client)
 
@@ -146,7 +173,7 @@ describe('RuntimeWebSocketBroker', () => {
       listener({ event: { type: 'turn_start' }, observedAt: 'after', sequence: 8, sessionId: 'session-1' })
       return () => undefined
     })
-    const broker = new RuntimeWebSocketBroker(registry as never)
+    const broker = createBroker(registry)
     const client = socket()
     broker.open(client)
 
@@ -157,7 +184,7 @@ describe('RuntimeWebSocketBroker', () => {
 
   it('uses a fresh snapshot instead of replaying an expired idle cursor', async () => {
     const registry = new PiRuntimeRegistry()
-    const broker = new RuntimeWebSocketBroker(registry)
+    const broker = createBroker(registry)
     const client = socket()
     broker.open(client)
     await broker.message(client, JSON.stringify({ id: 'a1', resume: { after: 1 }, sessionId: 'session-1', type: 'watch' }))
@@ -166,7 +193,7 @@ describe('RuntimeWebSocketBroker', () => {
   })
 
   it('rejects malformed commands without exposing native state', async () => {
-    const broker = new RuntimeWebSocketBroker(runtime() as never)
+    const broker = createBroker(runtime())
     const client = socket()
     broker.open(client)
     await broker.message(client, '{bad json')
@@ -175,7 +202,7 @@ describe('RuntimeWebSocketBroker', () => {
 
   it('distinguishes a busy session from an unloaded runtime', async () => {
     const registry = runtime()
-    const broker = new RuntimeWebSocketBroker(registry as never)
+    const broker = createBroker(registry)
     const client = socket()
     broker.open(client)
     await broker.message(client, JSON.stringify({ id: 'w1', sessionId: 'session-1', type: 'watch' }))
@@ -193,12 +220,12 @@ describe('RuntimeWebSocketBroker', () => {
       if (command.type !== 'get_state') throw new Error(`Unknown command: ${command.type}`)
       return { data: { isStreaming: false, isCompacting: false, model: { provider: 'test', id: 'native-model' }, thinkingLevel: 'high', sessionFile: '/private/native-session.jsonl' } } as never
     })
-    const broker = new RuntimeWebSocketBroker(registry as never)
+    const broker = createBroker(registry)
     const client = socket()
     broker.open(client)
     await broker.message(client, JSON.stringify({ id: 'watch', sessionId: 'session-1', type: 'watch' }))
     await broker.message(client, JSON.stringify({ id: 'state', sessionId: 'session-1', type: 'get_runtime_state' }))
-    expect(registry.commandWhenIdle).toHaveBeenCalledWith(nativeSession, { type: 'get_state' })
+    expect(registry.commandWhenIdle).toHaveBeenCalledWith(nativeBinding, { type: 'get_state' })
     const ack = client.sent.find((message: any) => message.id === 'state') as any
     expect(ack).toMatchObject({ type: 'ack', command: 'get_runtime_state', data: { model: { provider: 'test', id: 'native-model' }, thinkingLevel: 'high' } })
     expect(ack.data).not.toHaveProperty('sessionFile')
@@ -206,7 +233,7 @@ describe('RuntimeWebSocketBroker', () => {
 
   it('forwards advanced controls only after explicit resume and keeps returned data safe', async () => {
     const registry = runtime()
-    const broker = new RuntimeWebSocketBroker(registry as never)
+    const broker = createBroker(registry)
     const client = socket()
     broker.open(client)
     await broker.message(client, JSON.stringify({ id: 's1', message: 'focus on tests', sessionId: 'session-1', type: 'steer' }))
@@ -215,14 +242,14 @@ describe('RuntimeWebSocketBroker', () => {
     await broker.message(client, JSON.stringify({ id: 'r1', sessionId: 'session-1', type: 'resume' }))
     await broker.message(client, JSON.stringify({ id: 'm1', sessionId: 'session-1', type: 'get_available_models' }))
     await broker.message(client, JSON.stringify({ id: 'u1', dialogId: 'dialog-1', sessionId: 'session-1', type: 'extension_ui_response', value: 'yes' }))
-    expect(registry.commandWhenIdle).toHaveBeenCalledWith(nativeSession, { type: 'get_available_models' })
+    expect(registry.commandWhenIdle).toHaveBeenCalledWith(nativeBinding, { type: 'get_available_models' })
     expect(registry.respondToExtension).toHaveBeenCalledWith('session-1', { id: 'dialog-1', type: 'extension_ui_response', value: 'yes' })
     expect(client.sent).toContainEqual({ command: 'get_available_models', data: { models: [{ id: 'model-2', name: 'Model 2', provider: 'test' }] }, id: 'm1', sessionId: 'session-1', type: 'ack' })
   })
 
   it('forwards cancellation unchanged for a pending extension dialog', async () => {
     const registry = runtime()
-    const broker = new RuntimeWebSocketBroker(registry as never)
+    const broker = createBroker(registry)
     const client = socket()
     broker.open(client)
     await broker.message(client, JSON.stringify({ id: 'w1', sessionId: 'session-1', type: 'watch' }))
@@ -236,7 +263,7 @@ describe('RuntimeWebSocketBroker', () => {
 
 it('reads safe statistics without an idle mutation and reports invalid data', async () => {
   const registry = runtime()
-  const broker = new RuntimeWebSocketBroker(registry as never)
+  const broker = createBroker(registry)
   const client = socket()
   broker.open(client)
   await broker.message(client, JSON.stringify({ id: 'watch-stats', sessionId: 'session-1', type: 'watch' }))
@@ -251,20 +278,19 @@ it('reads safe statistics without an idle mutation and reports invalid data', as
 })
 
 it('reads native commands only after watch and strips paths and extra metadata', async () => {
-  adapter.listPiSessions.mockResolvedValue([nativeSession])
   const registry = runtime()
   registry.commandWhenIdle.mockResolvedValue({ data: { commands: [
     { name: 'plan', description: 'Plan work', source: 'extension', sourceInfo: { path: '/private/extension.ts' } },
     { name: 'skill:test', source: 'skill', filePath: '/private/SKILL.md' },
   ], privateField: 'secret' } })
-  const broker = new RuntimeWebSocketBroker(registry as never)
+  const broker = createBroker(registry)
   const client = socket()
   broker.open(client)
   await broker.message(client, JSON.stringify({ id: 'c0', sessionId: 'session-1', type: 'get_commands' }))
   expect(registry.commandWhenIdle).not.toHaveBeenCalled()
   await broker.message(client, JSON.stringify({ id: 'w', sessionId: 'session-1', type: 'watch' }))
   await broker.message(client, JSON.stringify({ id: 'c1', sessionId: 'session-1', type: 'get_commands' }))
-  expect(registry.commandWhenIdle).toHaveBeenCalledWith(nativeSession, { type: 'get_commands' })
+  expect(registry.commandWhenIdle).toHaveBeenCalledWith(nativeBinding, { type: 'get_commands' })
   expect(client.sent).toContainEqual({ type: 'ack', command: 'get_commands', id: 'c1', sessionId: 'session-1', data: { commands: [
     { name: 'plan', description: 'Plan work', source: 'extension' }, { name: 'skill:test', source: 'skill' },
   ] } })
@@ -274,14 +300,13 @@ it('reads native commands only after watch and strips paths and extra metadata',
 })
 
 it('validates and forwards optional compaction instructions without exposing native data', async () => {
-  adapter.listPiSessions.mockResolvedValue([nativeSession])
   const registry = runtime()
-  const broker = new RuntimeWebSocketBroker(registry as never)
+  const broker = createBroker(registry)
   const client = socket()
   broker.open(client)
   await broker.message(client, JSON.stringify({ id: 'w', sessionId: 'session-1', type: 'watch' }))
   await broker.message(client, JSON.stringify({ id: 'c', sessionId: 'session-1', type: 'compact', customInstructions: ' 保留接口设计 ' }))
-  expect(registry.commandWhenIdle).toHaveBeenCalledWith(nativeSession, { type: 'compact', customInstructions: '保留接口设计' })
+  expect(registry.commandWhenIdle).toHaveBeenCalledWith(nativeBinding, { type: 'compact', customInstructions: '保留接口设计' })
   expect(client.sent).toContainEqual({ type: 'ack', command: 'compact', id: 'c', sessionId: 'session-1' })
   registry.commandWhenIdle.mockClear()
   for (const customInstructions of ['', 'x'.repeat(20001), 42]) {
@@ -294,10 +319,125 @@ it('validates and forwards optional compaction instructions without exposing nat
 it('reports abort failures so compaction cancellation can be retried', async () => {
   const registry = runtime()
   registry.abort.mockRejectedValueOnce(new Error('RPC unavailable'))
-  const broker = new RuntimeWebSocketBroker(registry as never)
+  const broker = createBroker(registry)
   const client = socket()
   broker.open(client)
   await broker.message(client, JSON.stringify({ id: 'w', sessionId: 'session-1', type: 'watch' }))
   await broker.message(client, JSON.stringify({ id: 'cancel', sessionId: 'session-1', type: 'abort' }))
   expect(client.sent).toContainEqual({ type: 'error', id: 'cancel', sessionId: 'session-1', code: 'COMMAND_FAILED', message: '取消失败，请重试。' })
+})
+
+it('prepares a WebSocket attachment prompt once and delivers the prepared payload once', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-ws-attachment-'))
+  const host = nativeHost()
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  const broker = createBroker(registry)
+  const client = socket()
+  broker.open(client)
+  try {
+    const image = await registry.attachments.upload(imageStream(), 'session-1', 'photo.png', 'image/png')
+    const file = await registry.attachments.upload(textStream('hello'), 'session-1', 'notes.txt', 'text/plain')
+    const submissionId = crypto.randomUUID()
+    vi.mocked(preparePiImage).mockClear()
+    const read = vi.spyOn(registry.attachments, 'read')
+
+    await broker.message(client, JSON.stringify({ id: 'watch', sessionId: 'session-1', type: 'watch' }))
+    await broker.message(client, JSON.stringify({ id: 'prompt', message: 'look', sessionId: 'session-1', type: 'prompt', attachmentIds: [image.id, file.id], submissionId }))
+
+    expect(preparePiImage).toHaveBeenCalledTimes(1)
+    expect(read.mock.calls.filter(([id]) => id === image.id)).toHaveLength(1)
+    expect(read.mock.calls.filter(([id]) => id === file.id)).toHaveLength(1)
+    expect(host.beginPrompt).toHaveBeenCalledTimes(1)
+    expect(host.beginPrompt).toHaveBeenCalledWith(expect.stringContaining(submissionId), [{ type: 'image', data: png, mimeType: 'image/png' }])
+    expect(client.sent.find((message: any) => message.id === 'prompt')).toMatchObject({ command: 'prompt', data: { runId: expect.any(String) }, sessionId: 'session-1', type: 'ack' })
+    read.mockRestore()
+  } finally { await registry.close(); await rm(directory, { force: true, recursive: true }) }
+})
+
+it('returns an accepted receipt without rereading or reconverting and still rejects changed content', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-ws-attachment-receipt-'))
+  const host = nativeHost()
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  const broker = createBroker(registry)
+  const client = socket()
+  broker.open(client)
+  try {
+    const image = await registry.attachments.upload(imageStream(), 'session-1', 'photo.png', 'image/png')
+    const submissionId = crypto.randomUUID()
+    vi.mocked(preparePiImage).mockClear()
+    const read = vi.spyOn(registry.attachments, 'read')
+    await broker.message(client, JSON.stringify({ id: 'watch', sessionId: 'session-1', type: 'watch' }))
+    await broker.message(client, JSON.stringify({ id: 'first', message: 'look', sessionId: 'session-1', type: 'prompt', attachmentIds: [image.id], submissionId }))
+    const first = client.sent.find((message: any) => message.id === 'first') as any
+
+    vi.mocked(preparePiImage).mockClear()
+    read.mockClear()
+    await broker.message(client, JSON.stringify({ id: 'retry', message: 'look', sessionId: 'session-1', type: 'prompt', attachmentIds: [image.id], submissionId }))
+    expect(client.sent.find((message: any) => message.id === 'retry')).toMatchObject({ command: 'prompt', data: first.data, sessionId: 'session-1', type: 'ack' })
+    expect(preparePiImage).not.toHaveBeenCalled()
+    expect(read).not.toHaveBeenCalled()
+    expect(host.beginPrompt).toHaveBeenCalledTimes(1)
+
+    await broker.message(client, JSON.stringify({ id: 'changed', message: 'different', sessionId: 'session-1', type: 'prompt', attachmentIds: [image.id], submissionId }))
+    expect(client.sent.find((message: any) => message.id === 'changed')).toMatchObject({ code: 'SUBMISSION_CONFLICT', sessionId: 'session-1', type: 'error' })
+    expect(preparePiImage).not.toHaveBeenCalled()
+    expect(read).not.toHaveBeenCalled()
+    expect(host.beginPrompt).toHaveBeenCalledTimes(1)
+    read.mockRestore()
+  } finally { await registry.close(); await rm(directory, { force: true, recursive: true }) }
+})
+
+it('coalesces concurrent duplicate WebSocket attachment prompts into one send', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-ws-attachment-concurrent-'))
+  const host = nativeHost()
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  const broker = createBroker(registry)
+  const client = socket()
+  broker.open(client)
+  try {
+    const file = await registry.attachments.upload(textStream('hello'), 'session-1', 'notes.txt', 'text/plain')
+    const submissionId = crypto.randomUUID()
+    await broker.message(client, JSON.stringify({ id: 'watch', sessionId: 'session-1', type: 'watch' }))
+    const prompt = (id: string) => broker.message(client, JSON.stringify({ id, message: 'look', sessionId: 'session-1', type: 'prompt', attachmentIds: [file.id], submissionId }))
+
+    await Promise.all([prompt('one'), prompt('two')])
+    expect(host.beginPrompt).toHaveBeenCalledTimes(1)
+    expect(client.sent.filter((message: any) => message.type === 'error').every((message: any) => message.code === 'SESSION_BUSY')).toBe(true)
+    const accepted = client.sent.find((message: any) => message.type === 'ack' && message.command === 'prompt') as any
+    expect(accepted).toMatchObject({ data: { runId: expect.any(String) } })
+
+    await prompt('retry')
+    expect(client.sent.find((message: any) => message.id === 'retry')).toMatchObject({ command: 'prompt', data: accepted.data, type: 'ack' })
+    expect(host.beginPrompt).toHaveBeenCalledTimes(1)
+  } finally { await registry.close(); await rm(directory, { force: true, recursive: true }) }
+})
+
+it('rejects forbidden, missing, and corrupted attachments before resuming the runtime', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-ws-attachment-errors-'))
+  const host = nativeHost()
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  const broker = createBroker(registry)
+  const client = socket()
+  broker.open(client)
+  try {
+    const forbidden = await registry.attachments.upload(textStream('secret'), 'other-scope', 'secret.txt', 'text/plain')
+    const missing = await registry.attachments.upload(textStream('hello'), 'session-1', 'missing.txt', 'text/plain')
+    const corrupt = await registry.attachments.upload(textStream('hello'), 'session-1', 'corrupt.txt', 'text/plain')
+    await rm(join(directory, `data-${missing.id}`))
+    writeFileSync(join(directory, `data-${corrupt.id}`), 'HELLO')
+    const resume = vi.spyOn(registry, 'resume')
+    await broker.message(client, JSON.stringify({ id: 'watch', sessionId: 'session-1', type: 'watch' }))
+    const prompt = (id: string, attachmentId: string) => broker.message(client, JSON.stringify({ id, message: 'look', sessionId: 'session-1', type: 'prompt', attachmentIds: [attachmentId], submissionId: crypto.randomUUID() }))
+
+    await prompt('forbidden', forbidden.id)
+    await prompt('missing', missing.id)
+    await prompt('corrupt', corrupt.id)
+
+    expect(client.sent.find((message: any) => message.id === 'forbidden')).toMatchObject({ code: 'ATTACHMENT_FORBIDDEN', type: 'error' })
+    expect(client.sent.find((message: any) => message.id === 'missing')).toMatchObject({ code: 'ATTACHMENT_MISSING', type: 'error' })
+    expect(client.sent.find((message: any) => message.id === 'corrupt')).toMatchObject({ code: 'ATTACHMENT_CORRUPT', type: 'error' })
+    expect(resume).not.toHaveBeenCalled()
+    expect(host.beginPrompt).not.toHaveBeenCalled()
+    resume.mockRestore()
+  } finally { await registry.close(); await rm(directory, { force: true, recursive: true }) }
 })

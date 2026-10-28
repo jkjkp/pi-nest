@@ -1,7 +1,12 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readSync, renameSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('node:fs', async (original) => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, readSync: vi.fn(actual.readSync) }
+})
 
 const open = vi.fn()
 
@@ -262,9 +267,42 @@ describe('readPiSessionHistory', () => {
       writeFileSync(sourceSessionFile, '{"type":"session","changed":true}\n')
       return session([])
     })
-    const { readPiSessionHistory } = await import('./read-session-history.js')
+    const { capturePiSessionHistory } = await import('./read-session-history.js')
 
-    expect(readPiSessionHistory({ expectedSessionId: 'session-1', sessionFile: sourceSessionFile })).toMatchObject({ entries: [], revision: expect.any(String) })
+    const captured = capturePiSessionHistory({ expectedSessionId: 'session-1', sessionFile: sourceSessionFile })
+    expect(captured).toMatchObject({ entries: [], revision: expect.any(String) })
+    expect(captured.sourceSignature).toBeUndefined()
+  })
+
+  it('records a signature only when the source stays unchanged throughout capture', async () => {
+    open.mockReturnValue(session([]))
+    const { capturePiSessionHistory, readPiSessionHistorySourceSignature } = await import('./read-session-history.js')
+    const options = { expectedSessionId: 'session-1', sessionFile: sourceSessionFile }
+    expect(capturePiSessionHistory(options).sourceSignature).toEqual(readPiSessionHistorySourceSignature(sourceSessionFile))
+    open.mockImplementation(() => {
+      const replacement = join(fixtureDirectory, 'replacement.jsonl')
+      writeFileSync(replacement, readFileSync(sourceSessionFile))
+      renameSync(replacement, sourceSessionFile)
+      return session([])
+    })
+    expect(capturePiSessionHistory(options).sourceSignature).toBeUndefined()
+    open.mockImplementation(() => {
+      rmSync(sourceSessionFile)
+      return session([])
+    })
+    expect(capturePiSessionHistory(options).sourceSignature).toBeUndefined()
+  })
+
+  it('does not certify a complete prefix when the descriptor changes during the read', async () => {
+    open.mockReturnValue(session([]))
+    const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
+    vi.mocked(readSync).mockImplementationOnce((...args: Parameters<typeof readSync>) => {
+      const count = actual.readSync(...args)
+      appendFileSync(sourceSessionFile, '{"type":"message"}\n')
+      return count
+    })
+    const { capturePiSessionHistory } = await import('./read-session-history.js')
+    expect(capturePiSessionHistory({ expectedSessionId: 'session-1', sessionFile: sourceSessionFile }).sourceSignature).toBeUndefined()
   })
 
   it('preserves the SDK cause', async () => {

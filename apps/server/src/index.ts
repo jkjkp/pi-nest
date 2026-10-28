@@ -1,7 +1,7 @@
 import { serve } from '@hono/node-server'
 import { WebSocketServer } from 'ws'
 
-import { app, runtime } from './app.js'
+import { app, runtime, sessionIndex } from './app.js'
 
 const hostname = '127.0.0.1'
 const port = 31415
@@ -13,6 +13,7 @@ const server = serve({ fetch: app.fetch, hostname, port, websocket: { server: we
 })
 
 function shutdown() {
+  sessionIndex.close()
   server.close(() => { void runtime.close().finally(() => process.exit(0)) })
 }
 

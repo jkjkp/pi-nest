@@ -1,8 +1,14 @@
 import { AttachmentStore } from './attachment-store.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
+import { preparePiImage } from '@pi-nest/pi-adapter'
 import { createApp } from './app.js'
-import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
+import { createSessionIndexFixture } from './test-fixtures/session-index.js'
+import { PiRuntimeRegistry } from './pi-runtime-registry.js'
+import type { PiRuntimeHost } from './pi-runtime-host.js'
 import { RuntimeSecurity } from './runtime-security.js'
 
 const adapter = vi.hoisted(() => {
@@ -17,24 +23,42 @@ const adapter = vi.hoisted(() => {
     PiSessionHistoryCursorError,
     PiSessionHistoryRevisionError,
     PiSessionHistorySourceChangedError,
+    capturePiSessionHistory: vi.fn(),
     createPiSession: vi.fn(),
     deletePiSession: vi.fn(),
-    listPiSessions: vi.fn(),
+    preparePiImage: vi.fn(),
     readPiSessionHistory: vi.fn(),
     readPiSessionTurnIndex: vi.fn(),
     renamePiSession: vi.fn(),
     revealPiWorkspace: vi.fn(),
   }
 })
-const { createPiSession, deletePiSession, listPiSessions, readPiSessionHistory, readPiSessionTurnIndex, renamePiSession, revealPiWorkspace } = adapter
+const { createPiSession, deletePiSession, readPiSessionHistory, readPiSessionTurnIndex, renamePiSession, revealPiWorkspace } = adapter
 
-vi.mock('@pi-nest/pi-adapter', () => ({
-  ...adapter,
-}))
+vi.mock('@pi-nest/pi-adapter', async (original) => {
+  const actual = await original<typeof import('@pi-nest/pi-adapter')>()
+  adapter.capturePiSessionHistory.mockImplementation(() => ({ entries: [], revision: 'a'.repeat(64), bytes: 1 }))
+  adapter.preparePiImage.mockImplementation(actual.preparePiImage)
+  return { ...actual, ...adapter }
+})
 
 const nativeSession = {
   createdAt: '2026-09-19T00:00:00.000Z', cwd: '/working', firstMessage: 'Original question', id: 'session-1', name: 'Existing session',
   sessionFile: '/pi/session.jsonl', updatedAt: '2026-09-21T00:00:00.000Z',
+}
+const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
+const imageStream = () => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(Buffer.from(png, 'base64')); c.close() } })
+function nativeHost() {
+  return {
+    beginPrompt: vi.fn(() => ({ accepted: Promise.resolve(), settled: Promise.resolve({ model: undefined, stopReason: 'stop' }) })),
+    close: vi.fn().mockResolvedValue(undefined),
+    command: vi.fn().mockResolvedValue({}),
+    currentModel: undefined,
+    currentThinkingLevel: undefined,
+    onEvent: vi.fn(() => () => undefined),
+    onFailure: vi.fn(() => () => undefined),
+    start: vi.fn().mockResolvedValue({}),
+  }
 }
 function runtimeMock() {
   return {
@@ -52,13 +76,15 @@ function runtimeMock() {
   }
 }
 
+let sessionIndex: ReturnType<typeof createSessionIndexFixture>
+beforeEach(() => { sessionIndex = createSessionIndexFixture([nativeSession]) })
+
 describe('Pi Nest API', () => {
   let runtime: ReturnType<typeof runtimeMock>
 
   beforeEach(() => {
-    createPiSession.mockReset(); deletePiSession.mockReset(); listPiSessions.mockReset(); readPiSessionHistory.mockReset(); readPiSessionTurnIndex.mockReset(); renamePiSession.mockReset(); revealPiWorkspace.mockReset()
+    createPiSession.mockReset(); deletePiSession.mockReset(); readPiSessionHistory.mockReset(); readPiSessionTurnIndex.mockReset(); renamePiSession.mockReset(); revealPiWorkspace.mockReset()
     runtime = runtimeMock()
-    listPiSessions.mockResolvedValue([nativeSession])
     readPiSessionHistory.mockReturnValue({ entries: [], hasEarlier: false, revision: 'a'.repeat(64) })
     readPiSessionTurnIndex.mockReturnValue({ entries: [], revision: 'a'.repeat(64) })
     createPiSession.mockReturnValue({ createdAt: '2026-10-13T00:00:00.000Z', cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' })
@@ -66,24 +92,37 @@ describe('Pi Nest API', () => {
     revealPiWorkspace.mockResolvedValue(undefined)
   })
 
-  function app() { return createApp(runtime as unknown as PiRuntimeRegistry) }
+  function app() { return createApp(runtime as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index) }
 
   it('reports readiness and lists safe native session summaries', async () => {
     const health = await app().request('/api/health')
     await expect(health.json()).resolves.toEqual({ status: 'ok' })
-    const response = await createApp(runtimeMock() as unknown as PiRuntimeRegistry).request('/api/sessions')
+    const response = await createApp(runtimeMock() as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index).request('/api/sessions')
     await expect(response.json()).resolves.toEqual({
       sessions: [{ createdAt: '2026-09-19T00:00:00.000Z', cwd: '/working', firstMessage: 'Original question', id: 'session-1', name: 'Existing session', updatedAt: nativeSession.updatedAt }],
     })
   })
 
   it('issues a runtime bootstrap token only to the configured origin', async () => {
-    const securedApp = createApp(runtime as unknown as PiRuntimeRegistry, new RuntimeSecurity('http://localhost:5173'))
+    const securedApp = createApp(runtime as unknown as PiRuntimeRegistry, new RuntimeSecurity('http://localhost:5173'), undefined, sessionIndex.index)
     const rejected = await securedApp.request('/api/runtime/bootstrap', { method: 'POST' })
     expect(rejected.status).toBe(403)
     const accepted = await securedApp.request('/api/runtime/bootstrap', { method: 'POST', headers: { origin: 'http://localhost:5173' } })
     expect(accepted.status).toBe(200)
     await expect(accepted.json()).resolves.toMatchObject({ runtimeId: expect.any(String), websocketPath: '/api/runtime', token: expect.any(String) })
+  })
+
+  it('rejects stale tokens for initial session settings before creating a native session', async () => {
+    const security = new RuntimeSecurity('http://localhost:5173')
+    const route = createApp(runtime as unknown as PiRuntimeRegistry, security, undefined, sessionIndex.index)
+    const body = JSON.stringify({ cwd: '/working', prompt: 'first', initialSettings: { thinkingLevel: 'high' } })
+    const response = await route.request('/api/sessions', { method: 'POST', headers: { origin: security.origin, 'x-pi-nest-token': 'expired', 'content-type': 'application/json' }, body })
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ code: 'RUNTIME_TOKEN_INVALID' })
+    expect(createPiSession).not.toHaveBeenCalled()
+    expect(runtime.beginPrompt).not.toHaveBeenCalled()
+    const origin = await route.request('/api/sessions', { method: 'POST', headers: { origin: 'https://evil.example', 'x-pi-nest-token': 'expired', 'content-type': 'application/json' }, body })
+    await expect(origin.json()).resolves.not.toHaveProperty('code')
   })
 
   it('reads safe history and rejects it while the runtime owns the session', async () => {
@@ -152,10 +191,20 @@ describe('Pi Nest API', () => {
     })
     expect(renamed.status).toBe(200)
     expect(renamePiSession).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', name: 'Renamed', sessionFile: '/pi/session.jsonl' })
+    expect(sessionIndex.invalidateCalls).toEqual(['/pi/session.jsonl'])
     expect(finish).toHaveBeenCalledOnce()
     runtime.beginMutation.mockReturnValueOnce(undefined)
     expect((await app().request('/api/sessions/session-1', { method: 'DELETE' })).status).toBe(409)
     expect(deletePiSession).not.toHaveBeenCalled()
+  })
+
+  it('removes the exact native file from the shared index after deletion', async () => {
+    runtime.beginMutation.mockReturnValueOnce(Promise.resolve(vi.fn()))
+    const response = await app().request('/api/sessions/session-1', { method: 'DELETE' })
+    expect(response.status).toBe(204)
+    expect(deletePiSession).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', sessionFile: '/pi/session.jsonl' })
+    expect(sessionIndex.forgetCalls).toEqual(['/pi/session.jsonl'])
+    expect(runtime.deleteSession).toHaveBeenCalledWith('session-1')
   })
 
   it('creates a native session only when the first prompt is admitted, then exposes a safe summary', async () => {
@@ -169,11 +218,13 @@ describe('Pi Nest API', () => {
     expect(createPiSession).toHaveBeenCalledWith('/working')
     expect(runtime.beginPrompt).toHaveBeenCalledWith({ createdAt: '2026-10-13T00:00:00.000Z', cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' }, 'First prompt', undefined, undefined)
     await expect(response.json()).resolves.toMatchObject({ session: { createdAt: '2026-10-13T00:00:00.000Z', cwd: '/working', firstMessage: 'First prompt', id: 'created-session' } })
+    expect(sessionIndex.registerCalls).toEqual([expect.objectContaining({ cwd: '/working', id: 'created-session', sessionFile: '/pi/created.jsonl' })])
+    expect(sessionIndex.sessions).toContainEqual(expect.objectContaining({ firstMessage: 'First prompt', id: 'created-session' }))
   })
 
   it('validates and passes draft selections into first-prompt initialization', async () => {
     const security = new RuntimeSecurity('http://localhost:5173')
-    const route = createApp(runtime as unknown as PiRuntimeRegistry, security)
+    const route = createApp(runtime as unknown as PiRuntimeRegistry, security, undefined, sessionIndex.index)
     const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }
     const initialSettings = { model: { provider: 'test', id: 'reasoning' }, thinkingLevel: 'high' }
     const body = JSON.stringify({ cwd: '/working', prompt: 'First prompt', initialSettings })
@@ -195,6 +246,69 @@ describe('Pi Nest API', () => {
 
     expect(runtime.deleteSession).toHaveBeenCalledWith('created-session')
     expect(deletePiSession).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'created-session', sessionFile: '/pi/created.jsonl' })
+    expect(sessionIndex.forgetCalls).toEqual(['/pi/created.jsonl'])
+    expect(sessionIndex.sessions).not.toContainEqual(expect.objectContaining({ id: 'created-session' }))
+  })
+
+  it('prepares an attachment once for a new session and transfers it before the first prompt', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-app-attachment-'))
+    const host = nativeHost()
+    const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+    const security = new RuntimeSecurity('http://localhost:5173')
+    const route = createApp(registry, security, undefined, sessionIndex.index)
+    const draftId = crypto.randomUUID()
+    const submissionId = crypto.randomUUID()
+    try {
+      const image = await registry.attachments.upload(imageStream(), `draft:${draftId}:/working`, 'photo.png', 'image/png')
+      vi.mocked(preparePiImage).mockClear()
+      const read = vi.spyOn(registry.attachments, 'read')
+
+      const response = await route.request('/api/sessions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: security.origin, 'x-pi-nest-token': security.token },
+        body: JSON.stringify({ cwd: '/working', draftId, prompt: '', attachmentIds: [image.id], submissionId }),
+      })
+
+      expect(response.status).toBe(201)
+      await expect(response.json()).resolves.toMatchObject({ session: { id: 'created-session' } })
+      expect(createPiSession).toHaveBeenCalledWith('/working')
+      expect(preparePiImage).toHaveBeenCalledTimes(1)
+      expect(read.mock.calls.filter(([id]) => id === image.id)).toHaveLength(1)
+      expect(host.beginPrompt).toHaveBeenCalledTimes(1)
+      expect(host.beginPrompt).toHaveBeenCalledWith(expect.stringContaining(submissionId), [{ type: 'image', data: png, mimeType: 'image/png' }])
+      expect(registry.attachments.read(image.id, 'created-session').ref).toEqual(image)
+      expect(registry.attachments.receipt('created-session', { message: '', attachmentIds: [image.id], submissionId })).toMatchObject({ session: { id: 'created-session' } })
+      read.mockRestore()
+    } finally { await registry.close(); await rm(directory, { force: true, recursive: true }) }
+  })
+
+  it('rolls back a new session when its prepared attachment prompt is not admitted', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'pi-app-attachment-rollback-'))
+    const host = nativeHost()
+    const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+    const security = new RuntimeSecurity('http://localhost:5173')
+    const route = createApp(registry, security, undefined, sessionIndex.index)
+    const draftId = crypto.randomUUID()
+    const submissionId = crypto.randomUUID()
+    try {
+      const image = await registry.attachments.upload(imageStream(), `draft:${draftId}:/working`, 'photo.png', 'image/png')
+      vi.mocked(preparePiImage).mockClear()
+      const beginPrompt = vi.spyOn(registry, 'beginPrompt').mockReturnValue(undefined)
+
+      const response = await route.request('/api/sessions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: security.origin, 'x-pi-nest-token': security.token },
+        body: JSON.stringify({ cwd: '/working', draftId, prompt: '', attachmentIds: [image.id], submissionId }),
+      })
+
+      expect(response.status).toBe(409)
+      await expect(response.json()).resolves.toEqual({ error: 'Pi runtime is busy' })
+      expect(preparePiImage).toHaveBeenCalledTimes(1)
+      expect(deletePiSession).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'created-session', sessionFile: '/pi/created.jsonl' })
+      expect(sessionIndex.forgetCalls).toEqual(['/pi/created.jsonl'])
+      expect(registry.attachments.uncertainSession(`draft:${draftId}:/working`, { message: '', attachmentIds: [image.id], submissionId })).toBeUndefined()
+      beginPrompt.mockRestore()
+    } finally { await registry.close(); await rm(directory, { force: true, recursive: true }) }
   })
 
   it('does not start a prompt when native session bootstrap fails', async () => {
@@ -246,12 +360,12 @@ describe('Pi Nest API', () => {
 })
 
 it('lists native parent relationships without exposing file paths', async () => {
-  adapter.listPiSessions.mockResolvedValue([
+  sessionIndex.setSessions([
     nativeSession,
     { ...nativeSession, id: 'child', sessionFile: '/private/child.jsonl', parentSessionPath: nativeSession.sessionFile },
     { ...nativeSession, id: 'orphan', sessionFile: '/private/orphan.jsonl', parentSessionPath: '/private/missing.jsonl' },
   ])
-  const response = await createApp(runtimeMock() as unknown as PiRuntimeRegistry).request('/api/sessions')
+  const response = await createApp(runtimeMock() as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index).request('/api/sessions')
   const body = await response.json()
   expect(response.status).toBe(200)
   expect(body.sessions[1].parentSessionId).toBe(nativeSession.id)
@@ -265,26 +379,27 @@ it('lists native parent relationships without exposing file paths', async () => 
 
 describe('branch creation', () => {
   it('creates a native branch under the source mutation lock and returns only safe fields', async () => {
-    adapter.listPiSessions.mockResolvedValue([nativeSession])
+    sessionIndex.setSessions([nativeSession])
     adapter.branchPiSession.mockReturnValue({ session: { id: 'child', cwd: '/working', createdAt: 'now', sessionFile: '/private/child.jsonl' }, draft: 'selected text' })
     const registry = runtimeMock()
     const finish = vi.fn()
     const source = Buffer.from('validated source')
     adapter.readPiSessionForkSource.mockReturnValue(source)
     registry.beginMutation.mockImplementationOnce(async (_sessionId, beforeUnload) => { beforeUnload?.(); return finish })
-    const response = await createApp(registry as unknown as PiRuntimeRegistry).request('/api/sessions/session-1/branch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) }) })
+    const response = await createApp(registry as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index).request('/api/sessions/session-1/branch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) }) })
     expect(response.status).toBe(201)
     const body = await response.json()
     expect(body).toEqual({ session: { id: 'child', cwd: '/working', createdAt: 'now', updatedAt: 'now', parentSessionId: 'session-1' }, draft: 'selected text' })
     expect(adapter.readPiSessionForkSource).toHaveBeenCalledWith({ sessionFile: nativeSession.sessionFile, revision: 'a'.repeat(64) })
     expect(adapter.branchPiSession).toHaveBeenCalledWith({ expectedSessionId: nativeSession.id, expectedCwd: nativeSession.cwd, sessionFile: nativeSession.sessionFile, kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) }, source)
     expect(finish).toHaveBeenCalledOnce()
+    expect(sessionIndex.registerCalls).toEqual([expect.objectContaining({ cwd: '/working', id: 'child', sessionFile: '/private/child.jsonl' })])
   })
   it('rejects malformed, busy, missing and stale branch operations', async () => {
-    adapter.listPiSessions.mockResolvedValue([nativeSession])
+    sessionIndex.setSessions([nativeSession])
     adapter.branchPiSession.mockClear()
     const registry = runtimeMock()
-    const app = createApp(registry as unknown as PiRuntimeRegistry)
+    const app = createApp(registry as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index)
     const send = (body: unknown, id = 'session-1') => app.request(`/api/sessions/${id}/branch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     expect((await send({ kind: 'fork', revision: 'a'.repeat(64) })).status).toBe(400)
     expect((await send({ kind: 'clone', revision: 'bad' })).status).toBe(400)

@@ -2,13 +2,13 @@ import { constants } from 'node:fs'
 import imageSize from 'buffer-image-size'
 import { open, realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
-import { listPiSessions } from '@pi-nest/pi-adapter'
 import type { PiSessionFilePreview } from '@pi-nest/contracts'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { z } from 'zod'
 import { configurationSecurity } from './configuration-routes.js'
 import type { RuntimeSecurity } from './runtime-security.js'
+import type { SessionIndex } from './session-index.js'
 
 const maxPreviewBytes = 1_048_576
 class PreviewError extends Error {
@@ -80,7 +80,7 @@ export async function readSessionImagePreview(cwd: string, path: string, searchR
   return { ...file, mime }
 }
 
-export function createSessionFilePreviewRoutes(security: RuntimeSecurity) {
+export function createSessionFilePreviewRoutes(security: RuntimeSecurity, sessions: SessionIndex) {
   const routes = new Hono()
   for (const endpoint of ['/sessions/:sessionId/file-preview', '/sessions/:sessionId/file-preview/image']) {
     routes.use(endpoint, configurationSecurity(security), bodyLimit({ maxSize: 16_384 }))
@@ -88,8 +88,10 @@ export function createSessionFilePreviewRoutes(security: RuntimeSecurity) {
       const parsed = z.object({ path: z.string().min(1).max(4096).refine((path) => !path.includes('\0')), searchRoot: z.string().min(1).max(4096).refine((path) => !path.includes('\0')).optional() }).strict().safeParse(await context.req.json().catch(() => undefined))
       if (!parsed.success) return context.json({ error: '文件路径无效。' }, 400)
       try {
-        const session = (await listPiSessions()).find((session) => session.id === context.req.param('sessionId'))
-        if (!session?.cwd) return context.json({ error: '找不到项目会话。' }, 404)
+        const sessionId = context.req.param('sessionId')
+        if (!sessionId) return context.json({ error: '找不到项目会话。' }, 404)
+        const session = await sessions.resolve(sessionId)
+        if (!session || !session.cwd) return context.json({ error: '找不到项目会话。' }, 404)
         if (endpoint.endsWith('/image')) {
           const image = await readSessionImagePreview(session.cwd, parsed.data.path, parsed.data.searchRoot)
           context.header('Content-Type', image.mime)

@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { PiRuntimeHost } from './pi-runtime-host.js'
 
@@ -200,7 +203,63 @@ it('reads native session totals and adds the actual auto-compaction setting', as
   const host = hostFor(process)
   const response = await host.command({ type: 'get_session_stats' })
   expect(response.data).toMatchObject({ cost: 0.01, autoCompactionEnabled: true, contextUsage: { percent: null } })
+  expect(process.commands.filter((command) => command.type === 'get_state')).toHaveLength(1)
+  const cached = await host.command({ type: 'get_session_stats' })
+  expect(cached.data).toMatchObject({ autoCompactionEnabled: true })
+  expect(process.commands.filter((command) => command.type === 'get_state')).toHaveLength(1)
   await host.close()
+})
+
+it('uses the startup auto-compaction setting without an extra state read', async () => {
+  const process = new FakeProcess()
+  process.start = async () => ({ sessionId: 'session-1', state: { sessionId: 'session-1', autoCompactionEnabled: false } })
+  const send = process.send.bind(process)
+  vi.spyOn(process, 'send').mockImplementation(async (command) => {
+    if (command.type === 'get_session_stats') return { data: { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 }, cost: 0.01 } } as never
+    return await send(command)
+  })
+  const host = hostFor(process)
+  const response = await host.command({ type: 'get_session_stats' })
+  expect(response.data).toMatchObject({ autoCompactionEnabled: false })
+  expect(process.commands.filter((command) => command.type === 'get_state')).toHaveLength(0)
+  await host.close()
+})
+
+it('uses assistant message usage instead of reading the native session file', async () => {
+  const process = new FakeProcess()
+  process.start = async () => ({ sessionId: 'session-1', state: { sessionId: 'session-1', autoCompactionEnabled: true } })
+  const send = process.send.bind(process)
+  vi.spyOn(process, 'send').mockImplementation(async (command) => {
+    if (command.type === 'get_session_stats') return { data: { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 }, cost: 0.01 } } as never
+    return await send(command)
+  })
+  const host = hostFor(process)
+  await host.start()
+  process.emit({ type: 'message_end', message: { role: 'assistant', usage: { input: 1, cacheRead: 998, cacheWrite: 1 } } })
+  const response = await host.command({ type: 'get_session_stats' })
+  expect((response.data as { cacheHitRate?: number }).cacheHitRate).toBeCloseTo(99.8)
+  expect(process.commands.filter((command) => command.type === 'get_state')).toHaveLength(0)
+
+  process.emit({ type: 'message_end', message: { role: 'assistant' } })
+  const fallback = await host.command({ type: 'get_session_stats' })
+  expect((fallback.data as { cacheHitRate?: number }).cacheHitRate).toBeUndefined()
+  await host.close()
+})
+
+it('falls back to the native session file when no assistant usage was observed', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'pi-host-stats-'))
+  const sessionFile = join(directory, 'session.jsonl')
+  writeFileSync(sessionFile, JSON.stringify({ type: 'message', message: { role: 'assistant', usage: { input: 1, cacheRead: 3, cacheWrite: 0 } } }))
+  const process = new FakeProcess()
+  process.start = async () => ({ sessionId: 'session-1', state: { sessionId: 'session-1', autoCompactionEnabled: true } })
+  vi.spyOn(process, 'send').mockImplementation(async (command) => command.type === 'get_session_stats'
+    ? { data: { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 }, cost: 0.01 } } as never
+    : { data: {} } as never)
+  const host = new PiRuntimeHost({ cwd: '/fixture', id: 'session-1', sessionFile }, () => process as never)
+  try {
+    const response = await host.command({ type: 'get_session_stats' })
+    expect((response.data as { cacheHitRate?: number }).cacheHitRate).toBeCloseTo(75)
+  } finally { await host.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
 it('passes image input to the real RPC shape and refuses a known text-only model before prompt admission', async () => {

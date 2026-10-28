@@ -9,9 +9,9 @@ import { configurationResponse } from './workspace-api.js'
 import type { AttachmentScope, useAttachmentDraft } from './attachment-draft.js'
 
 export function MessageAttachments({ attachments, scope }: { attachments: AttachmentRef[]; scope: AttachmentScope }) {
-  return <div className="flex max-w-full flex-wrap gap-2" aria-label="消息附件">{attachments.map((attachment, index) => <AttachmentCard key={`${attachment.id}:${index}`} attachment={attachment} scope={scope} />)}</div>
+  return <div className="flex max-w-full flex-wrap gap-2" aria-label="消息附件">{attachments.map((attachment, index) => <AttachmentCard key={`${attachment.id}:${index}`} attachment={attachment} scope={scope} imageOnly={attachment.kind === 'image'} />)}</div>
 }
-function AttachmentCard({ attachment, scope }: { attachment: AttachmentRef; scope: AttachmentScope }) {
+function AttachmentCard({ attachment, scope, imageOnly = false }: { attachment: AttachmentRef; scope: AttachmentScope; imageOnly?: boolean }) {
   const [blob, setBlob] = useState<Blob>()
   const [thumbnail, setThumbnail] = useState<Blob>()
   const image = useRef<HTMLImageElement>(null)
@@ -58,13 +58,22 @@ function AttachmentCard({ attachment, scope }: { attachment: AttachmentRef; scop
     const link = document.createElement('a'); link.href = href; link.download = attachment.name; document.body.append(link); link.click(); link.remove()
     setTimeout(() => URL.revokeObjectURL(href), 1000)
   }
+  const previewTitle = <DialogTitle className="truncate" title={attachment.name}>{attachment.name}</DialogTitle>
+  const previewClose = <DialogClose asChild><Button aria-label="关闭附件预览" type="button" size="icon-sm" variant="ghost"><X aria-hidden className="size-4" /></Button></DialogClose>
   return <div ref={root} className="max-w-full">
-    <button type="button" onClick={() => void activate()} disabled={loading} className="flex max-w-full items-center gap-2 rounded-lg border bg-background px-3 py-2 text-left text-xs hover:bg-accent" aria-label={`打开附件 ${attachment.name}`}>
+    <button type="button" onClick={() => void activate()} disabled={loading} className={`flex max-w-full items-center gap-2 rounded-lg border bg-background py-2 text-left text-xs hover:bg-accent ${imageOnly ? 'px-2' : 'px-3'}`} aria-label={`打开附件 ${attachment.name}`}>
       {attachment.kind === 'image' ? thumbnail ? <img ref={image} alt={attachment.name} className="size-16 object-contain" /> : <span className="grid size-16 place-items-center">{loading ? <LoaderCircle className="size-4 animate-spin" /> : '图片'}</span> : <File aria-hidden className="size-5 shrink-0" />}
-      <span className="min-w-0"><span className="block truncate">{attachment.name}</span><span className="text-muted-foreground">{(attachment.size / 1024).toFixed(1)} KiB{attachment.kind === 'file' ? ' · 按需读取' : ''}</span></span>
+      {!imageOnly && <span className="min-w-0"><span className="block truncate">{attachment.name}</span><span className="text-muted-foreground">{(attachment.size / 1024).toFixed(1)} KiB{attachment.kind === 'file' ? ' · 按需读取' : ''}</span></span>}
     </button>
     {error && <p role="alert" className="max-w-64 text-xs text-destructive">{error}<Button type="button" size="sm" variant="ghost" onClick={() => void activate()}>重试</Button></p>}
-    <Dialog open={open} onOpenChange={setOpen}><DialogContent className="flex h-[85svh] w-[min(64rem,calc(100vw-2rem))]! max-w-5xl! flex-col overflow-hidden"><div className="flex items-center justify-between gap-2"><DialogTitle>{attachment.name}</DialogTitle><DialogClose asChild><Button aria-label="关闭附件预览" type="button" size="icon-sm" variant="ghost"><X aria-hidden className="size-4" /></Button></DialogClose></div><DialogDescription className="sr-only">附件只读预览</DialogDescription><div className="flex min-h-0 flex-1 flex-col overflow-auto">{blob && attachment.kind === 'image' ? <FilePreviewImage blob={blob} path={attachment.name} positionKey={`attachment:${attachment.id}`} /> : <FilePreviewText content={text ?? ''} path={attachment.name} navigation={0} positionKey={`attachment:${attachment.id}`} />}</div>{blob && <Button type="button" variant="secondary" onClick={() => download(blob)}>下载附件</Button>}</DialogContent></Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent className="flex h-[85svh] w-[min(64rem,calc(100vw-2rem))]! max-w-5xl! flex-col overflow-hidden">
+        <DialogDescription className="sr-only">附件只读预览</DialogDescription>
+        {blob && attachment.kind === 'image'
+          ? <FilePreviewImage blob={blob} path={attachment.name} positionKey={`attachment:${attachment.id}`} title={previewTitle} actions={previewClose} />
+          : <><div className="flex min-w-0 items-center justify-between gap-2">{previewTitle}{previewClose}</div><div className="flex min-h-0 flex-1 flex-col overflow-auto"><FilePreviewText content={text ?? ''} path={attachment.name} navigation={0} positionKey={`attachment:${attachment.id}`} /></div></>}
+      </DialogContent>
+    </Dialog>
   </div>
 }
 
@@ -80,6 +89,13 @@ export function AttachmentPicker({ draft, onError }: { draft: ReturnType<typeof 
 export function ComposerAttachments({ draft }: { draft: ReturnType<typeof useAttachmentDraft> }) {
   if (draft.items.length === 0) return null
   return <div className="pointer-events-auto mb-2 space-y-2">
-    {draft.items.length > 0 && <ul aria-label="待发送附件" className="flex gap-2 overflow-x-auto pb-1">{draft.items.map((item) => <li key={item.id} className="flex min-w-48 max-w-72 shrink-0 items-start gap-2 rounded-lg border bg-background p-2 text-xs"><div className="min-w-0 flex-1">{item.ref?.kind === 'image' && draft.scope ? <AttachmentCard attachment={item.ref} scope={draft.scope} /> : <span className="block truncate" title={item.name}>{item.name}</span>}<span role="status" className="text-muted-foreground">{item.status === 'uploading' ? '正在上传…' : item.status === 'ready' ? '已就绪' : item.error}</span>{item.status === 'failed' && <Button size="sm" variant="ghost" onClick={() => void draft.retry(item.id)}>重试</Button>}</div><Button aria-label={`移除 ${item.name}`} size="icon-sm" variant="ghost" onClick={() => draft.remove(item.id)}><X aria-hidden className="size-3" /></Button></li>)}</ul>}
+    <ul aria-label="待发送附件" className="flex gap-2 overflow-x-auto pb-1">{draft.items.map((item) => <li key={item.id} className={`group/attachment relative flex max-w-72 shrink-0 items-start gap-2 text-xs ${item.ref?.kind === 'image' ? '' : 'min-w-48 rounded-lg border bg-background p-2'}`}>
+      <div className="min-w-0 flex-1">
+        {item.ref?.kind === 'image' && draft.scope ? <AttachmentCard attachment={item.ref} scope={draft.scope} imageOnly /> : <span className="block truncate" title={item.name}>{item.name}</span>}
+        {item.status !== 'ready' && <span role="status" className="text-muted-foreground">{item.status === 'uploading' ? '正在上传…' : item.error}</span>}
+        {item.status === 'failed' && <Button size="sm" variant="ghost" onClick={() => void draft.retry(item.id)}>重试</Button>}
+      </div>
+      <Button aria-label={`移除 ${item.name}`} size="icon-sm" variant="ghost" className={item.ref?.kind === 'image' ? 'pointer-events-none absolute right-1 top-1 bg-background/90 opacity-0 group-hover/attachment:pointer-events-auto group-hover/attachment:opacity-100 group-focus-within/attachment:pointer-events-auto group-focus-within/attachment:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100' : undefined} onClick={() => draft.remove(item.id)}><X aria-hidden className="size-3" /></Button>
+    </li>)}</ul>
   </div>
 }

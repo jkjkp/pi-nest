@@ -49,6 +49,21 @@ describe('session run controller', () => {
   beforeEach(() => useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {}, extensionStatuses: {}, extensionWidgets: {}, drafts: {} }))
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
+  it('restores a snapshot run without assigning replayed message identities to completed runs', () => {
+    const runtime = runtimeMock()
+    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const oldEvent = { sessionId: 'session-a', runId: 'old', turnId: 'old-native', sequence: 1, observedAt: '2026-10-28T00:00:00Z', event: { type: 'message_start', message: { role: 'user', id: 'reused', content: 'old' } } }
+    const old = { id: 'old', prompt: 'old', runId: 'old', startedAt: oldEvent.observedAt, completedAt: oldEvent.observedAt, events: [oldEvent] }
+    useWorkspaceStore.getState().setRun('session-a', { status: 'complete', systemEvents: [], turns: [old] })
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'active', revision: 1 }, activeTurn: { runId: 'new', prompt: 'new', startedAt: '2026-10-28T00:01:00Z' } })
+    for (let sequence = 2; sequence <= 3; sequence++) runtime.emit({ ...oldEvent, runId: 'new', turnId: 'new-native', sequence, event: { type: 'message_start', message: { role: 'user', id: 'reused', content: 'new' } } })
+    const turns = useWorkspaceStore.getState().runs['session-a']!.turns
+    expect(turns).toHaveLength(2)
+    expect(turns[0]).toBe(old)
+    expect(turns[1]).toMatchObject({ runId: 'new', prompt: 'new' })
+    expect(timelineItems(undefined, turns, []).map((item) => item.prompt)).toEqual(['old', 'new'])
+  })
+
   it('keeps an extension implementation separate from its completed planning turn without a status callback', async () => {
     const runtime = runtimeMock()
     const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
@@ -682,25 +697,127 @@ it('ends a rejected model call as an error and allows the next prompt to succeed
   expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'complete', stopReason: 'stop' })
 })
 
-it('isolates session statistics, rejects superseded responses and survives failed reads', async () => {
+it('coalesces in-flight session statistics and survives failed reads', async () => {
   useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
   let release!: (stats: any) => void
   runtime.getSessionStatistics.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
   const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
-  const older = controller.getSessionStatistics('session-a')
-  const newerStats = { tokens: { input: 20, output: 10, cacheRead: 90, cacheWrite: 0, total: 120 }, cost: 0.1, contextUsage: { tokens: null, percent: null, contextWindow: 1000000 } }
-  runtime.getSessionStatistics.mockResolvedValueOnce(newerStats as never)
-  await controller.getSessionStatistics('session-a')
-  release({ ...newerStats, cost: 999 })
-  await older
-  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']?.data).toEqual(newerStats)
+  const first = controller.getSessionStatistics('session-a')
+  const second = controller.getSessionStatistics('session-a')
+  expect(second).toBe(first)
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
+  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']).toMatchObject({ loading: true })
+
+  const stats = { tokens: { input: 20, output: 10, cacheRead: 90, cacheWrite: 0, total: 120 }, cost: 0.1, contextUsage: { tokens: null, percent: null, contextWindow: 1000000 } }
+  release(stats)
+  await Promise.all([first, second])
+  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']).toMatchObject({ data: stats, loading: false })
+
   await controller.getSessionStatistics('session-b')
   expect(useWorkspaceStore.getState().runtimeStatistics['session-b']?.data?.cost).toBe(0)
   runtime.getSessionStatistics.mockRejectedValueOnce(new Error('failed'))
   await controller.getSessionStatistics('session-a')
-  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']).toMatchObject({ data: newerStats, loading: false, error: expect.stringContaining('读取失败') })
+  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']).toMatchObject({ data: stats, loading: false, error: expect.stringContaining('读取失败') })
   expect(useWorkspaceStore.getState().runs['session-a']).toBeUndefined()
+})
+
+it('requests statistics once for one completed run across event, status and snapshot', async () => {
+  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  const runtime = runtimeMock()
+  runtime.prompt.mockResolvedValueOnce({ runId: 'run-1' })
+  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  controller.start({ prompt: 'done', sessionId: 'session-a' })
+  await tick()
+
+  runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a' })
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
+
+  runtime.status({ completedRun: { runId: 'run-1', stopReason: 'stop' }, lifecycle: 'idle', revision: 2, sessionId: 'session-a' } as never)
+  runtime.snapshot({ completedRun: { runId: 'run-1', stopReason: 'stop' }, runtime: { lifecycle: 'idle', revision: 2 }, sessionId: 'session-a' })
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
+})
+
+it('requests statistics once from a completed idle status without a native event', async () => {
+  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  const runtime = runtimeMock()
+  createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  const completedRun = { runId: 'history-run', stopReason: 'stop' }
+
+  runtime.status({ completedRun, lifecycle: 'idle', revision: 1, sessionId: 'session-a' } as never)
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
+
+  runtime.snapshot({ completedRun, runtime: { lifecycle: 'idle', revision: 1 }, sessionId: 'session-a' })
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
+})
+
+it('requests statistics once for one idle revision across snapshot and status', async () => {
+  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  const runtime = runtimeMock()
+  createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  runtime.snapshot({ runtime: { lifecycle: 'idle', revision: 5 }, sessionId: 'session-a' })
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
+
+  runtime.status({ lifecycle: 'idle', revision: 5, sessionId: 'session-a' })
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
+
+  runtime.status({ lifecycle: 'idle', revision: 6, sessionId: 'session-a' })
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(2)
+})
+
+it('reruns statistics after an in-flight read when a newer run completes', async () => {
+  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  const runtime = runtimeMock()
+  let releaseFirst!: (stats: any) => void
+  runtime.getSessionStatistics.mockImplementationOnce(() => new Promise((resolve) => { releaseFirst = resolve }))
+  runtime.prompt.mockResolvedValueOnce({ runId: 'run-1' }).mockResolvedValueOnce({ runId: 'run-2' })
+  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+
+  controller.start({ prompt: 'first', sessionId: 'session-a' })
+  await tick()
+  runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a' })
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
+
+  controller.start({ prompt: 'second', sessionId: 'session-a' })
+  await tick()
+  runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-2', sequence: 2, sessionId: 'session-a' })
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
+
+  const nextStats = { tokens: { input: 30, output: 20, cacheRead: 50, cacheWrite: 0, total: 100 }, cost: 0.2 }
+  runtime.getSessionStatistics.mockResolvedValueOnce(nextStats as never)
+  releaseFirst({ cost: 0.1 })
+  await tick()
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(2)
+  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']?.data).toEqual(nextStats)
+})
+
+it('refreshes statistics after compaction even when a read is in flight', async () => {
+  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  const runtime = runtimeMock()
+  let release!: (stats: any) => void
+  runtime.getSessionStatistics.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  const pending = controller.getSessionStatistics('session-a')
+  const compacted = { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 }, cost: 0.3 }
+  runtime.getSessionStatistics.mockResolvedValueOnce(compacted as never)
+
+  const compacting = controller.compact('session-a')
+  await tick()
+  release({ cost: 0.2 })
+  await pending
+  await compacting
+
+  expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(2)
+  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']?.data).toEqual(compacted)
 })
 
 it('does not resurrect statistics from a request interrupted by resync', async () => {

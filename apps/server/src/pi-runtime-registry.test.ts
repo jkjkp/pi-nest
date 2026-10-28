@@ -1,16 +1,23 @@
 import { describe, expect, it, vi } from 'vitest'
-import { chmod, mkdtemp, readdir, stat } from 'node:fs/promises'
+import { writeFileSync } from 'node:fs'
+import { chmod, mkdtemp, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { PiRpcCommandError } from '@pi-nest/pi-adapter'
+import { PiRpcCommandError, preparePiImage } from '@pi-nest/pi-adapter'
 import type { PiRuntimeEvent, PiRuntimeHost } from './pi-runtime-host.js'
 import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
 
-vi.mock('@pi-nest/pi-adapter', async (original) => ({ ...await original<typeof import('@pi-nest/pi-adapter')>(), capturePiSessionHistory: vi.fn(() => ({ entries: [], revision: 'a'.repeat(64), bytes: 1 })) }))
+vi.mock('@pi-nest/pi-adapter', async (original) => {
+  const actual = await original<typeof import('@pi-nest/pi-adapter')>()
+  return { ...actual, capturePiSessionHistory: vi.fn(() => ({ entries: [], revision: 'a'.repeat(64), bytes: 1 })), preparePiImage: vi.fn(actual.preparePiImage) }
+})
 
 const session = { cwd: '/fixture', id: 'session-1', sessionFile: '/fixture/session.jsonl' }
 const sessionFor = (id: string) => ({ ...session, id })
+const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
+const imageStream = () => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(Buffer.from(png, 'base64')); c.close() } })
+const textStream = (text: string) => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(Buffer.from(text)); c.close() } })
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -848,6 +855,222 @@ it('persists accepted attachment steering until the native user message is obser
     host.emit({ type: 'turn_end' })
     expect(registry.attachments.steering(session.id)).toEqual([])
   } finally { await registry.close(); const { rm } = await import('node:fs/promises'); await rm(directory, { recursive: true, force: true }) }
+})
+
+it('reuses a prepared attachment only after the target scope and submission match', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-prepared-prompt-'))
+  const host = hostMock()
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    const image = await registry.attachments.upload(imageStream(), 'draft:test:/fixture', 'photo.png', 'image/png')
+    const input = { message: 'look', attachmentIds: [image.id], submissionId: crypto.randomUUID() }
+    const prepared = await registry.attachments.prepare('draft:test:/fixture', input)
+    vi.mocked(preparePiImage).mockClear()
+    const read = vi.spyOn(registry.attachments, 'read')
+
+    await expect(registry.beginPrompt(session, 'look', { input, prepared })!.accepted).rejects.toMatchObject({ code: 'ATTACHMENT_FORBIDDEN' })
+    registry.attachments.grant(image.id, 'draft:test:/fixture', session.id)
+    await expect(registry.beginPrompt(session, 'look', { input, prepared })!.accepted).rejects.toMatchObject({ code: 'SUBMISSION_CONFLICT' })
+    expect(host.beginPrompt).not.toHaveBeenCalled()
+    expect(preparePiImage).not.toHaveBeenCalled()
+    expect(read).not.toHaveBeenCalled()
+
+    registry.attachments.transfer(input, 'draft:test:/fixture', session.id)
+    const prompt = registry.beginPrompt(session, 'look', { input, prepared })!
+    await prompt.accepted
+    expect(host.beginPrompt).toHaveBeenCalledWith(prepared.message, prepared.images)
+    expect(preparePiImage).not.toHaveBeenCalled()
+    expect(read).not.toHaveBeenCalled()
+    read.mockRestore()
+  } finally { await registry.close(); await rm(directory, { force: true, recursive: true }) }
+})
+
+it('reuses the prepared image when an attachment follow-up is promoted from the queue', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-steer-prepared-'))
+  const host = { ...hostMock(), command: vi.fn().mockResolvedValue({ success: true }) }
+  host.prompt.mockImplementation(() => new Promise(() => {}))
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    await registry.beginPrompt(session, 'first')!.accepted
+    const image = await registry.attachments.upload(imageStream(), session.id, 'photo.png', 'image/png')
+    const input = { type: 'follow_up', message: 'look', attachmentIds: [image.id], submissionId: crypto.randomUUID() }
+    await registry.commandWhileRunning(session.id, input)
+    vi.mocked(preparePiImage).mockClear()
+    const read = vi.spyOn(registry.attachments, 'read')
+
+    await registry.commandWhileRunning(session.id, { type: 'steer_queued', inputId: input.submissionId, message: 'look', index: 0 })
+
+    expect(preparePiImage).toHaveBeenCalledTimes(1)
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(host.command).toHaveBeenCalledTimes(1)
+    expect(host.command).toHaveBeenCalledWith({
+      type: 'steer',
+      message: expect.stringContaining(input.submissionId),
+      images: [{ type: 'image', data: png, mimeType: 'image/png' }],
+    })
+    read.mockRestore()
+  } finally { await registry.close(); await rm(directory, { force: true, recursive: true }) }
+})
+
+it('re-prepares a queued attachment on dequeue and rejects it after the bytes changed', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-queued-tamper-'))
+  const host = hostMock()
+  const running = deferred<{ model: undefined; stopReason: string }>()
+  host.prompt.mockReturnValueOnce(running.promise)
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  const statuses: string[] = []
+  try {
+    const unwatch = await registry.watch(session.id, 'tamper-status', 0, () => undefined, () => undefined, undefined, (status) => statuses.push(status.lifecycle))
+    const first = registry.beginPrompt(session, 'first')!
+    await first.accepted
+    const file = await registry.attachments.upload(textStream('hello'), session.id, 'input.txt', 'text/plain')
+    await registry.commandWhileRunning(session.id, { type: 'follow_up', message: 'later', attachmentIds: [file.id], submissionId: crypto.randomUUID() })
+    const read = vi.spyOn(registry.attachments, 'read')
+
+    writeFileSync(join(directory, `data-${file.id}`), 'HELLO')
+    running.resolve({ model: undefined, stopReason: 'stop' })
+    await first.settled
+    await vi.waitFor(() => expect(registry.attachments.queue(session.id)[0]?.recoveryRequired).toBe(true))
+
+    // The failure belongs to the queued message: the session and its runtime stay usable.
+    expect(statuses).not.toContain('failed')
+    expect(statuses).toContain('idle')
+    expect(registry.attachments.queue(session.id)[0]).toMatchObject({ error: '附件已损坏，请重新上传。', recoveryRequired: true })
+    expect(read.mock.calls.filter(([id]) => id === file.id)).toHaveLength(1)
+    expect(host.beginPrompt).toHaveBeenCalledTimes(1)
+    expect(registry.attachments.queue(session.id)).toHaveLength(1)
+
+    const resumed = registry.beginPrompt(session, 'after the failure')!
+    await resumed.accepted
+    expect(host.beginPrompt).toHaveBeenLastCalledWith('after the failure', undefined)
+    read.mockRestore()
+    unwatch()
+  } finally { await registry.close(); await rm(directory, { force: true, recursive: true }) }
+})
+
+it('reserves a recovered input before preparing attachments and preserves the next input', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-queued-resume-race-'))
+  const host = hostMock()
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  const preparing = deferred<void>()
+  const release = deferred<void>()
+  let pending: Promise<void> | undefined
+  try {
+    const image = await registry.attachments.upload(imageStream(), session.id, 'photo.png', 'image/png')
+    const id = crypto.randomUUID()
+    const input = { id, submissionId: id, message: 'recover', attachmentIds: [image.id] }
+    const next = { id: crypto.randomUUID(), message: 'keep this' }
+    await registry.attachments.prepare(session.id, input)
+    registry.attachments.queue(session.id, [input, next])
+    await registry.resume(session)
+    const prepare = registry.attachments.prepare.bind(registry.attachments)
+    vi.spyOn(registry.attachments, 'prepare').mockImplementationOnce(async (...args) => {
+      const result = await prepare(...args)
+      preparing.resolve()
+      await release.promise
+      return result
+    })
+
+    pending = registry.resumeQueued(session, id)
+    await preparing.promise
+    await expect(registry.resumeQueued(session, id)).rejects.toBeInstanceOf(PiRuntimeBusyError)
+    await expect(registry.dropQueued(session.id, id)).rejects.toBeInstanceOf(PiRuntimeBusyError)
+    release.resolve()
+    await pending
+
+    expect(host.beginPrompt).toHaveBeenCalledTimes(1)
+    expect(registry.attachments.queue(session.id).map((item) => item.id)).toEqual([next.id])
+    await expect(registry.resumeQueued(session, id)).rejects.toThrow('待确认消息已变化')
+    expect(registry.attachments.queue(session.id).map((item) => item.id)).toEqual([next.id])
+  } finally {
+    release.resolve()
+    await pending?.catch(() => undefined)
+    await registry.close()
+    await rm(directory, { force: true, recursive: true })
+  }
+})
+
+it('rejects removal while steering is pending and removes only the steered input', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-queued-steer-race-'))
+  const steering = deferred<{ success: boolean }>()
+  const sending = deferred<void>()
+  const host = { ...hostMock(), command: vi.fn(() => { sending.resolve(); return steering.promise }) }
+  host.prompt.mockImplementation(() => new Promise(() => {}))
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  let pending: ReturnType<PiRuntimeRegistry['commandWhileRunning']> | undefined
+  try {
+    await registry.beginPrompt(session, 'first')!.accepted
+    const ids = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()]
+    for (const [index, id] of ids.entries()) {
+      await registry.commandWhileRunning(session.id, { type: 'follow_up', message: `queued ${index}`, submissionId: id })
+    }
+    pending = registry.commandWhileRunning(session.id, { type: 'steer_queued', inputId: ids[1], index: 1, message: 'queued 1' })
+    await sending.promise
+    await expect(registry.dropQueued(session.id, ids[0]!)).rejects.toBeInstanceOf(PiRuntimeBusyError)
+    steering.resolve({ success: true })
+    await pending
+
+    expect(registry.attachments.queue(session.id).map((item) => item.id)).toEqual([ids[0], ids[2]])
+    await registry.dropQueued(session.id, ids[0]!)
+    expect(registry.attachments.queue(session.id).map((item) => item.id)).toEqual([ids[2]])
+    expect(host.command).toHaveBeenCalledTimes(1)
+  } finally {
+    steering.resolve({ success: true })
+    await pending?.catch(() => undefined)
+    await registry.close()
+    await rm(directory, { force: true, recursive: true })
+  }
+})
+
+it('keeps automatic dequeue reserved until prompt admission', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-queued-admission-race-'))
+  const running = deferred<{ model: undefined; stopReason: string }>()
+  const admitted = deferred<void>()
+  const host = hostMock()
+  host.prompt.mockReturnValueOnce(running.promise)
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    const first = registry.beginPrompt(session, 'first')!
+    await first.accepted
+    const id = crypto.randomUUID()
+    const next = crypto.randomUUID()
+    await registry.commandWhileRunning(session.id, { type: 'follow_up', message: 'queued', submissionId: id })
+    await registry.commandWhileRunning(session.id, { type: 'follow_up', message: 'next', submissionId: next })
+    host.beginPrompt.mockImplementationOnce(() => ({ accepted: admitted.promise, settled: new Promise(() => {}) }))
+    running.resolve({ model: undefined, stopReason: 'stop' })
+    await first.settled
+    await vi.waitFor(() => expect(host.beginPrompt).toHaveBeenCalledTimes(2))
+
+    await expect(registry.dropQueued(session.id, next)).rejects.toBeInstanceOf(PiRuntimeBusyError)
+    expect(registry.attachments.queue(session.id).map((item) => item.id)).toEqual([id, next])
+    admitted.resolve()
+    await vi.waitFor(() => expect(registry.attachments.queue(session.id).map((item) => item.id)).toEqual([next]))
+    await registry.dropQueued(session.id, next)
+    expect(registry.attachments.queue(session.id)).toEqual([])
+  } finally {
+    admitted.resolve()
+    await registry.close()
+    await rm(directory, { force: true, recursive: true })
+  }
+})
+
+it('drops a rejected queued input and lets the queue continue', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-queued-drop-'))
+  const host = hostMock()
+  host.prompt.mockImplementation(() => new Promise(() => {}))
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    await registry.beginPrompt(session, 'first')!.accepted
+    const file = await registry.attachments.upload(textStream('hello'), session.id, 'input.txt', 'text/plain')
+    const submissionId = crypto.randomUUID()
+    await registry.commandWhileRunning(session.id, { type: 'follow_up', message: 'stale', attachmentIds: [file.id], submissionId })
+    expect(registry.attachments.queue(session.id)).toHaveLength(1)
+
+    const dropped = await registry.dropQueued(session.id, submissionId)
+    expect(dropped.message).toBe('stale')
+    expect(registry.attachments.queue(session.id)).toHaveLength(0)
+    await expect(registry.dropQueued(session.id, submissionId)).rejects.toMatchObject({ code: 'ATTACHMENT_INVALID' })
+  } finally { await registry.close(); await rm(directory, { force: true, recursive: true }) }
 })
 
 it('applies first-prompt settings under the prompt lock before sending any prompt', async () => {

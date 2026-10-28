@@ -1,6 +1,6 @@
 export type AttachmentRef = { id: string; kind: 'image' | 'file'; name: string; mediaType: string; size: number; width?: number; height?: number }
 export type AttachmentInput = { message: string; attachmentIds?: string[]; submissionId?: string }
-export type PiQueuedInput = AttachmentInput & { id: string; attachments?: AttachmentRef[]; recoveryRequired?: boolean }
+export type PiQueuedInput = AttachmentInput & { id: string; attachments?: AttachmentRef[]; error?: string; recoveryRequired?: boolean }
 
 export type PiSessionFilePreview = { path: string; content: string }
 
@@ -37,6 +37,7 @@ export type RuntimeCommandPayload = { sessionId: string } & (
   | ({ type: 'prompt' | 'steer' | 'follow_up' } & AttachmentInput)
   | { type: 'steer_queued'; message: string; index: number; inputId?: string }
   | { type: 'resume_queued'; inputId: string }
+  | { type: 'drop_queued'; inputId: string }
   | { type: 'compact'; customInstructions?: string }
   | { type: 'set_model'; provider: string; modelId: string }
   | { type: 'set_thinking_level'; level: string }

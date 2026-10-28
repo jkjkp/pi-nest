@@ -1,22 +1,40 @@
+import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { createConfigurationRoutes } from './configuration-routes.js'
 import { RuntimeSecurity } from './runtime-security.js'
 import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
 import { configurationUpdateSchema } from './configuration-schema.js'
-const api = vi.hoisted(() => ({ discoverPiModels: vi.fn(), readPiConfiguration: vi.fn(), updatePiConfiguration: vi.fn(), listPiSessions: vi.fn(), diagnosePiMcp: vi.fn() }))
+import { ProjectRegistry } from './project-registry.js'
+import { createSessionIndexFixture } from './test-fixtures/session-index.js'
+const api = vi.hoisted(() => ({ discoverPiModels: vi.fn(), readPiConfiguration: vi.fn(), updatePiConfiguration: vi.fn(), diagnosePiMcp: vi.fn() }))
 vi.mock('@pi-nest/pi-adapter', () => ({ ...api, PiConfigurationConflict: class extends Error {}, PiConfigurationInvalid: class extends Error {} }))
 const security = new RuntimeSecurity('http://localhost:5173')
 const finish = vi.fn()
 const beginGlobalSettingsUpdate = vi.fn(() => finish as typeof finish | undefined)
-const routes = () => createConfigurationRoutes({ beginGlobalSettingsUpdate } as unknown as PiRuntimeRegistry, security)
+const emptyProjects = () => new ProjectRegistry(join(tmpdir(), 'pi-nest-config-tests', `${randomUUID()}.json`))
+const knownSession = { id: 'known', cwd: '/trusted', firstMessage: undefined, name: undefined, sessionFile: '/native/known.jsonl', updatedAt: undefined }
+const sessionIndex = () => createSessionIndexFixture([knownSession]).index
+const routes = (sessions = sessionIndex(), projects = emptyProjects()) => createConfigurationRoutes({ beginGlobalSettingsUpdate } as unknown as PiRuntimeRegistry, security, projects, sessions)
 const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }
-beforeEach(() => { vi.clearAllMocks(); beginGlobalSettingsUpdate.mockReturnValue(finish); api.listPiSessions.mockResolvedValue([{ id: 'known', cwd: '/trusted' }]); api.readPiConfiguration.mockResolvedValue({ projectTrusted: false }); api.updatePiConfiguration.mockResolvedValue(undefined) })
+beforeEach(() => { vi.clearAllMocks(); beginGlobalSettingsUpdate.mockReturnValue(finish); api.readPiConfiguration.mockResolvedValue({ projectTrusted: false }); api.updatePiConfiguration.mockResolvedValue(undefined) })
 it('protects reads and writes with a token, validates mutation origins, and disables caching', async () => {
   expect((await routes().request('/')).status).toBe(403)
   const read = await routes().request('/', { headers: { 'x-pi-nest-token': security.token } })
   expect(read.status).toBe(200); expect(read.headers.get('cache-control')).toBe('no-store')
   expect((await routes().request('/', { headers: { ...headers, origin: 'https://evil.example' } })).status).toBe(403)
   expect((await routes().request('/', { method: 'PATCH', headers: { 'x-pi-nest-token': security.token }, body: '{}' })).status).toBe(403)
+})
+it('distinguishes stale tokens from rejected origins before executing mutations', async () => {
+  const response = await routes().request('/?session=known', { method: 'PATCH', headers: { ...headers, 'x-pi-nest-token': 'expired' }, body: JSON.stringify({ category: 'models', values: { retryEnabled: false } }) })
+  expect(response.status).toBe(403)
+  await expect(response.json()).resolves.toMatchObject({ code: 'RUNTIME_TOKEN_INVALID' })
+  expect(api.updatePiConfiguration).not.toHaveBeenCalled()
+  expect(beginGlobalSettingsUpdate).not.toHaveBeenCalled()
+  const origin = await routes().request('/', { headers: { ...headers, origin: 'https://evil.example', 'x-pi-nest-token': 'expired' } })
+  expect(origin.status).toBe(403)
+  await expect(origin.json()).resolves.not.toHaveProperty('code')
 })
 it('resolves project paths on the server and reloads hosts after mutations', async () => {
   const response = await routes().request('/?session=known', { method: 'PATCH', headers, body: JSON.stringify({ category: 'models', values: { retryEnabled: false } }) })
@@ -60,7 +78,7 @@ it('validates discovery requests and never persists or reloads runtimes when lis
 
 it('reads draft configuration only for known projects and rejects ambiguous targets', async () => {
   const projects = { has: vi.fn((cwd: string) => cwd === '/registered') }
-  const route = createConfigurationRoutes({} as PiRuntimeRegistry, security, projects as unknown as import('./project-registry.js').ProjectRegistry)
+  const route = createConfigurationRoutes({} as PiRuntimeRegistry, security, projects as unknown as ProjectRegistry, sessionIndex())
   expect((await route.request('/?project=%2Fregistered', { headers })).status).toBe(200)
   expect(api.readPiConfiguration).toHaveBeenLastCalledWith('/registered')
   expect((await route.request('/?project=%2Ftrusted', { headers })).status).toBe(200)

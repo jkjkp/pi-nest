@@ -106,7 +106,7 @@ it('retains the loaded range until its replacement is complete and merges by run
   const older = { ...history, entries: [{ ...history.entries[0]!, id: 'older-user', timestamp: '2026-10-15T00:00:00Z' }] }
   client.setQueryData<InfiniteData<PiSessionHistoryResponse>>(sessionHistoryQueryKey('one'), { pages: [older, history], pageParams: [{}, {}] })
   running(); await mount()
-  useWorkspaceStore.getState().updateRun('one', { turns: [{ ...workspace.currentRun!.turns[0]!, runId: 'current-run' }] })
+  await act(() => useWorkspaceStore.getState().updateRun('one', { turns: [{ ...workspace.currentRun!.turns[0]!, runId: 'current-run' }] }))
   const native = { ...history.entries[0]!, id: 'native-user', runId: 'current-run', runIndex: 0, timestamp: '2026-10-16T00:00:01Z', raw: { type: 'message', message: { role: 'user', content: 'current question' } } }
   let release!: (value: PiSessionHistoryResponse) => void
   vi.mocked(fetchSessionHistory).mockImplementation(async (_id, before) => before ? new Promise((done) => { release = done }) : { ...history, revision: 'new', hasEarlier: true, beforeCursor: 'native-user', entries: [native] })
@@ -119,6 +119,8 @@ it('retains the loaded range until its replacement is complete and merges by run
   expect(workspace.history?.entries.map((entry) => entry.id)).toEqual(['older-user', 'old-user', 'native-user'])
   expect(timelineItems(workspace.history?.entries, workspace.currentRun?.turns ?? [], []).filter((item) => item.prompt === 'current question')).toHaveLength(1)
   expect(useWorkspaceStore.getState().drafts.one).toBe('draft')
+  expect(workspace.turnIndexQuery.data?.revision).toBe('new')
+  expect(vi.mocked(fetchSessionTurnIndex).mock.calls.filter(([, revision]) => revision === 'new')).toHaveLength(1)
 })
 
 it.each([new RequestError(500), new RequestError(409, 'HISTORY_SNAPSHOT_EXPIRED')])('keeps actual read failures visible and retryable: %s', async (error) => {

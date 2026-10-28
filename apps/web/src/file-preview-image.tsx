@@ -1,9 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { useWorkspaceStore } from './workspace-store.js'
 import type { FileReadingPosition } from './file-preview-state.js'
 
-export function FilePreviewImage({ blob, path, positionKey }: { blob: Blob; path: string; positionKey: string }) {
+export function FilePreviewImage({ blob, path, positionKey, title, actions }: { blob: Blob; path: string; positionKey: string; title?: ReactNode; actions?: ReactNode }) {
   const [saved] = useState(() => useWorkspaceStore.getState().fileReadingPositions[positionKey])
   const position = useRef<FileReadingPosition>(saved ?? { start: 0, scrollTop: 0, scrollLeft: 0, mode: 'source', zoom: 'fit' })
   const [decoded, setDecoded] = useState<{ blob: Blob; width: number; failed?: boolean }>()
@@ -25,12 +25,14 @@ export function FilePreviewImage({ blob, path, positionKey }: { blob: Blob; path
     scroll.current.scrollLeft = position.current.scrollLeft
   }, [loaded, zoom, positionKey])
   return <>
-    <div role="group" aria-label="图片缩放" className="flex shrink-0 flex-wrap items-center gap-1 border-b p-2">
+    <div role="group" aria-label="图片缩放" className={`flex shrink-0 flex-wrap items-center gap-1 border-b ${title ? 'pb-2' : 'p-2'}`}>
+      {title && <div className="mr-3 min-w-0 max-w-48">{title}</div>}
       <Button type="button" size="sm" variant={zoom === 'fit' ? 'secondary' : 'ghost'} onClick={() => setZoom('fit')}>适应面板</Button>
       <Button type="button" size="sm" variant={zoom === 1 ? 'secondary' : 'ghost'} onClick={() => setZoom(1)}>原始尺寸</Button>
       <Button type="button" size="sm" variant="ghost" aria-label="缩小图片" disabled={!loaded || (zoom !== 'fit' && zoom <= 0.1)} onClick={() => setZoom(Math.max(0.1, Number(((zoom === 'fit' ? (image.current!.clientWidth / image.current!.naturalWidth) : zoom) / 1.25).toFixed(3))))}>−</Button>
       <Button type="button" size="sm" variant="ghost" aria-label="放大图片" disabled={!loaded || (zoom !== 'fit' && zoom >= 4)} onClick={() => setZoom(Math.min(4, Number(((zoom === 'fit' ? (image.current!.clientWidth / image.current!.naturalWidth) : zoom) * 1.25).toFixed(3))))}>+</Button>
       <span className="text-xs text-muted-foreground">{zoom === 'fit' ? '适应' : `${Math.round(zoom * 100)}%`}</span>
+      {actions && <div className="ml-auto shrink-0">{actions}</div>}
     </div>
     {failed && <p role="alert" className="p-4 text-sm text-destructive">图片解码失败或像素过大，请刷新文件重试。</p>}<div ref={scroll} className="min-h-0 flex-1 overflow-auto p-3" aria-label="图片预览" tabIndex={0} onScroll={(event) => {
       position.current.scrollTop = event.currentTarget.scrollTop

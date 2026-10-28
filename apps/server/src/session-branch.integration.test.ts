@@ -4,15 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
 import { afterEach, expect, it, vi } from 'vitest'
-import { listPiSessions, readPiSessionHistory, readPiSessionTurnIndex, renamePiSession } from '@pi-nest/pi-adapter'
+import { readPiSessionHistory, readPiSessionTurnIndex, renamePiSession } from '@pi-nest/pi-adapter'
 import { SessionHistorySnapshots } from './session-history-snapshots.js'
 import { createSessionRoutes } from './session-routes.js'
 import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
-
-vi.mock('@pi-nest/pi-adapter', async (original) => ({
-  ...await original<typeof import('@pi-nest/pi-adapter')>(),
-  listPiSessions: vi.fn(),
-}))
+import { createSessionIndexFixture } from './test-fixtures/session-index.js'
 
 let directory: string | undefined
 afterEach(() => { if (directory) rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks() })
@@ -27,7 +23,7 @@ it('clones the native snapshot after runtime shutdown writes, and keeps fork rev
   ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
   const binding = { sessionFile, expectedSessionId: 'source', expectedCwd: directory }
   const old = readPiSessionTurnIndex(binding)
-  vi.mocked(listPiSessions).mockResolvedValue([{ id: 'source', cwd: directory, sessionFile, createdAt: timestamp, updatedAt: timestamp, name: undefined, firstMessage: 'Original question' }])
+  const sessionIndex = createSessionIndexFixture([{ id: 'source', cwd: directory, sessionFile, createdAt: timestamp, updatedAt: timestamp, name: undefined, firstMessage: 'Original question' }])
   const finish = vi.fn()
   let shutdownComplete!: () => void
   const registry = { attachments: new AttachmentStore(), beginMutation: vi.fn(() => new Promise<() => void>((resolve) => {
@@ -36,7 +32,7 @@ it('clones the native snapshot after runtime shutdown writes, and keeps fork rev
       resolve(finish)
     }
   })) }
-  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry))
+  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index))
   const pending = app.request('/api/sessions/source/branch', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'clone' }),
   })
@@ -75,14 +71,13 @@ it('numbers clones within the project and persists names when cloning a copy', a
     { type: 'session', version: 3, id: 'source', cwd: directory, timestamp },
     { type: 'message', id: 'user', parentId: null, timestamp, message: { role: 'user', content: '登录接口排查', timestamp: Date.parse(timestamp) } },
   ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
-  const sessions: Awaited<ReturnType<typeof listPiSessions>> = [
+  const sessionIndex = createSessionIndexFixture([
     { id: 'source', cwd: directory, sessionFile, updatedAt: timestamp, name: undefined, firstMessage: '登录接口排查' },
     { id: 'foreign', cwd: join(directory, 'other'), sessionFile: '/unused', updatedAt: timestamp, name: '登录接口排查（副本）', firstMessage: undefined },
-  ]
-  vi.mocked(listPiSessions).mockImplementation(async () => sessions)
+  ])
   const finish = vi.fn()
   const registry = { attachments: new AttachmentStore(), beginMutation: vi.fn(async () => finish) }
-  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry))
+  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index))
   async function clone(id: string, expectedName: string) {
     const response = await app.request(`/api/sessions/${id}/branch`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'clone' }),
@@ -93,12 +88,11 @@ it('numbers clones within the project and persists names when cloning a copy', a
     const childFile = readdirSync(directory!).find((file) => file.includes(result.session.id))!
     const history = readPiSessionHistory({ sessionFile: join(directory!, childFile), expectedSessionId: result.session.id, expectedCwd: directory })
     expect(history.entries.at(-1)?.raw).toMatchObject({ type: 'session_info', name: expectedName })
-    sessions.push({ ...result.session, sessionFile: join(directory!, childFile) })
     return result.session.id as string
   }
   const sourceBytes = readFileSync(sessionFile)
   const first = await clone('source', '登录接口排查（副本）')
-  sessions.push({ id: 'occupied', cwd: directory, sessionFile: '/unused', updatedAt: timestamp, name: undefined, firstMessage: '登录接口排查（副本 2）' })
+  sessionIndex.add({ id: 'occupied', cwd: directory, sessionFile: '/unused', updatedAt: timestamp, name: undefined, firstMessage: '登录接口排查（副本 2）' })
   await clone('source', '登录接口排查（副本 3）')
   await clone(first, '登录接口排查（副本 4）')
   expect(readFileSync(sessionFile)).toEqual(sourceBytes)
@@ -111,11 +105,11 @@ it('serves pinned native history, pagination and index over HTTP during generati
   const session = { id: 'source', cwd: directory, sessionFile: join(directory, 'native.jsonl'), createdAt: timestamp, updatedAt: timestamp, firstMessage: 'first', name: undefined }
   const lines = [{ type: 'session', version: 3, id: session.id, cwd: directory, timestamp }, ...['first', 'second'].map((id, index) => ({ type: 'message', id, parentId: index ? 'first' : null, timestamp, message: { role: 'user', content: id, timestamp: Date.parse(timestamp) } }))]
   writeFileSync(session.sessionFile, lines.map((line) => JSON.stringify(line)).join('\n') + '\n')
-  vi.mocked(listPiSessions).mockResolvedValue([session])
+  const sessionIndex = createSessionIndexFixture([session])
   const history = new SessionHistorySnapshots()
   history.pin(session, 'live')
   const registry = { attachments: new AttachmentStore(), history, isPromptStreaming: () => true }
-  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry))
+  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index))
   appendFileSync(session.sessionFile, JSON.stringify({ type: 'message', id: 'live-user', parentId: 'second', timestamp, message: { role: 'user', content: 'third', timestamp: Date.parse(timestamp) } }) + '\n')
   const response = await app.request('/api/sessions/source/history?limit=1')
   expect(response.status).toBe(200)
@@ -147,7 +141,7 @@ it.each(['session_info', 'custom', 'message', 'model_change', 'context_edit', 'b
     ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
     const binding = { sessionFile, expectedSessionId: 'source', expectedCwd: directory }
     const index = readPiSessionTurnIndex(binding)
-    vi.mocked(listPiSessions).mockResolvedValue([session])
+    const sessionIndex = createSessionIndexFixture([session])
     const finish = vi.fn()
     const registry = { attachments: new AttachmentStore(), beginMutation: vi.fn(async (_id: string, beforeUnload?: () => void) => {
       beforeUnload?.()
@@ -162,7 +156,7 @@ it.each(['session_info', 'custom', 'message', 'model_change', 'context_edit', 'b
       appendFileSync(sessionFile, JSON.stringify(entry) + '\n')
       return finish
     }) }
-    const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry))
+    const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index))
     const request = () => app.request('/api/sessions/source/branch', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fork', entryId: 'selected', revision: index.revision }),
     })
@@ -197,10 +191,10 @@ it('branches through an assistant reply via the existing endpoint without includ
   ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
   const binding = { sessionFile, expectedSessionId: 'source', expectedCwd: directory }
   const before = readFileSync(sessionFile)
-  vi.mocked(listPiSessions).mockResolvedValue([{ id: 'source', cwd: directory, sessionFile, createdAt: timestamp, updatedAt: timestamp, name: undefined, firstMessage: 'question' }])
+  const sessionIndex = createSessionIndexFixture([{ id: 'source', cwd: directory, sessionFile, createdAt: timestamp, updatedAt: timestamp, name: undefined, firstMessage: 'question' }])
   const finish = vi.fn()
   const registry = { attachments: new AttachmentStore(), beginMutation: vi.fn(async () => finish) }
-  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry))
+  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index))
   const response = await app.request('/api/sessions/source/branch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fork', entryId: 'answer', revision: readPiSessionHistory(binding).revision }) })
   expect(response.status).toBe(201)
   const result = await response.json()

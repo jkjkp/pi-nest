@@ -7,10 +7,9 @@ import { WebSocket, WebSocketServer } from 'ws'
 import { createApp } from './app.js'
 import type { PiRuntimeRegistry } from './pi-runtime-registry.js'
 import { RuntimeSecurity } from './runtime-security.js'
+import { createSessionIndexFixture } from './test-fixtures/session-index.js'
 
-const adapter = vi.hoisted(() => ({ listPiSessions: vi.fn() }))
-vi.mock('@pi-nest/pi-adapter', async (importOriginal) => ({ ...await importOriginal<typeof import('@pi-nest/pi-adapter')>(), ...adapter }))
-
+const nativeSession = { cwd: '/fixture', firstMessage: undefined, id: 'session-1', name: undefined, sessionFile: '/fixture/session.jsonl', updatedAt: undefined }
 const servers: Array<ReturnType<typeof serve>> = []
 
 afterEach(async () => {
@@ -23,9 +22,9 @@ function runtime() {
   }
 }
 
-async function start(security: RuntimeSecurity) {
+async function start(security: RuntimeSecurity, sessions = createSessionIndexFixture([nativeSession]).index) {
   const websocket = new WebSocketServer({ noServer: true })
-  const server = serve({ fetch: createApp(runtime() as never as PiRuntimeRegistry, security).fetch, hostname: '127.0.0.1', port: 0, websocket: { server: websocket } })
+  const server = serve({ fetch: createApp(runtime() as never as PiRuntimeRegistry, security, undefined, sessions).fetch, hostname: '127.0.0.1', port: 0, websocket: { server: websocket } })
   servers.push(server)
   await once(server, 'listening')
   const address = server.address()
@@ -44,7 +43,6 @@ function connect(url: string, origin: string) {
 
 describe('runtime WebSocket upgrade', () => {
   it('accepts a valid origin and startup token, then rejects other origins or tokens before upgrade', async () => {
-    adapter.listPiSessions.mockResolvedValue([{ cwd: '/fixture', id: 'session-1', sessionFile: '/fixture/session.jsonl' }])
     const security = new RuntimeSecurity('http://localhost:5173')
     const base = await start(security)
     const bootstrap = await fetch(`${base}/api/runtime/bootstrap`, { method: 'POST', headers: { origin: security.origin } })

@@ -24,7 +24,7 @@ vi.mock('./workspace-store.js', async (importOriginal) => {
 })
 
 const sessionRuns = {
-  resumeQueued: async () => undefined, adopt: () => undefined,
+  resumeQueued: async () => undefined, dropQueued: async () => undefined, adopt: () => undefined,
   compact: async () => true,
   cancelCompact: async () => undefined,
   followUp: async () => undefined,
@@ -69,6 +69,17 @@ it('limits the pending list to two rows and reports additional messages', () => 
   expect(markup).toContain('还有 1 条')
   expect(markup).toContain('>引导</button>')
   expect(markup).not.toContain('hidden task')
+})
+
+it('surfaces the failure reason and offers removal instead of a retry that cannot succeed', () => {
+  const markup = renderToStaticMarkup(<PendingInputs inputs={[
+    { id: 'a', message: 'look at this', mode: 'follow_up', submittedAt: 'now', error: '附件已损坏，请重新上传。', recoveryRequired: true },
+  ]} onDrop={() => undefined} onResume={() => undefined} onSteer={() => undefined} />)
+  expect(markup).toContain('需要处理')
+  expect(markup).toContain('附件已损坏，请重新上传。')
+  expect(markup).toContain('>移除</button>')
+  expect(markup).not.toContain('确认继续')
+  expect(markup).not.toContain('>引导</button>')
 })
 
 describe('WorkspacePage new conversation draft', () => {
