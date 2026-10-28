@@ -19,6 +19,45 @@ const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwA
 const imageStream = () => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(Buffer.from(png, 'base64')); c.close() } })
 const textStream = (text: string) => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(Buffer.from(text)); c.close() } })
 
+it('keeps a deduplicated attachment input recoverable after uncertain steering and restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-queue-restart-'))
+  const host = { ...hostMock(), command: vi.fn().mockRejectedValue(new Error('connection timed out')) }
+  host.prompt.mockImplementation(() => new Promise(() => {}))
+  const registry = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => host as unknown as PiRuntimeHost })
+  const recoveredHost = hostMock()
+  let restarted: PiRuntimeRegistry | undefined
+  try {
+    await registry.beginPrompt(session, 'first')!.accepted
+    const file = await registry.attachments.upload(textStream('source'), session.id, 'input.txt', 'text/plain')
+    const submissionId = crypto.randomUUID()
+    const input = { type: 'follow_up', message: 'recover this', attachmentIds: [file.id], submissionId }
+    await registry.commandWhileRunning(session.id, input)
+    await registry.commandWhileRunning(session.id, input)
+    const nextId = crypto.randomUUID()
+    await registry.commandWhileRunning(session.id, { type: 'follow_up', message: 'keep next', submissionId: nextId })
+    expect(registry.attachments.queue(session.id).map((item) => item.id)).toEqual([submissionId, nextId])
+    await expect(registry.commandWhileRunning(session.id, { type: 'steer_queued', inputId: submissionId, message: 'recover this' })).rejects.toThrow('connection timed out')
+    expect(registry.attachments.queue(session.id)[0]?.recoveryRequired).toBe(true)
+    await registry.close()
+
+    restarted = new PiRuntimeRegistry({ attachmentDirectory: directory, createHost: () => recoveredHost as unknown as PiRuntimeHost })
+    const snapshots: any[] = []
+    const unwatch = await restarted.watch(session.id, 'recovered', 0, () => {}, () => {}, (snapshot) => snapshots.push(snapshot))
+    expect(snapshots.at(-1).inputQueue.inputs.map((item: { id: string }) => item.id)).toEqual([submissionId, nextId])
+    expect(recoveredHost.beginPrompt).not.toHaveBeenCalled()
+    await restarted.resumeQueued(session, submissionId)
+    expect(recoveredHost.beginPrompt).toHaveBeenCalledTimes(1)
+    expect(restarted.attachments.queue(session.id).map((item) => item.id)).toEqual([nextId])
+    await expect(restarted.resumeQueued(session, submissionId)).rejects.toThrow('待确认消息已变化')
+    expect(recoveredHost.beginPrompt).toHaveBeenCalledTimes(1)
+    unwatch()
+  } finally {
+    await restarted?.close()
+    await registry.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -47,6 +86,25 @@ function hostMock() {
 }
 
 describe('PiRuntimeRegistry', () => {
+  it('keeps native follow-up offsets and ID precedence when selecting a queued steering input', async () => {
+    const host = { ...hostMock(), command: vi.fn().mockResolvedValue({ success: true }) }
+    host.prompt.mockImplementation(() => new Promise(() => {}))
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      await registry.beginPrompt(session, 'first')!.accepted
+      await registry.commandWhileRunning(session.id, { type: 'follow_up', submissionId: 'local-a', message: 'later' })
+      await registry.commandWhileRunning(session.id, { type: 'follow_up', submissionId: 'local-b', message: 'next' })
+      host.emit({ type: 'queue_update', steering: [], followUp: ['native'] })
+      await expect(registry.commandWhileRunning(session.id, { type: 'steer_queued', index: 0, message: 'later' })).rejects.toThrow('Queued message has already changed')
+      await expect(registry.commandWhileRunning(session.id, { type: 'steer_queued', inputId: 'missing', index: 1, message: 'later' })).rejects.toThrow('Queued message has already changed')
+      await registry.commandWhileRunning(session.id, { type: 'steer_queued', inputId: 'local-b', index: 1, message: 'next' })
+      expect(registry.attachments.queue(session.id).map((input) => input.id)).toEqual(['local-a'])
+      await registry.commandWhileRunning(session.id, { type: 'steer_queued', index: 1, message: 'later' })
+      expect(registry.attachments.queue(session.id)).toEqual([])
+      expect(host.command.mock.calls).toEqual([[{ type: 'steer', message: 'next' }], [{ type: 'steer', message: 'later' }]])
+    } finally { await registry.close() }
+  })
+
   it('promotes only the chosen queued message and preserves the queue if steering fails', async () => {
     const host = { ...hostMock(), command: vi.fn().mockResolvedValue({ success: true }) }
     host.prompt.mockImplementation(() => new Promise(() => {}))

@@ -1,3 +1,4 @@
+import { isPiMessage, piToolCallId } from '@pi-nest/contracts/pi-events'
 import type { PiRuntimeEvent, AttachmentRef, PiQueuedInput } from '@pi-nest/contracts'
 
 export type PromptStatus = 'idle' | 'submitted' | 'awaiting_agent' | 'awaiting_input' | 'running' | 'aborting' | 'aborted' | 'complete' | 'error'
@@ -29,9 +30,8 @@ export function isRunActive(status: PromptStatus) {
 export function nativeUserMessage(event: PiRuntimeEvent) {
   if (event.event.type !== 'message' && event.event.type !== 'message_start') return undefined
   const message = event.event.message
-  if (!message || typeof message !== 'object' || Array.isArray(message)) return undefined
-  const candidate = message as Record<string, unknown>
-  if (candidate.role !== 'user') return undefined
+  if (!isPiMessage(message, 'user')) return undefined
+  const candidate = message
   if (typeof candidate.content === 'string') return candidate.content
   if (!Array.isArray(candidate.content)) return undefined
   const text = candidate.content.flatMap((block) => {
@@ -101,8 +101,7 @@ export function runtimeTurnAcceptsEvent(turn: RuntimeTurn, event: PiRuntimeEvent
 }
 
 function toolCallId(event: PiRuntimeEvent) {
-  const id = event.event.toolCallId ?? (event.event.message as { toolCallId?: unknown } | undefined)?.toolCallId
-  return typeof id === 'string' ? id : undefined
+  return piToolCallId(event.event, event.event.message)
 }
 
 export function runtimeEventOwner(turns: RuntimeTurn[], event: PiRuntimeEvent) {

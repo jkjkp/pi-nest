@@ -24,6 +24,10 @@ vi.mock('./workspace-store.js', async (importOriginal) => {
 })
 
 const sessionRuns = {
+  markSessionRead: () => undefined,
+  removeSessionNotification: () => undefined,
+  queuePlanImplementation: (_sessionId: string, dialogId: string) => `plan-implementation:${dialogId}`,
+  respondToExtension: async () => undefined,
   resumeQueued: async () => undefined, dropQueued: async () => undefined, adopt: () => undefined,
   compact: async () => true,
   cancelCompact: async () => undefined,

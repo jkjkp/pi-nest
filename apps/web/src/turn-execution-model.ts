@@ -1,3 +1,4 @@
+import { isPiMessage, piToolCallId } from '@pi-nest/contracts/pi-events'
 import type { PiFileChange } from '@pi-nest/contracts'
 import { projectToolResult, type ToolResult } from './tool-result-model.js'
 import { isRunActive, type PromptStatus } from './session-run-model.js'
@@ -124,8 +125,8 @@ export function projectTurnPresentation(item: TimelineItem, isRunning: boolean):
 export function turnCompletedAt(item: TimelineItem) {
   const terminal = [...item.events].reverse().find((event) => {
     if (['turn_end', 'agent_end', 'agent_settled', 'aborted'].includes(eventType(event))) return true
-    const message = record(event.event.message)
-    return message?.role === 'assistant' && typeof message.stopReason === 'string'
+    const message = event.event.message
+    return isPiMessage(message, 'assistant') && typeof message.stopReason === 'string'
   })
   return terminal?.observedAt
 }
@@ -230,8 +231,8 @@ export function projectTurnFiles(activities: TurnActivity[], cwd?: string, final
       if (stats && 'changeType' in stats && stats.changeType !== 'unchanged') entry.reported = true
       const callId = activity.events.flatMap((event) => {
         const message = record(event.event.message)
-        const id = event.event.toolCallId ?? message?.toolCallId
-        return typeof id === 'string' ? [id] : []
+        const id = piToolCallId(event.event, message)
+        return id !== undefined ? [id] : []
       })[0]
       const duplicate = callId && entry.operations.some((operation) => operation.events.some((event) => event.event.toolCallId === callId || record(event.event.message)?.toolCallId === callId))
       if (!duplicate) entry.operations.push(activity)

@@ -120,6 +120,25 @@ it('blocks thinking changes during generation without clearing the draft', async
   queryClient.clear()
 })
 
+it('shares the settings operation lock with prompt submission and branching', async () => {
+  const { workspace, controller, queryClient } = thinkingProbe('保留草稿')
+  vi.mocked(branchSession).mockClear()
+  let acknowledge!: () => void
+  vi.mocked(controller.setThinkingLevel).mockImplementation(() => new Promise<void>((resolve) => { acknowledge = resolve }))
+  const changing = workspace.changeThinkingLevel('high')
+  await vi.waitFor(() => expect(controller.setThinkingLevel).toHaveBeenCalledTimes(1))
+  workspace.submitPrompt()
+  await expect(workspace.createBranch({ kind: 'clone' })).rejects.toThrow('请等待')
+  expect(controller.start).not.toHaveBeenCalled()
+  expect(branchSession).not.toHaveBeenCalled()
+  expect(useWorkspaceStore.getState().drafts['session-1']).toBe('保留草稿')
+  acknowledge()
+  expect(await changing).toBe(true)
+  workspace.submitPrompt()
+  expect(controller.start).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'session-1', prompt: '保留草稿' }))
+  queryClient.clear()
+})
+
 it('shares history page reads between full previews and unloaded jumps without truncating text', async () => {
   const { workspace, queryClient } = thinkingProbe()
   const text = '用户原始消息'.repeat(40) + '\n完整末行'

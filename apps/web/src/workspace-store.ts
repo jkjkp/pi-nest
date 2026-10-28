@@ -1,5 +1,5 @@
 import { clampSidebarWidth } from './sidebar-width.js'
-import { create } from 'zustand'
+import { create, type StateCreator } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 
 import type { FilePreviewSelection, FileReadingPosition } from './file-preview-state.js'
@@ -20,6 +20,7 @@ export type RuntimeStatisticsState = { data?: PiRuntimeStatistics; error?: strin
 
 type SessionNotification = { pendingRunId?: string; completedRunId?: string; readRunId?: string }
 
+// Keep runtime, queue and notification writes in SessionRunController so recovery shares the live event path.
 type WorkspaceState = {
   filePreviews: Record<string, FilePreviewSelection>
   fileReadingPositions: Record<string, FileReadingPosition>
@@ -83,8 +84,7 @@ type WorkspaceState = {
   updateRun: (sessionId: string, update: Partial<SessionRunSummary>) => void
 }
 
-export const useWorkspaceStore = create<WorkspaceState>()(
-  persist((set) => ({
+export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
   filePreviews: {},
   fileReadingPositions: {},
   openFilePreview: (sessionId, path, line, searchRoot) => set((state) => ({ filePreviews: { ...state.filePreviews, [sessionId]: { path, line, searchRoot, open: true, navigation: (state.filePreviews[sessionId]?.navigation ?? 0) + 1 } } })),
@@ -353,7 +353,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         },
       }
     }),
-    }),
+})
+
+export const useWorkspaceStore = create<WorkspaceState>()(
+  persist(createWorkspaceState,
     {
       name: 'pi-nest-navigation-order',
       partialize: (state) => ({ navigationWidth: state.navigationWidth, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),

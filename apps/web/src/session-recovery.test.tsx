@@ -21,7 +21,10 @@ const history = { session: one, revision: 'fixed', hasEarlier: false, entries: [
 let client: QueryClient
 let root: Root
 let container: HTMLDivElement
-const controller = { openSession: vi.fn(), releaseForeground: vi.fn(), getCommands: vi.fn(async () => []), stop: vi.fn(async () => true) } as unknown as SessionRunController
+const controller = {
+  openSession: vi.fn(), releaseForeground: vi.fn(), getCommands: vi.fn(async () => []), stop: vi.fn(async () => true),
+  removeSessionNotification: vi.fn((sessionId: string) => useWorkspaceStore.getState().removeSessionNotification(sessionId)),
+} as unknown as SessionRunController
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(800)
@@ -97,4 +100,46 @@ it.each([true, false])('changes selection after confirmed deletion (another sess
   expect(container.querySelector('[data-testid="route"]')?.textContent).toBe(hasOther ? '?session=other' : '')
   expect(client.getQueryData<typeof one[]>(['sessions'])).toEqual(hasOther ? [other] : [])
   if (!hasOther) expect(controller.releaseForeground).toHaveBeenCalled()
+})
+
+it.each(['resolve', 'reject'])('ignores an old model request after switching sessions (%s)', async (outcome) => {
+  const other = { id: 'other', cwd: '/fixture', name: 'Next' }
+  client.setQueryData(['sessions'], [one, other])
+  const model = { provider: 'fixture', id: 'other-model' }
+  useWorkspaceStore.setState({ runs: {}, runtimeDetails: {
+    one: { isCompacting: false, isStreaming: false, model: { provider: 'fixture', id: 'one-model' } },
+    other: { isCompacting: false, isStreaming: false, model },
+  } })
+  let resolve!: (models: typeof model[]) => void
+  let reject!: (cause: Error) => void
+  const models = new Promise<typeof model[]>((done, fail) => { resolve = done; reject = fail })
+  const modelController = {
+    ...controller,
+    resumeRuntime: vi.fn(async () => undefined),
+    getRuntimeState: vi.fn(async (id: string) => useWorkspaceStore.getState().runtimeDetails[id]!),
+    getAvailableModels: vi.fn().mockReturnValueOnce(models).mockResolvedValue([model]),
+  } as unknown as SessionRunController
+  let workspace!: ReturnType<typeof useWorkspaceSession>
+  function Probe() {
+    // oxlint-disable-next-line react/globals -- Capture the mounted API across route changes.
+    workspace = useWorkspaceSession(modelController)
+    return <LocationProbe />
+  }
+  await act(() => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/?session=one']}><Probe /></MemoryRouter></QueryClientProvider>))
+  let loading!: ReturnType<typeof workspace.openModels>
+  await act(async () => { loading = workspace.openModels(); await Promise.resolve(); await Promise.resolve() })
+  expect(modelController.getAvailableModels).toHaveBeenCalledWith('one')
+  await act(() => workspace.selectSession('other'))
+  await act(async () => {
+    if (outcome === 'resolve') resolve([{ provider: 'fixture', id: 'stale-model' }])
+    else reject(new Error('旧会话读取失败'))
+    await loading
+  })
+  expect(workspace.selectedSessionId).toBe('other')
+  expect(workspace.models).toEqual([])
+  expect(workspace.modelError).toBeUndefined()
+  expect(workspace.modelLabel).toBe('other-model')
+  await act(async () => { await workspace.openModels() })
+  expect(modelController.getAvailableModels).toHaveBeenLastCalledWith('other')
+  expect(workspace.models).toEqual([model])
 })

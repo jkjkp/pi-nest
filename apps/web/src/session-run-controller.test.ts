@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
 import { createSessionRunController } from './session-run-controller.js'
-import { useWorkspaceStore } from './workspace-store.js'
+import { createStore, type StoreApi } from 'zustand/vanilla'
+import { createWorkspaceState, useWorkspaceStore as globalWorkspaceStore } from './workspace-store.js'
 import { timelineItems } from './timeline-model.js'
 import { projectTurnPresentation, turnElapsed } from './turn-execution-model.js'
 import { RuntimeConnectionError } from './runtime-websocket-client.js'
@@ -35,6 +36,7 @@ function runtimeMock() {
     prompt: vi.fn().mockResolvedValue({ runId: 'run-1' }),
     steer: vi.fn().mockResolvedValue(undefined),
     steerQueued: vi.fn().mockResolvedValue(undefined),
+    extensionUiResponse: vi.fn().mockResolvedValue(undefined),
     emit: (event: PiRuntimeEvent) => { for (const listener of events) listener(event) },
     fail: (error: { code?: string; message: string; sessionId?: string }) => { for (const listener of errors) listener(error) },
     snapshot: (snapshot: any) => { for (const listener of snapshots) listener({ atSequence: 0, extensionUi: { freshness: 'unknown', statuses: {}, widgets: {} }, ...snapshot }) },
@@ -45,19 +47,212 @@ function runtimeMock() {
 
 async function tick() { for (let index = 0; index < 12; index++) await Promise.resolve() }
 
+let workspace: StoreApi<ReturnType<typeof createWorkspaceState>>
+beforeEach(() => { workspace = createStore(createWorkspaceState) })
+
 describe('session run controller', () => {
-  beforeEach(() => useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {}, extensionStatuses: {}, extensionWidgets: {}, drafts: {} }))
   afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+
+  it('isolates live events, buffered deltas, snapshots, replies and restart recovery for the same session ID', async () => {
+    vi.useFakeTimers()
+    const previousGlobal = globalWorkspaceStore.getState()
+    previousGlobal.setDraft('shared', 'global sentinel')
+    const sentinel = globalWorkspaceStore.getState()
+    const changed = vi.fn()
+    const unsubscribe = globalWorkspaceStore.subscribe(changed)
+    try {
+      const other = createStore(createWorkspaceState)
+      const leftRuntime = runtimeMock()
+      const rightRuntime = runtimeMock()
+      const left = createSessionRunController({ state: { getState: workspace.getState }, runtime: leftRuntime as never, invalidateHistory: vi.fn() })
+      const right = createSessionRunController({ state: { getState: other.getState }, runtime: rightRuntime as never, invalidateHistory: vi.fn() })
+      left.start({ sessionId: 'shared', prompt: 'left' })
+      right.start({ sessionId: 'shared', prompt: 'right' })
+      await tick()
+      leftRuntime.emit({ sessionId: 'shared', runId: 'run-1', turnId: 'turn-left', sequence: 1, observedAt: 'now', event: { type: 'agent_start' } })
+      leftRuntime.emit({ sessionId: 'shared', runId: 'run-1', turnId: 'turn-left', sequence: 2, observedAt: 'now', event: { type: 'message_update' } })
+      expect(workspace.getState().runs.shared?.turns[0]?.events).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(32)
+      expect(workspace.getState().runs.shared?.turns[0]?.events).toHaveLength(2)
+      expect(other.getState().runs.shared).toMatchObject({ status: 'awaiting_agent', turns: [{ prompt: 'right', events: [] }] })
+
+      leftRuntime.emit({ sessionId: 'shared', runId: 'run-1', sequence: 3, observedAt: 'now', event: { type: 'extension_ui_request', method: 'set_editor_text', text: 'left draft' } })
+      leftRuntime.emit({ sessionId: 'shared', runId: 'run-1', sequence: 4, observedAt: 'now', event: { type: 'extension_ui_request', method: 'setStatus', statusKey: 'plan', statusText: 'left status' } })
+      expect(workspace.getState().drafts.shared).toBe('left draft')
+      expect(workspace.getState().extensionStatuses.shared).toEqual({ plan: 'left status' })
+      expect(other.getState().drafts).toEqual({})
+      expect(other.getState().extensionStatuses).toEqual({})
+      const inputId = left.queuePlanImplementation('shared', 'plan', 'implement left')
+      leftRuntime.extensionUiResponse.mockRejectedValueOnce(new Error('left reply failed'))
+      await expect(left.respondToExtension('shared', 'plan', { value: 'yes' }, inputId)).rejects.toThrow('left reply failed')
+      expect(workspace.getState().runs.shared?.pendingInputs).toEqual([])
+      expect(rightRuntime.extensionUiResponse).not.toHaveBeenCalled()
+
+      rightRuntime.snapshot({ sessionId: 'shared', runtime: { lifecycle: 'active', revision: 2 }, activeTurn: { runId: 'run-1', prompt: 'right', startedAt: 'now' }, extensionUi: { statuses: { plan: 'right status' }, widgets: {} } })
+      expect(other.getState().extensionStatuses.shared).toEqual({ plan: 'right status' })
+      expect(workspace.getState().extensionStatuses.shared).toEqual({ plan: 'left status' })
+      leftRuntime.emit({ sessionId: 'shared', runId: 'run-1', sequence: 5, observedAt: 'now', event: { type: 'agent_settled' } })
+      expect(workspace.getState().runs.shared?.status).toBe('complete')
+      expect(other.getState().runs.shared?.status).toBe('awaiting_agent')
+      rightRuntime.resync({ sessionId: 'shared' })
+      expect(other.getState().runs.shared).toBeUndefined()
+      expect(workspace.getState().runs.shared?.status).toBe('complete')
+      rightRuntime.fail({ code: 'RUNTIME_RESTARTED', sessionId: 'shared', message: 'restart' })
+      expect(other.getState().runs.shared?.status).toBe('error')
+      expect(workspace.getState().runs.shared?.status).toBe('complete')
+      left.markSessionRead('shared', 'run-1')
+      expect(workspace.getState().sessionNotifications.shared?.readRunId).toBe('run-1')
+      expect(other.getState().sessionNotifications.shared?.readRunId).toBeUndefined()
+      await tick()
+      expect(globalWorkspaceStore.getState()).toBe(sentinel)
+      expect(changed).not.toHaveBeenCalled()
+    } finally {
+      unsubscribe()
+      globalWorkspaceStore.setState(previousGlobal, true)
+    }
+  })
+
+  it('reads the latest injected state after await and isolates late statistics after resync', async () => {
+    const runtime = runtimeMock()
+    const details = { isCompacting: false, isStreaming: false, model: { provider: 'test', id: 'late-model' } }
+    let resolveDetails!: (value: typeof details) => void
+    runtime.getRuntimeState.mockReturnValueOnce(new Promise((resolve) => { resolveDetails = resolve }))
+    let resolveStatistics!: (value: Awaited<ReturnType<typeof runtime.getSessionStatistics>>) => void
+    runtime.getSessionStatistics.mockReturnValueOnce(new Promise((resolve) => { resolveStatistics = resolve }))
+    const controller = createSessionRunController({ state: { getState: workspace.getState }, runtime: runtime as never, invalidateHistory: vi.fn() })
+    const reading = controller.getRuntimeState('shared')
+    workspace.getState().setRun('shared', { status: 'complete', turns: [], pendingInputs: [], systemEvents: [] })
+    resolveDetails(details)
+    await reading
+    expect(workspace.getState().runs.shared?.model).toBe('test/late-model')
+
+    const other = createStore(createWorkspaceState)
+    const otherRuntime = runtimeMock()
+    const otherController = createSessionRunController({ state: { getState: other.getState }, runtime: otherRuntime as never, invalidateHistory: vi.fn() })
+    const statistics = controller.getSessionStatistics('shared')
+    await otherController.getSessionStatistics('shared')
+    runtime.resync({ sessionId: 'shared' })
+    resolveStatistics({ tokens: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, total: 1 }, cost: 999 })
+    await statistics
+    expect(workspace.getState().runtimeStatistics.shared).toBeUndefined()
+    expect(other.getState().runtimeStatistics.shared?.data?.cost).toBe(0)
+    expect(otherRuntime.getSessionStatistics).toHaveBeenCalledTimes(1)
+  })
+
+  it('defaults to the production store when no state access is injected', () => {
+    const previousGlobal = globalWorkspaceStore.getState()
+    try {
+      const runtime = runtimeMock()
+      const controller = createSessionRunController({ runtime: runtime as never, invalidateHistory: vi.fn() })
+      controller.queuePlanImplementation('default-session', 'plan', 'default input')
+      expect(globalWorkspaceStore.getState().runs['default-session']?.pendingInputs).toMatchObject([{ message: 'default input' }])
+      expect(workspace.getState().runs).toEqual({})
+    } finally { globalWorkspaceStore.setState(previousGlobal, true) }
+  })
+
+  it.each(['accepted', 'rejected', 'not-pending'])('owns plan input delivery and rolls back only its failed response: %s', async (outcome) => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
+    await controller.followUp('session-a', 'keep this input')
+    const inputId = controller.queuePlanImplementation('session-a', 'plan', 'Implement the plan.')
+    expect(workspace.getState().runs['session-a']?.pendingInputs).toEqual([
+      expect.objectContaining({ message: 'keep this input', mode: 'follow_up' }),
+      expect.objectContaining({ id: 'plan-implementation:plan', message: 'Implement the plan.', mode: 'plan_implementation' }),
+    ])
+    const error = Object.assign(new Error('Response failed'), { code: outcome === 'not-pending' ? 'EXTENSION_UI_NOT_PENDING' : 'COMMAND_FAILED' })
+    if (outcome !== 'accepted') runtime.extensionUiResponse.mockRejectedValueOnce(error)
+    const response = controller.respondToExtension('session-a', 'plan', { value: 'Implement here' }, inputId)
+    if (outcome === 'accepted') await response
+    else await expect(response).rejects.toBe(error)
+    expect(runtime.extensionUiResponse).toHaveBeenCalledExactlyOnceWith('session-a', 'plan', { value: 'Implement here' })
+    expect(workspace.getState().runs['session-a']?.pendingInputs?.map((input) => input.message)).toEqual(outcome === 'accepted' ? ['keep this input', 'Implement the plan.'] : ['keep this input'])
+  })
+
+  it('forwards ordinary extension replies without creating a plan input', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
+    await controller.respondToExtension('session-a', 'editor', { value: 'raw answer' })
+    await controller.respondToExtension('session-a', 'confirm', { cancelled: true })
+    expect(runtime.extensionUiResponse.mock.calls).toEqual([
+      ['session-a', 'editor', { value: 'raw answer' }],
+      ['session-a', 'confirm', { cancelled: true }],
+    ])
+    expect(workspace.getState().runs['session-a']).toBeUndefined()
+  })
+
+  it('owns read and removal notifications without clearing another session or changing runs', () => {
+    const runtime = runtimeMock()
+    const invalidateHistory = vi.fn()
+    const controller = createSessionRunController({ state: workspace, invalidateHistory, runtime: runtime as never })
+    const store = workspace.getState()
+    for (const id of ['session-a', 'session-b']) {
+      store.trackPendingRun(id, 'new')
+      store.finishNotification(id, 'new', true, true)
+    }
+    const runs = workspace.getState().runs
+    controller.markSessionRead('session-a', 'old')
+    expect(workspace.getState().sessionNotifications['session-a']?.readRunId).toBeUndefined()
+    controller.markSessionRead('session-a', 'new')
+    expect(workspace.getState().sessionNotifications['session-a']?.readRunId).toBe('new')
+    controller.removeSessionNotification('session-a')
+    expect(workspace.getState().sessionNotifications['session-a']).toBeUndefined()
+    expect(workspace.getState().sessionNotifications['session-b']?.completedRunId).toBe('new')
+    expect(workspace.getState().runs).toBe(runs)
+    expect(invalidateHistory).not.toHaveBeenCalled()
+  })
+
+  it('preserves queue, notification and history results across completion, replay and resync', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-28T00:00:00Z'))
+    const runtime = runtimeMock()
+    const invalidateHistory = vi.fn()
+    const controller = createSessionRunController({ state: workspace, invalidateHistory, runtime: runtime as never })
+    const checkpoints: unknown[] = []
+    function record() {
+      const state = workspace.getState()
+      checkpoints.push({
+        status: state.runs['session-a']?.status,
+        queue: state.runs['session-a']?.pendingInputs?.map(({ message, mode, submitting }) => ({ message, mode, submitting })),
+        notification: state.sessionNotifications['session-a'],
+        refreshes: invalidateHistory.mock.calls.map(([id]) => id),
+      })
+    }
+    controller.openSession('session-a')
+    controller.start({ sessionId: 'session-a', prompt: 'first' })
+    await tick()
+    await controller.followUp('session-a', 'next')
+    record()
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: '2026-10-28T00:00:00Z', event: { type: 'queue_update', steering: [], followUp: ['next'] } })
+    controller.openSession('session-b')
+    await tick()
+    runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 2, observedAt: '2026-10-28T00:00:01Z', event: { type: 'agent_settled' } })
+    record()
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2 }, completedRun: { runId: 'run-1', stopReason: 'stop' }, inputQueue: { steering: [], followUp: ['next'] } })
+    record()
+    runtime.resync({ sessionId: 'session-a' })
+    record()
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'active', revision: 3 }, activeTurn: { runId: 'run-2', prompt: 'next', startedAt: '2026-10-28T00:00:02Z' }, inputQueue: { steering: [], followUp: [] } })
+    record()
+    const queue = [{ message: 'next', mode: 'follow_up', submitting: false }]
+    const completed = { pendingRunId: undefined, completedRunId: 'run-1', readRunId: undefined }
+    expect(checkpoints).toEqual([
+      { status: 'awaiting_agent', queue, notification: { pendingRunId: 'run-1' }, refreshes: [] },
+      { status: 'complete', queue, notification: completed, refreshes: ['session-a'] },
+      { status: 'complete', queue, notification: completed, refreshes: ['session-a'] },
+      { status: undefined, queue: undefined, notification: completed, refreshes: ['session-a', 'session-a'] },
+      { status: 'running', queue: [], notification: { ...completed, pendingRunId: 'run-2' }, refreshes: ['session-a', 'session-a'] },
+    ])
+  })
 
   it('restores a snapshot run without assigning replayed message identities to completed runs', () => {
     const runtime = runtimeMock()
-    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     const oldEvent = { sessionId: 'session-a', runId: 'old', turnId: 'old-native', sequence: 1, observedAt: '2026-10-28T00:00:00Z', event: { type: 'message_start', message: { role: 'user', id: 'reused', content: 'old' } } }
     const old = { id: 'old', prompt: 'old', runId: 'old', startedAt: oldEvent.observedAt, completedAt: oldEvent.observedAt, events: [oldEvent] }
-    useWorkspaceStore.getState().setRun('session-a', { status: 'complete', systemEvents: [], turns: [old] })
+    workspace.getState().setRun('session-a', { status: 'complete', systemEvents: [], turns: [old] })
     runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'active', revision: 1 }, activeTurn: { runId: 'new', prompt: 'new', startedAt: '2026-10-28T00:01:00Z' } })
     for (let sequence = 2; sequence <= 3; sequence++) runtime.emit({ ...oldEvent, runId: 'new', turnId: 'new-native', sequence, event: { type: 'message_start', message: { role: 'user', id: 'reused', content: 'new' } } })
-    const turns = useWorkspaceStore.getState().runs['session-a']!.turns
+    const turns = workspace.getState().runs['session-a']!.turns
     expect(turns).toHaveLength(2)
     expect(turns[0]).toBe(old)
     expect(turns[1]).toMatchObject({ runId: 'new', prompt: 'new' })
@@ -66,7 +261,7 @@ describe('session run controller', () => {
 
   it('keeps an extension implementation separate from its completed planning turn without a status callback', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: '/plan research', sessionId: 'session-a' })
     await tick()
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, turnId: 'planning', observedAt: '2026-10-14T03:13:36.000Z', event: { type: 'tool_execution_end', toolCallId: 'complete', result: { details: { source: 'plan_mode_complete', version: 1, plan: 'Research then report' } } } })
@@ -75,7 +270,7 @@ describe('session run controller', () => {
     runtime.emit({ sessionId: 'session-a', runId: 'implementation', sequence: 4, observedAt: '2026-10-14T03:15:29.000Z', event: { type: 'message_start', message: { role: 'user', content: 'Implement the plan.' } } })
     runtime.emit({ sessionId: 'session-a', runId: 'implementation', sequence: 5, turnId: 'implementation', observedAt: '2026-10-14T03:16:52.000Z', event: { type: 'message_end', message: { role: 'assistant', content: 'Final report' } } })
     runtime.emit({ sessionId: 'session-a', runId: 'implementation', sequence: 6, observedAt: '2026-10-14T03:16:52.000Z', event: { type: 'agent_settled' } })
-    const items = timelineItems(undefined, useWorkspaceStore.getState().runs['session-a']!.turns, [])
+    const items = timelineItems(undefined, workspace.getState().runs['session-a']!.turns, [])
     expect(items).toHaveLength(2)
     expect(items[0]?.plan?.text).toBe('Research then report')
     expect(items[0]?.parts.some((part) => part.kind === 'assistant_text' && part.text === 'Final report')).toBe(false)
@@ -88,7 +283,7 @@ describe('session run controller', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-10-14T00:00:00.000Z'))
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: '/plan research', sessionId: 'session-a' })
     await tick()
     let sequence = 0
@@ -96,46 +291,46 @@ describe('session run controller', () => {
     emit({ type: 'agent_start' }, 1)
     emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'Planning research' } }, 2)
     vi.advanceTimersByTime(100)
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('running')
+    expect(workspace.getState().runs['session-a']?.status).toBe('running')
     emit({ type: 'extension_ui_request', id: 'select', method: 'select', options: ['Other (free-form)'] }, 3)
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('awaiting_input')
+    expect(workspace.getState().runs['session-a']?.status).toBe('awaiting_input')
     emit({ type: 'extension_ui_resolved', dialogId: 'select' }, 4)
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('running')
+    expect(workspace.getState().runs['session-a']?.status).toBe('running')
     emit({ type: 'extension_ui_request', id: 'editor', method: 'editor' }, 4)
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('awaiting_input')
+    expect(workspace.getState().runs['session-a']?.status).toBe('awaiting_input')
     emit({ type: 'extension_ui_resolved', dialogId: 'editor' }, 20)
     emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'Continuing research' } }, 21)
     vi.advanceTimersByTime(100)
-    const run = useWorkspaceStore.getState().runs['session-a']!
+    const run = workspace.getState().runs['session-a']!
     expect(run.status).toBe('running')
     expect(run.turns).toHaveLength(1)
     const item = timelineItems(undefined, run.turns, [])[0]!
     expect(projectTurnPresentation(item, true).activities).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'thinking', text: expect.stringContaining('Continuing research') })]))
     expect(turnElapsed(item, true, Date.parse('2026-10-14T00:00:21.000Z'))).toBe(20000)
     emit({ type: 'agent_settled' }, 25)
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+    expect(workspace.getState().runs['session-a']?.status).toBe('complete')
   })
 
   it('buffers a burst of deltas without losing order and flushes before tool execution and settlement', async () => {
     vi.useFakeTimers()
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ sessionId: 'session-a', prompt: 'stream' })
     await tick()
     for (let sequence = 1; sequence <= 100; sequence++) runtime.emit({ sessionId: 'session-a', runId: 'run-1', turnId: 'turn-1', sequence, observedAt: 'now', event: { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: `${sequence}` } } })
-    expect(useWorkspaceStore.getState().runs['session-a']?.turns[0]?.events).toHaveLength(0)
+    expect(workspace.getState().runs['session-a']?.turns[0]?.events).toHaveLength(0)
     await vi.advanceTimersByTimeAsync(32)
-    expect(useWorkspaceStore.getState().runs['session-a']?.turns[0]?.events.map((event) => event.sequence)).toEqual(Array.from({ length: 100 }, (_, index) => index + 1))
+    expect(workspace.getState().runs['session-a']?.turns[0]?.events.map((event) => event.sequence)).toEqual(Array.from({ length: 100 }, (_, index) => index + 1))
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', turnId: 'turn-1', sequence: 101, observedAt: 'now', event: { type: 'message_update' } })
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', turnId: 'turn-1', sequence: 102, observedAt: 'now', event: { type: 'tool_execution_start', toolName: 'read', toolCallId: 'tool-1' } })
-    expect(useWorkspaceStore.getState().runs['session-a']?.turns[0]?.events).toHaveLength(102)
+    expect(workspace.getState().runs['session-a']?.turns[0]?.events).toHaveLength(102)
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 103, observedAt: 'now', event: { type: 'agent_settled' } })
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+    expect(workspace.getState().runs['session-a']?.status).toBe('complete')
   })
 
   it('keeps the background watch through idle and records completion once', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.openSession('session-a')
     controller.start({ sessionId: 'session-a', prompt: 'hello' })
     await tick()
@@ -144,99 +339,99 @@ describe('session run controller', () => {
     runtime.status({ sessionId: 'session-a', lifecycle: 'idle', revision: 2 })
     expect(runtime.unwatch).not.toHaveBeenCalledWith('session-a')
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'agent_settled' } })
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']).toMatchObject({ completedRunId: 'run-1', readRunId: undefined, pendingRunId: undefined })
+    expect(workspace.getState().runs['session-a']?.status).toBe('complete')
+    expect(workspace.getState().sessionNotifications['session-a']).toMatchObject({ completedRunId: 'run-1', readRunId: undefined, pendingRunId: undefined })
     expect(runtime.unwatch).toHaveBeenCalledWith('session-a')
-    useWorkspaceStore.getState().markSessionRead('session-a', 'run-1')
+    workspace.getState().markSessionRead('session-a', 'run-1')
     runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2 }, completedRun: { runId: 'run-1', stopReason: 'stop' } })
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'agent_start' } })
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.readRunId).toBe('run-1')
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+    expect(workspace.getState().sessionNotifications['session-a']?.readRunId).toBe('run-1')
+    expect(workspace.getState().runs['session-a']?.status).toBe('complete')
   })
 
   it('recovers a known pending completion from an idle snapshot without flagging old history', () => {
     const runtime = runtimeMock()
     const snapshot = { sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2 }, completedRun: { runId: 'run-1', stopReason: 'stop' } }
-    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     runtime.snapshot(snapshot)
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']).toBeUndefined()
-    useWorkspaceStore.getState().trackPendingRun('session-a', 'run-1')
+    expect(workspace.getState().sessionNotifications['session-a']).toBeUndefined()
+    workspace.getState().trackPendingRun('session-a', 'run-1')
     runtime.snapshot(snapshot)
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.completedRunId).toBe('run-1')
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+    expect(workspace.getState().sessionNotifications['session-a']?.completedRunId).toBe('run-1')
+    expect(workspace.getState().runs['session-a']?.status).toBe('complete')
   })
 
   it.each(['error', 'aborted'])('does not create an unread completion for %s', async (stopReason) => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ sessionId: 'session-a', prompt: 'hello' })
     await tick()
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'message_end', message: { role: 'assistant', stopReason } } })
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 2, observedAt: 'now', event: { type: 'agent_settled' } })
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe(stopReason)
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.completedRunId).toBeUndefined()
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.pendingRunId).toBeUndefined()
+    expect(workspace.getState().runs['session-a']?.status).toBe(stopReason)
+    expect(workspace.getState().sessionNotifications['session-a']?.completedRunId).toBeUndefined()
+    expect(workspace.getState().sessionNotifications['session-a']?.pendingRunId).toBeUndefined()
   })
 
   it('marks an upstream abort without an assistant message and suppresses completion notification', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ sessionId: 'session-a', prompt: 'hello' })
     await tick()
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'agent_settled', aborted: true } })
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('aborted')
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.completedRunId).toBeUndefined()
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.pendingRunId).toBeUndefined()
+    expect(workspace.getState().runs['session-a']?.status).toBe('aborted')
+    expect(workspace.getState().sessionNotifications['session-a']?.completedRunId).toBeUndefined()
+    expect(workspace.getState().sessionNotifications['session-a']?.pendingRunId).toBeUndefined()
   })
 
   it('finishes a handled extension command from idle status without an agent_settled event', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ sessionId: 'session-a', prompt: '/extension-command' })
     await tick()
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'extension_ui_request', id: 'dialog-1', method: 'confirm' } })
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('awaiting_input')
+    expect(workspace.getState().runs['session-a']?.status).toBe('awaiting_input')
     runtime.status({ sessionId: 'session-a', lifecycle: 'idle', revision: 2, completedRun: { runId: 'old-run', stopReason: 'stop' } } as never)
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('awaiting_input')
+    expect(workspace.getState().runs['session-a']?.status).toBe('awaiting_input')
     runtime.status({ sessionId: 'session-a', lifecycle: 'idle', revision: 3, completedRun: { runId: 'run-1', stopReason: 'stop' } } as never)
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+    expect(workspace.getState().runs['session-a']?.status).toBe('complete')
     expect(controller.start({ sessionId: 'session-a', prompt: 'next' })).toBe(true)
   })
 
   it.each(['visible', 'hidden'])('marks foreground completion according to document visibility: %s', async (visibilityState) => {
     vi.stubGlobal('document', { visibilityState })
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.openSession('session-a')
     controller.start({ sessionId: 'session-a', prompt: 'hello' })
     await tick()
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'agent_settled' } })
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.readRunId).toBe(visibilityState === 'visible' ? 'run-1' : undefined)
+    expect(workspace.getState().sessionNotifications['session-a']?.readRunId).toBe(visibilityState === 'visible' ? 'run-1' : undefined)
   })
 
   it('does not let an old read acknowledgement clear a newer reply', () => {
-    const store = useWorkspaceStore.getState()
+    const store = workspace.getState()
     store.trackPendingRun('session-a', 'one')
     store.finishNotification('session-a', 'one', true, true)
     store.trackPendingRun('session-a', 'two')
     store.finishNotification('session-a', 'two', true, true)
     store.markSessionRead('session-a', 'one')
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.readRunId).toBeUndefined()
+    expect(workspace.getState().sessionNotifications['session-a']?.readRunId).toBeUndefined()
     store.markSessionRead('session-a', 'two')
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']?.readRunId).toBe('two')
+    expect(workspace.getState().sessionNotifications['session-a']?.readRunId).toBe('two')
     store.removeSessionNotification('session-a')
-    expect(useWorkspaceStore.getState().sessionNotifications['session-a']).toBeUndefined()
+    expect(workspace.getState().sessionNotifications['session-a']).toBeUndefined()
   })
 
   it('restores the active model from snapshots and ignores older revisions without RPC reads', () => {
     const runtime = runtimeMock()
-    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'active', revision: 3, model: { provider: 'test', id: 'selected' } } })
-    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.model?.id).toBe('selected')
+    expect(workspace.getState().runtimeDetails['session-a']?.model?.id).toBe('selected')
     runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2, model: { provider: 'test', id: 'old' } } })
-    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.model?.id).toBe('selected')
+    expect(workspace.getState().runtimeDetails['session-a']?.model?.id).toBe('selected')
     runtime.status({ sessionId: 'session-b', lifecycle: 'idle', revision: 1, model: { provider: 'other', id: 'default' } } as never)
-    expect(useWorkspaceStore.getState().runtimeDetails['session-b']?.model?.id).toBe('default')
+    expect(workspace.getState().runtimeDetails['session-b']?.model?.id).toBe('default')
     expect(runtime.getRuntimeState).not.toHaveBeenCalled()
   })
 
@@ -244,7 +439,7 @@ describe('session run controller', () => {
     const runtime = runtimeMock()
     let release!: () => void
     runtime.resumeRuntime.mockImplementation(() => new Promise<void>((resolve) => { release = resolve }))
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     const loading = controller.resumeRuntime('session-a')
     controller.start({ prompt: 'hello', sessionId: 'session-a' })
     await tick()
@@ -258,17 +453,17 @@ describe('session run controller', () => {
 
   it('syncs thinking from snapshots and live events while filtering replayed updates', () => {
     const runtime = runtimeMock()
-    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'active', revision: 3, thinkingLevel: 'high' } })
-    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('high')
+    expect(workspace.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('high')
     runtime.shouldApplyExtensionUi.mockReturnValue(false)
     runtime.emit({ event: { type: 'thinking_level_changed', level: 'low' }, observedAt: 'now', sequence: 1, sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('high')
+    expect(workspace.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('high')
     runtime.shouldApplyExtensionUi.mockReturnValue(true)
     runtime.emit({ event: { type: 'thinking_level_changed', level: 'medium' }, observedAt: 'now', sequence: 2, sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('medium')
+    expect(workspace.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('medium')
     runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2, thinkingLevel: 'off' } })
-    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('medium')
+    expect(workspace.getState().runtimeDetails['session-a']?.thinkingLevel).toBe('medium')
   })
 
   it('watches, resumes, then prompts and completes from native Pi events', async () => {
@@ -276,7 +471,7 @@ describe('session run controller', () => {
     vi.setSystemTime(new Date('2026-09-22T00:00:00.000Z'))
     const runtime = runtimeMock()
     const invalidateHistory = vi.fn()
-    const controller = createSessionRunController({ invalidateHistory, runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory, runtime: runtime as never })
 
     expect(controller.start({ prompt: 'hello', sessionId: 'session-a' })).toBe(true)
     expect(controller.start({ prompt: 'again', sessionId: 'session-a' })).toBe(false)
@@ -284,15 +479,15 @@ describe('session run controller', () => {
     expect(runtime.watch).toHaveBeenCalledWith('session-a', 'foreground')
     expect(runtime.resumeRuntime).toHaveBeenCalledWith('session-a')
     expect(runtime.prompt).toHaveBeenCalledWith('session-a', 'hello')
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('awaiting_agent')
+    expect(workspace.getState().runs['session-a']?.status).toBe('awaiting_agent')
 
     runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Hi' } }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
-    await vi.waitFor(() => expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('running'))
+    await vi.waitFor(() => expect(workspace.getState().runs['session-a']?.status).toBe('running'))
     runtime.emit({ event: { type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a', turnId: 'turn-1' })
     runtime.emit({ event: { type: 'turn_end' }, observedAt: 'now', runId: 'run-1', sequence: 3, sessionId: 'session-a', turnId: 'turn-1' })
     vi.setSystemTime(new Date('2026-09-22T00:00:26.000Z'))
     runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 4, sessionId: 'session-a' })
-    const completed = useWorkspaceStore.getState().runs['session-a']
+    const completed = workspace.getState().runs['session-a']
     expect(completed).toMatchObject({ status: 'complete', stopReason: 'stop' })
     expect(completed?.turns[0]).toMatchObject({ completedAt: '2026-09-22T00:00:26.000Z', id: expect.stringMatching(/^pending:session-a:/), prompt: 'hello', startedAt: '2026-09-22T00:00:00.000Z' })
     expect(completed?.turns[0]?.events.map((event) => event.event.type)).toEqual(['message_update', 'message_end', 'turn_end'])
@@ -302,37 +497,37 @@ describe('session run controller', () => {
 
   it('retains a completed response when another prompt starts before history catches up', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: 'first', sessionId: 'session-a' })
     await tick()
     runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'first answer' } }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
     runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a' })
-    const first = useWorkspaceStore.getState().runs['session-a']!.turns[0]
+    const first = workspace.getState().runs['session-a']!.turns[0]
     expect(controller.start({ prompt: 'second', sessionId: 'session-a' })).toBe(true)
-    expect(useWorkspaceStore.getState().runs['session-a']!.turns[0]).toBe(first)
-    expect(useWorkspaceStore.getState().runs['session-a']!.turns.at(-1)?.prompt).toBe('second')
+    expect(workspace.getState().runs['session-a']!.turns[0]).toBe(first)
+    expect(workspace.getState().runs['session-a']!.turns.at(-1)?.prompt).toBe('second')
     await tick()
   })
 
   it('does not let a delayed settlement from another prompt complete this run', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
 
     expect(controller.start({ prompt: 'implement the plan', sessionId: 'session-a' })).toBe(true)
     await tick()
     runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'previous-run', sequence: 1, sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('awaiting_agent')
+    expect(workspace.getState().runs['session-a']?.status).toBe('awaiting_agent')
 
     runtime.emit({ event: { type: 'turn_start' }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a', turnId: 'turn-2' })
     runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 3, sessionId: 'session-a', turnId: 'turn-2' })
-    expect(useWorkspaceStore.getState().runs['session-a']?.status).toBe('complete')
+    expect(workspace.getState().runs['session-a']?.status).toBe('complete')
   })
 
   it('keeps an acknowledged prompt in a visible waiting state while Pi is streaming without events', async () => {
     vi.useFakeTimers()
     const runtime = runtimeMock()
     runtime.getRuntimeState.mockResolvedValue({ isCompacting: false, isStreaming: true })
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
 
     controller.start({ prompt: 'Implement the plan.', sessionId: 'session-a' })
     await tick()
@@ -340,26 +535,26 @@ describe('session run controller', () => {
     await tick()
 
     expect(runtime.getRuntimeState).toHaveBeenCalledWith('session-a')
-    expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'awaiting_agent', waitingMessage: 'Pi 正在处理，等待首个执行事件…' })
+    expect(workspace.getState().runs['session-a']).toMatchObject({ status: 'awaiting_agent', waitingMessage: 'Pi 正在处理，等待首个执行事件…' })
   })
 
   it('shows an acknowledged running input immediately and removes it once Pi records the user message', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: 'first', sessionId: 'session-a' })
     await tick()
 
     await controller.followUp('session-a', 'find the latest AI news')
     expect(runtime.followUp).toHaveBeenCalledWith('session-a', 'find the latest AI news')
-    expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toMatchObject([{ message: 'find the latest AI news', mode: 'follow_up' }])
+    expect(workspace.getState().runs['session-a']?.pendingInputs).toMatchObject([{ message: 'find the latest AI news', mode: 'follow_up' }])
 
     runtime.emit({ event: { message: { content: 'find the latest AI news', role: 'user' }, type: 'message' }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
-    expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toEqual([])
+    expect(workspace.getState().runs['session-a']?.pendingInputs).toEqual([])
   })
 
   it('does not restore a consumed input when its acknowledgement arrives late', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: 'first', sessionId: 'session-a' })
     await tick()
     let acknowledge!: () => void
@@ -369,22 +564,22 @@ describe('session run controller', () => {
     runtime.emit({ event: { type: 'queue_update', steering: [], followUp: [] }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a' })
     acknowledge()
     await submission
-    expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toEqual([])
+    expect(workspace.getState().runs['session-a']?.pendingInputs).toEqual([])
   })
 
   it('shows steering immediately, merges its native echo and keeps old tool results in place', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: 'original', sessionId: 'session-a' })
     await tick()
     const emit = (sequence: number, event: Record<string, unknown>) => runtime.emit({ event, sequence, sessionId: 'session-a', runId: 'run-1', turnId: 'native-run', observedAt: '2026-10-14T00:00:10.000Z' })
     emit(1, { type: 'message_start', message: { role: 'user', content: 'original', timestamp: 1 } })
     emit(2, { type: 'tool_execution_start', toolCallId: 'old-tool', toolName: 'read' })
-    const executionStart = useWorkspaceStore.getState().runs['session-a']!.executionStartedAt
+    const executionStart = workspace.getState().runs['session-a']!.executionStartedAt
     let acknowledge!: () => void
     runtime.steer.mockImplementationOnce(() => new Promise<void>((resolve) => { acknowledge = resolve }))
     const submission = controller.steer('session-a', 'new direction')
-    let run = useWorkspaceStore.getState().runs['session-a']!
+    let run = workspace.getState().runs['session-a']!
     const id = run.turns[1]!.id
     expect(run.turns[1]).toMatchObject({ prompt: 'new direction', steering: { status: 'sending' }, events: [] })
     emit(3, { type: 'message_start', message: { role: 'user', content: 'new direction', timestamp: 2 } })
@@ -393,7 +588,7 @@ describe('session run controller', () => {
     emit(6, { type: 'message_end', message: { role: 'assistant', content: 'Changing direction', timestamp: 3 } })
     acknowledge()
     await submission
-    run = useWorkspaceStore.getState().runs['session-a']!
+    run = workspace.getState().runs['session-a']!
     expect(run.turns).toHaveLength(2)
     expect(run.turns[1]).toMatchObject({ id, steering: { status: 'applied' }, executionStartedAt: executionStart })
     expect(run.turns[0]!.events.some((event) => event.event.type === 'tool_execution_end')).toBe(true)
@@ -408,131 +603,131 @@ describe('session run controller', () => {
 
   it('keeps identical steering submissions separate and retries definite failures in the same bubble', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: 'original', sessionId: 'session-a' })
     await tick()
     await controller.steer('session-a', 'same')
     await controller.steer('session-a', 'same')
     for (const sequence of [1, 2]) runtime.emit({ event: { type: 'message_start', message: { role: 'user', content: 'same', timestamp: sequence } }, sequence, sessionId: 'session-a', runId: 'run-1', observedAt: 'now' })
-    expect(useWorkspaceStore.getState().runs['session-a']!.turns.slice(1).map((turn) => turn.steering?.status)).toEqual(['applied', 'applied'])
+    expect(workspace.getState().runs['session-a']!.turns.slice(1).map((turn) => turn.steering?.status)).toEqual(['applied', 'applied'])
     runtime.steer.mockRejectedValueOnce(new Error('Rejected'))
     await expect(controller.steer('session-a', 'retry me')).rejects.toThrow('Rejected')
-    const failed = useWorkspaceStore.getState().runs['session-a']!.turns.at(-1)!
+    const failed = workspace.getState().runs['session-a']!.turns.at(-1)!
     expect(failed.steering).toMatchObject({ status: 'failed', error: 'Rejected' })
     await controller.retrySteering('session-a', failed.id)
-    expect(useWorkspaceStore.getState().runs['session-a']!.turns).toHaveLength(4)
-    expect(useWorkspaceStore.getState().runs['session-a']!.turns.at(-1)).toMatchObject({ id: failed.id, steering: { status: 'accepted' } })
+    expect(workspace.getState().runs['session-a']!.turns).toHaveLength(4)
+    expect(workspace.getState().runs['session-a']!.turns.at(-1)).toMatchObject({ id: failed.id, steering: { status: 'accepted' } })
     runtime.steer.mockRejectedValueOnce(new RuntimeConnectionError('Disconnected'))
     await expect(controller.steer('session-a', 'uncertain')).rejects.toThrow('Disconnected')
-    const unknown = useWorkspaceStore.getState().runs['session-a']!.turns.at(-1)!
+    const unknown = workspace.getState().runs['session-a']!.turns.at(-1)!
     expect(unknown.steering?.status).toBe('unknown')
     const calls = runtime.steer.mock.calls.length
     await controller.retrySteering('session-a', unknown.id)
     expect(runtime.steer).toHaveBeenCalledTimes(calls)
     runtime.resync({ sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().runs['session-a']!.turns.find((turn) => turn.id === unknown.id)?.steering?.status).toBe('unknown')
+    expect(workspace.getState().runs['session-a']!.turns.find((turn) => turn.id === unknown.id)?.steering?.status).toBe('unknown')
   })
 
   it('converts the selected queue entry without adding another copy', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: 'first', sessionId: 'session-a' })
     await tick()
     runtime.emit({ event: { type: 'queue_update', steering: [], followUp: ['later', 'next'] }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a' })
-    const chosen = useWorkspaceStore.getState().runs['session-a']!.pendingInputs![1]!
+    const chosen = workspace.getState().runs['session-a']!.pendingInputs![1]!
     await controller.steerQueued('session-a', chosen.id)
     expect(runtime.steerQueued).toHaveBeenCalledWith('session-a', 'next', 1)
     expect(runtime.steer).not.toHaveBeenCalled()
     runtime.emit({ event: { type: 'queue_update', steering: ['next'], followUp: ['later'] }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().runs['session-a']!.pendingInputs!.map((input) => input.message)).toEqual(['next', 'later'])
+    expect(workspace.getState().runs['session-a']!.pendingInputs!.map((input) => input.message)).toEqual(['next', 'later'])
     await expect(controller.steerQueued('session-a', chosen.id)).rejects.toThrow('排队消息已发生变化')
   })
 
   it('uses authoritative queues for repeated text, aborted runs and reconnects', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: 'first', sessionId: 'session-a' })
     await tick()
     runtime.emit({ event: { type: 'queue_update', steering: [], followUp: ['same', 'same'] }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a' })
     runtime.emit({ event: { type: 'queue_update', steering: [], followUp: ['same'] }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a' })
     runtime.emit({ event: { type: 'message_start', message: { role: 'user', content: 'same' } }, observedAt: 'now', runId: 'run-1', sequence: 3, sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toHaveLength(1)
+    expect(workspace.getState().runs['session-a']?.pendingInputs).toHaveLength(1)
     runtime.emit({ event: { type: 'agent_settled', aborted: true }, observedAt: 'now', runId: 'run-1', sequence: 4, sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toHaveLength(1)
+    expect(workspace.getState().runs['session-a']?.pendingInputs).toHaveLength(1)
     runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2 }, inputQueue: { steering: ['direction'], followUp: ['later'] } })
-    expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toMatchObject([{ mode: 'steer', message: 'direction' }, { mode: 'follow_up', message: 'later' }])
+    expect(workspace.getState().runs['session-a']?.pendingInputs).toMatchObject([{ mode: 'steer', message: 'direction' }, { mode: 'follow_up', message: 'later' }])
   })
 
   it('adopts a Pi Extension-started turn from its native user message and settles that run only', () => {
     const runtime = runtimeMock()
     const invalidateHistory = vi.fn()
-    createSessionRunController({ invalidateHistory, runtime: runtime as never })
+    createSessionRunController({ state: workspace, invalidateHistory, runtime: runtime as never })
 
     runtime.status({ lifecycle: 'active', revision: 1, sessionId: 'session-a' })
     runtime.emit({ event: { type: 'agent_start' }, observedAt: '2026-09-27T11:32:58.000Z', runId: 'extension-run', sequence: 1, sessionId: 'session-a' })
     runtime.emit({ event: { message: { content: [{ text: 'Implement the plan.', type: 'text' }], role: 'user' }, type: 'message_start' }, observedAt: '2026-09-27T11:32:59.000Z', runId: 'extension-run', sequence: 2, sessionId: 'session-a' })
     runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { delta: 'Working…', type: 'text_delta' } }, observedAt: '2026-09-27T11:33:00.000Z', runId: 'extension-run', sequence: 3, sessionId: 'session-a', turnId: 'turn-1' })
     runtime.emit({ event: { type: 'agent_settled' }, observedAt: '2026-09-27T11:33:01.000Z', runId: 'other-run', sequence: 4, sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'running', turns: [{ prompt: 'Implement the plan.' }] })
+    expect(workspace.getState().runs['session-a']).toMatchObject({ status: 'running', turns: [{ prompt: 'Implement the plan.' }] })
 
     runtime.emit({ event: { type: 'agent_settled' }, observedAt: '2026-09-27T11:33:02.000Z', runId: 'extension-run', sequence: 5, sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'complete', turns: [{ completedAt: expect.any(String), prompt: 'Implement the plan.' }] })
+    expect(workspace.getState().runs['session-a']).toMatchObject({ status: 'complete', turns: [{ completedAt: expect.any(String), prompt: 'Implement the plan.' }] })
     expect(invalidateHistory).toHaveBeenCalledWith('session-a')
   })
 
   it('continues from a settled plan with the Pi CLI implementation prompt before Pi reports a user message', async () => {
     const runtime = runtimeMock()
-    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
-    useWorkspaceStore.setState({
+    createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
+    workspace.setState({
       runs: {
         'session-a': { pendingInputs: [], status: 'complete', systemEvents: [], turns: [{ completedAt: '2026-09-29T16:47:50.000Z', events: [], id: 'plan', prompt: '/plan research', startedAt: '2026-09-29T16:47:05.000Z' }] },
       },
     })
-    useWorkspaceStore.getState().appendPendingInput('session-a', { id: 'plan-implementation:plan-action', message: 'Implement the plan.', mode: 'plan_implementation', submittedAt: '2026-09-29T16:47:50.000Z' })
+    workspace.getState().appendPendingInput('session-a', { id: 'plan-implementation:plan-action', message: 'Implement the plan.', mode: 'plan_implementation', submittedAt: '2026-09-29T16:47:50.000Z' })
 
     runtime.emit({ event: { type: 'agent_start' }, observedAt: '2026-09-29T16:47:50.337Z', runId: 'implementation-run', sequence: 1, sessionId: 'session-a' })
     runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { delta: 'Working…', type: 'thinking_delta' } }, observedAt: '2026-09-29T16:47:51.000Z', runId: 'implementation-run', sequence: 2, sessionId: 'session-a', turnId: 'turn-1' })
 
-    expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'running', turns: [{ prompt: '/plan research' }, { prompt: 'Implement the plan.' }] })
-    await vi.waitFor(() => expect(useWorkspaceStore.getState().runs['session-a']?.turns.at(-1)?.events.map((event) => event.event.type)).toEqual(['message_update']))
+    expect(workspace.getState().runs['session-a']).toMatchObject({ status: 'running', turns: [{ prompt: '/plan research' }, { prompt: 'Implement the plan.' }] })
+    await vi.waitFor(() => expect(workspace.getState().runs['session-a']?.turns.at(-1)?.events.map((event) => event.event.type)).toEqual(['message_update']))
 
     runtime.emit({ event: { messages: [{ content: [{ text: 'Implement the plan.', type: 'text' }], role: 'user' }], type: 'agent_end' }, observedAt: '2026-09-29T16:48:34.913Z', runId: 'implementation-run', sequence: 3, sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().runs['session-a']?.turns.at(-1)).toMatchObject({ prompt: 'Implement the plan.' })
+    expect(workspace.getState().runs['session-a']?.turns.at(-1)).toMatchObject({ prompt: 'Implement the plan.' })
   })
 
   it('restores a native active run with no prompt, then adopts its replayed Pi user message', () => {
     const runtime = runtimeMock()
-    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
 
     runtime.snapshot({ activeTurn: { runId: 'extension-run', startedAt: '2026-09-27T11:32:58.000Z' }, runtime: { lifecycle: 'active', revision: 2 }, sessionId: 'session-a' })
     runtime.emit({ event: { message: { content: 'Implement the plan.', role: 'user' }, type: 'message' }, observedAt: '2026-09-27T11:32:59.000Z', runId: 'extension-run', sequence: 2, sessionId: 'session-a' })
 
-    expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'running', turns: [{ prompt: 'Implement the plan.' }] })
+    expect(workspace.getState().runs['session-a']).toMatchObject({ status: 'running', turns: [{ prompt: 'Implement the plan.' }] })
   })
 
   it('restores a pending extension dialog without recreating a streaming thought turn', () => {
     const runtime = runtimeMock()
-    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
 
     runtime.snapshot({ activeTurn: { prompt: 'make a plan', runId: 'run-1', startedAt: '2026-09-30T00:00:00.000Z', waitingForExtension: true }, runtime: { lifecycle: 'active', revision: 2 }, sessionId: 'session-a' })
 
-    expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'awaiting_input', turns: [] })
+    expect(workspace.getState().runs['session-a']).toMatchObject({ status: 'awaiting_input', turns: [] })
   })
 
   it('does not show a running input when Pi rejects it', async () => {
     const runtime = runtimeMock()
     runtime.steer.mockRejectedValueOnce(new Error('Pi session is not running'))
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: 'first', sessionId: 'session-a' })
     await tick()
 
     await expect(controller.steer('session-a', 'change direction')).rejects.toThrow('Pi session is not running')
-    expect(useWorkspaceStore.getState().runs['session-a']?.pendingInputs).toEqual([])
+    expect(workspace.getState().runs['session-a']?.pendingInputs).toEqual([])
   })
 
   it('opens a historical session by watching only, without resuming Pi', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
 
     controller.openSession('session-a')
     await tick()
@@ -540,7 +735,7 @@ describe('session run controller', () => {
     expect(runtime.watch).toHaveBeenCalledWith('session-a', 'foreground')
     expect(runtime.resumeRuntime).not.toHaveBeenCalled()
     expect(runtime.getRuntimeState).not.toHaveBeenCalled()
-    expect(useWorkspaceStore.getState().runs['session-a']).toBeUndefined()
+    expect(workspace.getState().runs['session-a']).toBeUndefined()
 
     controller.openSession('session-b')
     await tick()
@@ -550,13 +745,13 @@ describe('session run controller', () => {
 
   it('adopts an already admitted first prompt and never lets later runtime turn IDs add timeline nodes', () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
 
     controller.adopt({ historyTurnCount: 0, prompt: 'first prompt', sessionId: 'session-a' })
     runtime.emit({ event: { type: 'turn_start' }, observedAt: 'now', sequence: 1, sessionId: 'session-a', turnId: 'runtime-turn-1' })
     runtime.emit({ event: { type: 'tool_execution_start' }, observedAt: 'now', sequence: 2, sessionId: 'session-a', turnId: 'runtime-turn-2' })
 
-    const run = useWorkspaceStore.getState().runs['session-a']
+    const run = workspace.getState().runs['session-a']
     expect(run?.turns).toHaveLength(1)
     expect(run?.turns[0]).toMatchObject({ id: expect.stringMatching(/^pending:session-a:/), prompt: 'first prompt' })
     expect(run?.turns[0]?.events.map((event) => event.turnId)).toEqual(['runtime-turn-1', 'runtime-turn-2'])
@@ -564,23 +759,23 @@ describe('session run controller', () => {
 
   it('rebuilds an active Turn from its snapshot and makes a runtime restart visible', async () => {
     const runtime = runtimeMock()
-    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
 
     runtime.snapshot({ activeTurn: { prompt: 'resume me', runId: 'run-1', startedAt: '2026-09-27T06:12:41.000Z' }, runtime: { lifecycle: 'active', revision: 2 }, sessionId: 'session-a' })
     runtime.emit({ event: { type: 'message_update', assistantMessageEvent: { delta: 'thinking', type: 'thinking_delta' } }, observedAt: 'now', runId: 'run-1', sequence: 5, sessionId: 'session-a', turnId: 'turn-1' })
 
-    expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'running', turns: [{ prompt: 'resume me', startedAt: '2026-09-27T06:12:41.000Z' }] })
-    await vi.waitFor(() => expect(useWorkspaceStore.getState().runs['session-a']?.turns[0]?.events).toHaveLength(1))
+    expect(workspace.getState().runs['session-a']).toMatchObject({ status: 'running', turns: [{ prompt: 'resume me', startedAt: '2026-09-27T06:12:41.000Z' }] })
+    await vi.waitFor(() => expect(workspace.getState().runs['session-a']?.turns[0]?.events).toHaveLength(1))
     runtime.fail({ code: 'RUNTIME_RESTARTED', message: 'Pi runtime server restarted', sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ error: 'Pi 运行服务已重启，本轮已中断。', status: 'error' })
+    expect(workspace.getState().runs['session-a']).toMatchObject({ error: 'Pi 运行服务已重启，本轮已中断。', status: 'error' })
   })
 
   it('keeps an active old foreground session as a background watch', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.openSession('running')
     await tick()
-    useWorkspaceStore.getState().setRuntimeState('running', { lifecycle: 'active', revision: 1 })
+    workspace.getState().setRuntimeState('running', { lifecycle: 'active', revision: 1 })
     controller.openSession('other')
     await tick()
     expect(runtime.watch).toHaveBeenCalledWith('running', 'background')
@@ -589,23 +784,23 @@ describe('session run controller', () => {
 
   it('aborts only the requested watched session and handles runtime errors', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     controller.start({ prompt: 'A', sessionId: 'session-a' })
     controller.start({ prompt: 'B', sessionId: 'session-b' })
     await tick()
 
     await expect(controller.stop('session-a')).resolves.toBe(true)
     expect(runtime.abort).toHaveBeenCalledWith('session-a')
-    expect(useWorkspaceStore.getState().runs['session-b']?.status).toBe('awaiting_agent')
+    expect(workspace.getState().runs['session-b']?.status).toBe('awaiting_agent')
     runtime.fail({ message: 'prompt failed', sessionId: 'session-b' })
-    expect(useWorkspaceStore.getState().runs['session-b']).toMatchObject({ error: 'prompt failed', status: 'error' })
+    expect(workspace.getState().runs['session-b']).toMatchObject({ error: 'prompt failed', status: 'error' })
   })
 
   it('restores foreground and active background watches after refresh', async () => {
     const runtime = runtimeMock()
     runtime.watch.mockImplementationOnce(async (sessionId: string) => { runtime.watchedSessions.mockReturnValueOnce([{ after: 3, role: 'foreground', sessionId }, { after: 4, role: 'background', sessionId: 'session-b' }]) })
     runtime.watchedSessions.mockReturnValue([{ after: 3, role: 'foreground', sessionId: 'session-a' }, { after: 4, role: 'background', sessionId: 'session-b' }])
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
 
     controller.resume()
     await tick()
@@ -614,9 +809,9 @@ describe('session run controller', () => {
   })
   it('owns runtime and extension projections without an extension UI component', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 2 }, extensionUi: { freshness: 'restored', statuses: { plan: 'planning' }, widgets: { plan: ['step one'] } } })
-    expect(useWorkspaceStore.getState()).toMatchObject({
+    expect(workspace.getState()).toMatchObject({
       runtimeStates: { 'session-a': { lifecycle: 'idle', revision: 2 } },
       watchStates: { 'session-a': 'ready' },
       extensionStatuses: { 'session-a': { plan: 'planning' } },
@@ -626,107 +821,107 @@ describe('session run controller', () => {
     emit({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'plan', statusText: 'implementing' })
     emit({ type: 'extension_ui_request', method: 'setWidget', widgetKey: 'plan', widgetLines: ['step two'] })
     emit({ type: 'extension_ui_request', method: 'set_editor_text', text: '\u001b[31mnext prompt\u001b[0m' })
-    expect(useWorkspaceStore.getState().extensionStatuses['session-a']).toEqual({ plan: 'implementing' })
-    expect(useWorkspaceStore.getState().extensionWidgets['session-a']).toEqual({ plan: ['step two'] })
-    expect(useWorkspaceStore.getState().drafts['session-a']).toBe('next prompt')
+    expect(workspace.getState().extensionStatuses['session-a']).toEqual({ plan: 'implementing' })
+    expect(workspace.getState().extensionWidgets['session-a']).toEqual({ plan: ['step two'] })
+    expect(workspace.getState().drafts['session-a']).toBe('next prompt')
     runtime.shouldApplyExtensionUi.mockReturnValue(false)
     emit({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'plan', statusText: 'old' })
-    expect(useWorkspaceStore.getState().extensionStatuses['session-a']).toEqual({ plan: 'implementing' })
+    expect(workspace.getState().extensionStatuses['session-a']).toEqual({ plan: 'implementing' })
     runtime.getRuntimeState.mockResolvedValueOnce({ isCompacting: false, isStreaming: false, model: { id: 'model', provider: 'provider' } } as any)
     await expect(controller.getRuntimeState('session-a')).resolves.toMatchObject({ model: { id: 'model' } })
-    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.model).toEqual({ provider: 'provider', id: 'model' })
+    expect(workspace.getState().runtimeDetails['session-a']?.model).toEqual({ provider: 'provider', id: 'model' })
   })
 
   it('reads back the confirmed model and thinking level after switching without creating a run', async () => {
     const runtime = runtimeMock()
-    const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
-    useWorkspaceStore.getState().setRuntimeDetails('session-b', { isCompacting: false, isStreaming: false, model: { id: 'other', provider: 'test' } })
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
+    workspace.getState().setRuntimeDetails('session-b', { isCompacting: false, isStreaming: false, model: { id: 'other', provider: 'test' } })
     runtime.getRuntimeState.mockResolvedValueOnce({ isCompacting: false, isStreaming: false, model: { id: 'confirmed', provider: 'test' }, thinkingLevel: 'high' } as any)
     await controller.setModel('session-a', 'test', 'requested')
     expect(runtime.setModel).toHaveBeenCalledWith('session-a', 'test', 'requested')
     expect(runtime.getRuntimeState).toHaveBeenCalledWith('session-a')
-    expect(useWorkspaceStore.getState().runtimeDetails['session-a']).toMatchObject({ model: { id: 'confirmed' }, thinkingLevel: 'high' })
-    expect(useWorkspaceStore.getState().runtimeDetails['session-b']?.model?.id).toBe('other')
-    expect(useWorkspaceStore.getState().runs['session-a']).toBeUndefined()
+    expect(workspace.getState().runtimeDetails['session-a']).toMatchObject({ model: { id: 'confirmed' }, thinkingLevel: 'high' })
+    expect(workspace.getState().runtimeDetails['session-b']?.model?.id).toBe('other')
+    expect(workspace.getState().runs['session-a']).toBeUndefined()
     runtime.setModel.mockRejectedValueOnce(new Error('invalid model'))
     await expect(controller.setModel('session-a', 'test', 'invalid')).rejects.toThrow('invalid model')
-    expect(useWorkspaceStore.getState().runtimeDetails['session-a']?.model?.id).toBe('confirmed')
-    useWorkspaceStore.getState().clearRuntimeState('session-a')
-    expect(useWorkspaceStore.getState().runtimeDetails['session-a']).toBeUndefined()
+    expect(workspace.getState().runtimeDetails['session-a']?.model?.id).toBe('confirmed')
+    workspace.getState().clearRuntimeState('session-a')
+    expect(workspace.getState().runtimeDetails['session-a']).toBeUndefined()
   })
 
   it('ignores older runtime revisions and clears projections on failure and resync', () => {
     const runtime = runtimeMock()
-    createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+    createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
     const snapshot = { sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 5 }, extensionUi: { freshness: 'known', statuses: { plan: 'current' }, widgets: { plan: ['current'] } } }
     runtime.snapshot(snapshot)
     runtime.status({ sessionId: 'session-a', lifecycle: 'failed', revision: 4 })
     runtime.snapshot({ ...snapshot, runtime: { lifecycle: 'active', revision: 3 }, extensionUi: { freshness: 'known', statuses: {}, widgets: {} } })
-    expect(useWorkspaceStore.getState().runtimeStates['session-a']).toMatchObject({ lifecycle: 'idle', revision: 5 })
-    expect(useWorkspaceStore.getState().extensionStatuses['session-a']).toEqual({ plan: 'current' })
+    expect(workspace.getState().runtimeStates['session-a']).toMatchObject({ lifecycle: 'idle', revision: 5 })
+    expect(workspace.getState().extensionStatuses['session-a']).toEqual({ plan: 'current' })
     runtime.status({ sessionId: 'session-a', lifecycle: 'failed', revision: 6 })
-    expect(useWorkspaceStore.getState().extensionStatuses['session-a']).toEqual({})
-    expect(useWorkspaceStore.getState().extensionWidgets['session-a']).toEqual({})
+    expect(workspace.getState().extensionStatuses['session-a']).toEqual({})
+    expect(workspace.getState().extensionWidgets['session-a']).toEqual({})
     runtime.snapshot({ ...snapshot, runtime: { lifecycle: 'idle', revision: 7 } })
     runtime.resync({ sessionId: 'session-a' })
-    expect(useWorkspaceStore.getState().extensionStatuses['session-a']).toEqual({})
+    expect(workspace.getState().extensionStatuses['session-a']).toEqual({})
     runtime.snapshot({ ...snapshot, runtime: { lifecycle: 'idle', revision: 0 } })
-    expect(useWorkspaceStore.getState().runtimeStates['session-a']?.revision).toBe(0)
+    expect(workspace.getState().runtimeStates['session-a']?.revision).toBe(0)
     runtime.fail({ code: 'RUNTIME_RESTARTED', message: 'restart', sessionId: 'session-a' })
     runtime.snapshot({ ...snapshot, runtime: { lifecycle: 'idle', revision: 0 } })
-    expect(useWorkspaceStore.getState().runtimeStates['session-a']?.revision).toBe(0)
+    expect(workspace.getState().runtimeStates['session-a']?.revision).toBe(0)
   })
 
 })
 
 
 it('ends a rejected model call as an error and allows the next prompt to succeed', async () => {
-  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {} })
+  workspace.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, watchStates: {} })
   const runtime = runtimeMock()
-  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
   expect(controller.start({ prompt: 'first', sessionId: 'session-a' })).toBe(true)
   await tick()
   runtime.emit({ event: { type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: '403: denied' } }, observedAt: 'now', runId: 'run-1', sequence: 1, sessionId: 'session-a', turnId: 'turn-1' })
   runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a' })
-  expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'error', stopReason: 'error' })
-  expect(useWorkspaceStore.getState().runs['session-b']).toBeUndefined()
+  expect(workspace.getState().runs['session-a']).toMatchObject({ status: 'error', stopReason: 'error' })
+  expect(workspace.getState().runs['session-b']).toBeUndefined()
   expect(controller.start({ prompt: 'next', sessionId: 'session-a' })).toBe(true)
   await tick()
   runtime.emit({ event: { type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } }, observedAt: 'now', runId: 'run-1', sequence: 3, sessionId: 'session-a', turnId: 'turn-2' })
   runtime.emit({ event: { type: 'agent_settled' }, observedAt: 'now', runId: 'run-1', sequence: 4, sessionId: 'session-a' })
-  expect(useWorkspaceStore.getState().runs['session-a']).toMatchObject({ status: 'complete', stopReason: 'stop' })
+  expect(workspace.getState().runs['session-a']).toMatchObject({ status: 'complete', stopReason: 'stop' })
 })
 
 it('coalesces in-flight session statistics and survives failed reads', async () => {
-  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  workspace.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
   let release!: (stats: any) => void
   runtime.getSessionStatistics.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
-  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
   const first = controller.getSessionStatistics('session-a')
   const second = controller.getSessionStatistics('session-a')
   expect(second).toBe(first)
   expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
-  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']).toMatchObject({ loading: true })
+  expect(workspace.getState().runtimeStatistics['session-a']).toMatchObject({ loading: true })
 
   const stats = { tokens: { input: 20, output: 10, cacheRead: 90, cacheWrite: 0, total: 120 }, cost: 0.1, contextUsage: { tokens: null, percent: null, contextWindow: 1000000 } }
   release(stats)
   await Promise.all([first, second])
-  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']).toMatchObject({ data: stats, loading: false })
+  expect(workspace.getState().runtimeStatistics['session-a']).toMatchObject({ data: stats, loading: false })
 
   await controller.getSessionStatistics('session-b')
-  expect(useWorkspaceStore.getState().runtimeStatistics['session-b']?.data?.cost).toBe(0)
+  expect(workspace.getState().runtimeStatistics['session-b']?.data?.cost).toBe(0)
   runtime.getSessionStatistics.mockRejectedValueOnce(new Error('failed'))
   await controller.getSessionStatistics('session-a')
-  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']).toMatchObject({ data: stats, loading: false, error: expect.stringContaining('读取失败') })
-  expect(useWorkspaceStore.getState().runs['session-a']).toBeUndefined()
+  expect(workspace.getState().runtimeStatistics['session-a']).toMatchObject({ data: stats, loading: false, error: expect.stringContaining('读取失败') })
+  expect(workspace.getState().runs['session-a']).toBeUndefined()
 })
 
 it('requests statistics once for one completed run across event, status and snapshot', async () => {
-  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  workspace.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
   runtime.prompt.mockResolvedValueOnce({ runId: 'run-1' })
-  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
   controller.start({ prompt: 'done', sessionId: 'session-a' })
   await tick()
 
@@ -741,9 +936,9 @@ it('requests statistics once for one completed run across event, status and snap
 })
 
 it('requests statistics once from a completed idle status without a native event', async () => {
-  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  workspace.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
-  createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
   const completedRun = { runId: 'history-run', stopReason: 'stop' }
 
   runtime.status({ completedRun, lifecycle: 'idle', revision: 1, sessionId: 'session-a' } as never)
@@ -756,9 +951,9 @@ it('requests statistics once from a completed idle status without a native event
 })
 
 it('requests statistics once for one idle revision across snapshot and status', async () => {
-  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  workspace.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
-  createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
   runtime.snapshot({ runtime: { lifecycle: 'idle', revision: 5 }, sessionId: 'session-a' })
   await tick()
   expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
@@ -773,12 +968,12 @@ it('requests statistics once for one idle revision across snapshot and status', 
 })
 
 it('reruns statistics after an in-flight read when a newer run completes', async () => {
-  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  workspace.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
   let releaseFirst!: (stats: any) => void
   runtime.getSessionStatistics.mockImplementationOnce(() => new Promise((resolve) => { releaseFirst = resolve }))
   runtime.prompt.mockResolvedValueOnce({ runId: 'run-1' }).mockResolvedValueOnce({ runId: 'run-2' })
-  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
 
   controller.start({ prompt: 'first', sessionId: 'session-a' })
   await tick()
@@ -797,15 +992,15 @@ it('reruns statistics after an in-flight read when a newer run completes', async
   releaseFirst({ cost: 0.1 })
   await tick()
   expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(2)
-  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']?.data).toEqual(nextStats)
+  expect(workspace.getState().runtimeStatistics['session-a']?.data).toEqual(nextStats)
 })
 
 it('refreshes statistics after compaction even when a read is in flight', async () => {
-  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  workspace.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
   let release!: (stats: any) => void
   runtime.getSessionStatistics.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
-  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
   const pending = controller.getSessionStatistics('session-a')
   const compacted = { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 }, cost: 0.3 }
   runtime.getSessionStatistics.mockResolvedValueOnce(compacted as never)
@@ -817,26 +1012,26 @@ it('refreshes statistics after compaction even when a read is in flight', async 
   await compacting
 
   expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(2)
-  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']?.data).toEqual(compacted)
+  expect(workspace.getState().runtimeStatistics['session-a']?.data).toEqual(compacted)
 })
 
 it('does not resurrect statistics from a request interrupted by resync', async () => {
-  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  workspace.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
   let release!: (stats: any) => void
   runtime.getSessionStatistics.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
-  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
   const pending = controller.getSessionStatistics('session-a')
   runtime.resync({ sessionId: 'session-a' })
   release({ cost: 999 })
   await pending
-  expect(useWorkspaceStore.getState().runtimeStatistics['session-a']).toBeUndefined()
+  expect(workspace.getState().runtimeStatistics['session-a']).toBeUndefined()
 })
 
 it('refreshes statistics on restoration, compaction and model changes instead of token deltas', async () => {
-  useWorkspaceStore.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
+  workspace.setState({ sessionNotifications: {}, runs: {}, runtimeDetails: {}, runtimeStates: {}, runtimeStatistics: {} })
   const runtime = runtimeMock()
-  const controller = createSessionRunController({ invalidateHistory: vi.fn(), runtime: runtime as never })
+  const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
   runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'idle', revision: 1 } })
   await tick()
   expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(1)
@@ -852,7 +1047,7 @@ it('refreshes statistics on restoration, compaction and model changes instead of
 it('forwards compaction instructions and refreshes history and statistics after success', async () => {
   const runtime = runtimeMock()
   const invalidateHistory = vi.fn()
-  const controller = createSessionRunController({ invalidateHistory, runtime: runtime as never })
+  const controller = createSessionRunController({ state: workspace, invalidateHistory, runtime: runtime as never })
   await controller.compact('session-a', 'Keep API details')
   expect(runtime.compact).toHaveBeenCalledWith('session-a', 'Keep API details')
   expect(invalidateHistory).toHaveBeenCalledWith('session-a')
@@ -860,21 +1055,21 @@ it('forwards compaction instructions and refreshes history and statistics after 
 })
 
 it('restores attachment-bearing steering and follow-up receipts from a fresh watch without guessing by text', () => {
-  useWorkspaceStore.setState({ runs: {}, runtimeStates: {}, watchStates: {}, runtimeDetails: {} })
+  workspace.setState({ runs: {}, runtimeStates: {}, watchStates: {}, runtimeDetails: {} })
   const runtime = runtimeMock()
-  createSessionRunController({ runtime: runtime as never, invalidateHistory: vi.fn() })
+  createSessionRunController({ state: workspace, runtime: runtime as never, invalidateHistory: vi.fn() })
   const ref = { id: 'a'.repeat(64), kind: 'image', name: 'image.png', size: 100, mediaType: 'image/png' }
   runtime.snapshot({ sessionId: 'recovered', runtime: { lifecycle: 'notLoaded', revision: 1 }, inputQueue: { steering: [], followUp: ['same'], inputs: [{ id: 'recovered-file', message: 'same', attachmentIds: [ref.id], attachments: [ref], recoveryRequired: true }] } })
-  expect(useWorkspaceStore.getState().runs.recovered?.pendingInputs?.[0]).toMatchObject({ id: 'recovered-file', attachments: [ref], recoveryRequired: true })
+  expect(workspace.getState().runs.recovered?.pendingInputs?.[0]).toMatchObject({ id: 'recovered-file', attachments: [ref], recoveryRequired: true })
   runtime.snapshot({ sessionId: 'active', runtime: { lifecycle: 'active', revision: 1 }, activeTurn: { runId: 'run', prompt: 'original', startedAt: '2026-10-18T00:00:00Z' }, inputQueue: { steering: ['same'], followUp: ['same'], steeringInputs: [{ id: 'steering-id', message: 'same', attachmentIds: [ref.id], attachments: [ref] }], inputs: [{ id: 'follow-up-id', message: 'same', attachmentIds: [ref.id], attachments: [ref] }] } })
-  expect(useWorkspaceStore.getState().runs.active?.pendingInputs?.map((input) => ({ id: input.id, mode: input.mode, attachments: input.attachments }))).toEqual([{ id: 'steering-id', mode: 'steer', attachments: [ref] }, { id: 'follow-up-id', mode: 'follow_up', attachments: [ref] }])
+  expect(workspace.getState().runs.active?.pendingInputs?.map((input) => ({ id: input.id, mode: input.mode, attachments: input.attachments }))).toEqual([{ id: 'steering-id', mode: 'steer', attachments: [ref] }, { id: 'follow-up-id', mode: 'follow_up', attachments: [ref] }])
 })
 
 it('cancels native compaction and waits for its aborted result', async () => {
   const runtime = runtimeMock()
   let reject!: (cause: Error) => void
   runtime.compact.mockReturnValueOnce(new Promise((_, fail) => { reject = fail }))
-  const controller = createSessionRunController({ runtime: runtime as never, invalidateHistory: vi.fn() })
+  const controller = createSessionRunController({ state: workspace, runtime: runtime as never, invalidateHistory: vi.fn() })
   const result = controller.compact('session-a')
   await tick()
   await controller.cancelCompact('session-a')
@@ -887,7 +1082,7 @@ it('cancels during runtime preparation without starting compaction', async () =>
   const runtime = runtimeMock()
   let ready!: () => void
   runtime.resumeRuntime.mockReturnValueOnce(new Promise<void>((resolve) => { ready = resolve }))
-  const controller = createSessionRunController({ runtime: runtime as never, invalidateHistory: vi.fn() })
+  const controller = createSessionRunController({ state: workspace, runtime: runtime as never, invalidateHistory: vi.fn() })
   const result = controller.compact('session-a')
   await tick()
   await controller.cancelCompact('session-a')
@@ -900,7 +1095,7 @@ it('cancels during runtime preparation without starting compaction', async () =>
 it('keeps a successful compaction successful when refreshing history fails', async () => {
   const runtime = runtimeMock()
   const invalidateHistory = vi.fn().mockRejectedValue(new Error('History refresh failed'))
-  const controller = createSessionRunController({ invalidateHistory, runtime: runtime as never })
+  const controller = createSessionRunController({ state: workspace, invalidateHistory, runtime: runtime as never })
   await expect(controller.compact('session-a')).resolves.toBe(true)
   expect(runtime.getSessionStatistics).toHaveBeenCalledWith('session-a')
 })

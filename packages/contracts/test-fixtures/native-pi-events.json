@@ -1,0 +1,134 @@
+[
+  {
+    "type": "message_start",
+    "message": {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Read fixture.txt, then reply done."
+        }
+      ],
+      "timestamp": 1793170955845
+    }
+  },
+  {
+    "type": "message_end",
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "toolCall",
+          "id": "read-fixture",
+          "name": "read",
+          "arguments": {
+            "path": "fixture.txt"
+          }
+        }
+      ],
+      "api": "openai-completions",
+      "provider": "fixture",
+      "model": "fixture",
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 0,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        }
+      },
+      "stopReason": "toolUse",
+      "timestamp": 1793170955852,
+      "responseId": "completion-1",
+      "rawStopReason": "tool_calls",
+      "durationMs": 16,
+      "thinkingLevel": "off"
+    }
+  },
+  {
+    "type": "tool_execution_start",
+    "toolCallId": "read-fixture",
+    "toolName": "read",
+    "args": {
+      "path": "fixture.txt"
+    }
+  },
+  {
+    "type": "tool_execution_end",
+    "toolCallId": "read-fixture",
+    "toolName": "read",
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "PI_EVENT_READER_FIXTURE\n"
+        }
+      ],
+      "structuredContent": "PI_EVENT_READER_FIXTURE\n"
+    },
+    "isError": false,
+    "durationMs": 1
+  },
+  {
+    "type": "message_start",
+    "message": {
+      "role": "toolResult",
+      "toolCallId": "read-fixture",
+      "toolName": "read",
+      "content": [
+        {
+          "type": "text",
+          "text": "PI_EVENT_READER_FIXTURE\n"
+        }
+      ],
+      "isError": false,
+      "durationMs": 1,
+      "timestamp": 1793170955870
+    }
+  },
+  {
+    "type": "message_end",
+    "message": {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Fixture read successfully."
+        }
+      ],
+      "api": "openai-completions",
+      "provider": "fixture",
+      "model": "fixture",
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "totalTokens": 0,
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "total": 0
+        }
+      },
+      "stopReason": "stop",
+      "timestamp": 1793170955871,
+      "responseId": "completion-2",
+      "rawStopReason": "stop",
+      "durationMs": 2,
+      "thinkingLevel": "off"
+    }
+  },
+  {
+    "type": "agent_settled",
+    "aborted": false
+  }
+]

@@ -11,7 +11,7 @@ import { SettingsPage } from './settings-page.js'
 function App({ runtime, sessionRuns }: { runtime: RuntimeWebSocketClient; sessionRuns: SessionRunController }) {
   return (
     <TooltipProvider>
-      <RuntimeExtensionUi runtime={runtime}>
+      <RuntimeExtensionUi runtime={runtime} sessionRuns={sessionRuns}>
         <Routes>
           <Route path="/" element={<WorkspacePage sessionRuns={sessionRuns} />} />
           <Route path="/settings/:category?" element={<SettingsPage />} />

@@ -1,3 +1,4 @@
+import { piAssistantStopReason } from '@pi-nest/contracts/pi-events'
 import { cacheHitRateFromUsage, latestCacheHitRate } from './runtime-statistics.js'
 import type { PiRuntimeEvent, RuntimeFailureKind as PiRuntimeFailureKind } from '@pi-nest/contracts'
 import { PiRpcConnectionError, PiRpcProcess, type PiRpcProcessState, type PiInputImage } from '@pi-nest/pi-adapter'
@@ -57,15 +58,6 @@ function modelFrom(state: Record<string, unknown>) {
   const candidate = model as Record<string, unknown>
   if (typeof candidate.provider !== 'string' || typeof candidate.id !== 'string') return undefined
   return { id: candidate.id, provider: candidate.provider }
-}
-
-function stopReasonFrom(event: Record<string, unknown>) {
-  if (event.type !== 'message_end') return undefined
-  const message = event.message
-  if (!message || typeof message !== 'object' || Array.isArray(message)) return undefined
-  const candidate = message as Record<string, unknown>
-  if (candidate.role !== 'assistant' || typeof candidate.stopReason !== 'string') return undefined
-  return candidate.stopReason
 }
 
 function failureFrom(cause: unknown): PiRuntimeHostFailure {
@@ -185,7 +177,7 @@ export class PiRuntimeHost {
       settle = resolve
     })
     const unsubscribe = this.onEvent(({ event }) => {
-      stopReason = stopReasonFrom(event) ?? stopReason
+      stopReason = piAssistantStopReason(event) ?? stopReason
       if (event.type === 'agent_settled') {
         if (event.aborted === true) stopReason = 'aborted'
         settle?.()

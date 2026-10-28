@@ -7,7 +7,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 
 import { stripAnsiLine, stripAnsiText } from './ansi-text.js'
 import { RuntimeWebSocketClient, type PiRuntimeEvent } from './runtime-websocket-client.js'
-import { useWorkspaceStore } from './workspace-store.js'
+import type { SessionRunController } from './session-run-controller.js'
 
 type ExtensionOption = { displayLabel: string; rawValue: string }
 type DialogMethod = 'confirm' | 'editor' | 'input' | 'select'
@@ -88,7 +88,7 @@ export function isPonytailLoadedNotice(message: string, type: string) {
 }
 
 /** Native Pi RPC Extension UI bridge. It keeps protocol values untouched and lets workspace render dialogs inline. */
-export function RuntimeExtensionUi({ children, runtime }: { children: React.ReactNode; runtime: RuntimeWebSocketClient }) {
+export function RuntimeExtensionUi({ children, runtime, sessionRuns }: { children: React.ReactNode; runtime: RuntimeWebSocketClient; sessionRuns: SessionRunController }) {
   const [dialogs, setDialogs] = useState<Dialog[]>([])
   const [notice, setNotice] = useState<{ message: string; type: 'error' | 'info' | 'warning' }>()
   const customAnswers = useRef(new Map<string, Dialog>())
@@ -103,16 +103,14 @@ export function RuntimeExtensionUi({ children, runtime }: { children: React.Reac
     submissions.current.add(submissionKey)
     if (custom) customAnswers.current.set(dialog.sessionId, { ...dialog, submitting: true })
     const prompt = planImplementationPrompt(dialog, response)
-    const input = prompt ? { id: `plan-implementation:${dialog.id}`, message: prompt, mode: 'plan_implementation' as const, submittedAt: new Date().toISOString() } : undefined
-    if (input) useWorkspaceStore.getState().appendPendingInput(dialog.sessionId, input)
+    const pendingInputId = prompt ? sessionRuns.queuePlanImplementation(dialog.sessionId, dialog.id, prompt) : undefined
     setDialogs((current) => current.map((item) => item.id === dialog.id && item.sessionId === dialog.sessionId ? { ...item, error: undefined, submitting: true } : item))
     try {
-      await runtime.extensionUiResponse(dialog.sessionId, targetId, dialog.editorId && !response.cancelled ? { value: dialog.value } : response)
+      await sessionRuns.respondToExtension(dialog.sessionId, targetId, dialog.editorId && !response.cancelled ? { value: dialog.value } : response, pendingInputId)
       if (custom && (!dialog.editorId || customAnswers.current.get(dialog.sessionId)?.editorId !== targetId)) return
       customAnswers.current.delete(dialog.sessionId)
       setDialogs((current) => current.filter((item) => item.id !== dialog.id || item.sessionId !== dialog.sessionId))
     } catch (cause) {
-      if (input) useWorkspaceStore.getState().removePendingInput(dialog.sessionId, input.id)
       if (cause && typeof cause === 'object' && (cause as { code?: unknown }).code === 'EXTENSION_UI_NOT_PENDING') {
         customAnswers.current.delete(dialog.sessionId)
         setDialogs((current) => current.filter((item) => item.id !== dialog.id || item.sessionId !== dialog.sessionId))
@@ -123,7 +121,7 @@ export function RuntimeExtensionUi({ children, runtime }: { children: React.Reac
       else if (custom) customAnswers.current.set(dialog.sessionId, { ...dialog, error, submitting: false })
       setDialogs((current) => current.map((item) => item.id === dialog.id && item.sessionId === dialog.sessionId ? { ...item, error, submitting: false } : item))
     } finally { submissions.current.delete(submissionKey) }
-  }, [runtime])
+  }, [sessionRuns])
 
   const acceptCustomEditor = useCallback((editor: Dialog) => {
     const question = customAnswers.current.get(editor.sessionId)
