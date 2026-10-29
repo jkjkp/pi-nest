@@ -1,9 +1,10 @@
+import type { TextFileCursor } from '@pi-nest/contracts'
 export type FilePreviewPanel = { open: boolean; tabs: FilePreviewSelection[]; activeTab?: string; expanded: string[]; scrollTop: number }
 export const emptyFilePanel = (): FilePreviewPanel => ({ open: false, tabs: [], expanded: [], scrollTop: 0 })
 export function fileTabKey(file: Pick<FilePreviewSelection, 'path' | 'searchRoot'>) { return JSON.stringify([file.path, file.searchRoot ?? null]) }
 
 export type FilePreviewSelection = { path: string; searchRoot?: string; line?: number; workspace?: boolean; navigation: number }
-export type FileReadingPosition = { start: number; scrollTop: number; scrollLeft: number; mode: 'source' | 'reading'; target?: number; zoom: number | 'fit'; navigation?: number }
+export type FileReadingPosition = { start: number; scrollTop: number; scrollLeft: number; mode: 'source' | 'reading'; target?: number; zoom: number | 'fit'; navigation?: number; pageCursor?: TextFileCursor }
 
 export function filePreviewKey(sessionId: string, path: string, searchRoot?: string) {
   return JSON.stringify([sessionId, searchRoot ?? null, path])
@@ -47,6 +48,12 @@ export function restoreFilePositions(value: unknown): Record<string, FileReading
     return [p.start, p.scrollTop, p.scrollLeft].every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0) && ['source', 'reading'].includes(p.mode) && (p.zoom === 'fit' || typeof p.zoom === 'number' && Number.isFinite(p.zoom) && p.zoom > 0)
   }).map(([key, raw]) => {
     const p = raw as FileReadingPosition
-    return [key, { start: p.start, scrollTop: p.scrollTop, scrollLeft: p.scrollLeft, mode: p.mode, zoom: p.zoom, ...(Number.isSafeInteger(p.target) && p.target! >= 0 ? { target: p.target } : {}), ...(Number.isSafeInteger(p.navigation) && p.navigation! >= 0 ? { navigation: p.navigation } : {}) }]
+    return [key, { start: p.start, scrollTop: p.scrollTop, scrollLeft: p.scrollLeft, mode: p.mode, zoom: p.zoom, ...(Number.isSafeInteger(p.target) && p.target! >= 0 ? { target: p.target } : {}), ...(validTextCursor(p.pageCursor) ? { pageCursor: { offset: p.pageCursor!.offset, line: p.pageCursor!.line, midLine: p.pageCursor!.midLine, version: p.pageCursor!.version } } : {}), ...(Number.isSafeInteger(p.navigation) && p.navigation! >= 0 ? { navigation: p.navigation } : {}) }]
   })) as Record<string, FileReadingPosition>
+}
+
+function validTextCursor(value: unknown): value is TextFileCursor {
+  if (!value || typeof value !== 'object') return false
+  const c = value as TextFileCursor
+  return Number.isSafeInteger(c.offset) && c.offset >= 0 && Number.isSafeInteger(c.line) && c.line >= 1 && typeof c.midLine === 'boolean' && c.line <= c.offset + 1 && (c.offset !== 0 || !c.midLine && c.line === 1) && typeof c.version === 'string' && c.version.length > 0 && c.version.length <= 256
 }

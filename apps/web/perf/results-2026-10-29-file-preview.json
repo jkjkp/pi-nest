@@ -1,0 +1,16 @@
+{
+  "date": "2026-10-29",
+  "environment": "macOS, Node.js 22.23.2, isolated temporary project and backend",
+  "sample": {
+    "fileBytes": 111738880,
+    "responseTextBytes": 31000,
+    "responseLines": 1000,
+    "sourceRowsInBrowser": 200,
+    "firstReadMs": 1.837167,
+    "heapUsedDeltaBytes": 225000,
+    "rssDeltaBytes": 180224
+  },
+  "browserChecks": ["line 3000000 highlighted", "UTF-8 long-line next fragment without replacement characters", "large Markdown source mode", "external session reference", "keep old window on disk update, then refresh"],
+  "limits": { "pageTextBytes": 262144, "pageLines": 1000, "readChunkBytes": 65536, "seekBatchBytes": 8388608, "cachePages": 8, "cacheTextBytes": 2097152 },
+  "notes": "One local sample before the final read-ahead optimization; excludes network and UI time, is neither a cold-disk benchmark nor peak-memory measurement. Cache budget excludes active/in-flight rendering overhead. Browser validation used temporary ports 31877/31878; both were stopped. Windows/Linux native UI not tested."
+}

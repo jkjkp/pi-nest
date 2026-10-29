@@ -88,3 +88,19 @@ it('authorizes a registered project through its filesystem alias without any ses
   const response = await app.request('/files/list', { method: 'POST', headers: { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }, body: JSON.stringify({ scope: { kind: 'project', cwd: alias }, path: '' }) })
   expect(response.status).toBe(200)
 })
+
+it('pages large project files, checks metadata and refuses stale or escaping cursors', async () => {
+  const { root, request } = await fixture()
+  await writeFile(join(root, 'large.log'), 'row\n'.repeat(400_000))
+  const input = { scope: { kind: 'project', cwd: root }, path: 'large.log' }
+  const stat = await (await request('stat', input)).json() as { fileBytes: number; version: string }
+  expect(stat.fileBytes).toBe(1_600_000)
+  const page = await (await request('text-page', input)).json() as { text: string; nextCursor: unknown }
+  expect(page.text.length).toBeLessThanOrEqual(262_144)
+  expect((await request('text-page', { ...input, cursor: { offset: -1 } })).status).toBe(400)
+  expect((await request('text-page', { ...input, path: 'escape' })).status).toBe(403)
+  await writeFile(join(root, 'large.log'), 'new')
+  const changed = await request('text-page', { ...input, cursor: page.nextCursor })
+  expect(changed.status).toBe(409)
+  expect(await changed.json()).toMatchObject({ code: 'FILE_VERSION_CHANGED' })
+})

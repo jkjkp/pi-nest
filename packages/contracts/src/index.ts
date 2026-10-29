@@ -169,3 +169,9 @@ export type PiFileChange = { version: 1; path: string; sequence: number } & (
 export type WorkspaceFileScope = { kind: 'session'; id: string } | { kind: 'project'; cwd: string }
 export type WorkspaceFileEntry = { name: string; path: string; kind: 'directory' | 'file' | 'link' | 'other' }
 export type WorkspaceDirectory = { root: string; path: string; entries: WorkspaceFileEntry[]; nextOffset?: number }
+
+export type TextFileCursor = { offset: number; line: number; midLine: boolean; version: string }
+export type TextFileStat = { path: string; version: string; fileBytes: number }
+export type TextFilePage = TextFileStat & { kind: 'page'; cursor: TextFileCursor; text: string; startsMidLine: boolean; endsMidLine: boolean; endOffset: number; lastLine: number; nextCursor?: TextFileCursor; eof: boolean }
+export type TextFileRead = TextFilePage | (TextFileStat & { kind: 'seeking'; cursor: TextFileCursor })
+export type TextFilePageRequest = { cursor?: TextFileCursor; direction?: 'next' | 'previous'; targetLine?: number }

@@ -1,8 +1,6 @@
-import { isWorkspacePath } from './workspace-file-path.js'
-import { constants } from 'node:fs'
+import { openPreviewFile, PreviewError } from './preview-file.js'
+import { readTextFilePage, readTextFileStat, textPageRequestFields } from './text-file-pages.js'
 import imageSize from 'buffer-image-size'
-import { open, realpath, stat } from 'node:fs/promises'
-import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
 import type { PiSessionFilePreview } from '@pi-nest/contracts'
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
@@ -12,36 +10,11 @@ import type { RuntimeSecurity } from './runtime-security.js'
 import type { SessionIndex } from './session-index.js'
 
 const maxPreviewBytes = 1_048_576
-export class PreviewError extends Error {
-  constructor(message: string, readonly status: 400 | 403 | 404 | 413 | 415) { super(message) }
-}
 
 async function readPreviewFile(cwd: string, path: string, searchRoot: string | undefined, maxBytes: number, allowedRoot?: string) {
-  // A missing session directory must not prevent opening an absolute path.
-  const root = await realpath(cwd).catch(() => resolve(cwd))
-  let requested = resolve(root, path)
-  if (searchRoot !== undefined && !isAbsolute(path)) {
-    const scope = resolve(root, searchRoot)
-    const canonicalScope = await realpath(scope)
-    const scopeInfo = await stat(canonicalScope)
-    if (scopeInfo.isFile()) {
-      if (path !== basename(scope)) throw new PreviewError('搜索结果与文件范围不匹配。', 400)
-      requested = canonicalScope
-    } else if (scopeInfo.isDirectory()) {
-      requested = resolve(canonicalScope, path)
-    } else throw new PreviewError('搜索范围不是文件或目录。', 400)
-  }
-  const canonical = await realpath(requested)
-  if (allowedRoot && !isWorkspacePath(allowedRoot, canonical)) throw new PreviewError('文件位于项目范围之外。', 403)
-  const file = await open(canonical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  const opened = await openPreviewFile(cwd, path, searchRoot, allowedRoot)
+  const { file, info } = opened
   try {
-    const info = await file.stat()
-    if (!info.isFile()) throw new PreviewError('此路径不是普通文件。', 400)
-    // Recheck identity after opening; never read a replaced path's descriptor.
-    const current = await realpath(canonical)
-    if (allowedRoot && !isWorkspacePath(allowedRoot, current)) throw new PreviewError('文件位于项目范围之外。', 403)
-    const currentInfo = await stat(current)
-    if (info.dev !== currentInfo.dev || info.ino !== currentInfo.ino) throw new PreviewError('文件已变化，请重试。', 400)
     if (info.size > maxBytes) throw new PreviewError(`文件超过 ${maxBytes / 1_048_576} MiB，无法在此预览。`, 413)
     const buffer = Buffer.alloc(maxBytes + 1)
     let length = 0
@@ -51,9 +24,7 @@ async function readPreviewFile(cwd: string, path: string, searchRoot: string | u
       length += bytesRead
     }
     if (length > maxBytes) throw new PreviewError(`文件超过 ${maxBytes / 1_048_576} MiB，无法在此预览。`, 413)
-    const child = relative(root, canonical)
-    const outside = isAbsolute(child) || child === '..' || child.startsWith(`..${sep}`)
-    return { path: outside ? canonical : child, buffer: buffer.subarray(0, length) }
+    return { path: opened.path, buffer: buffer.subarray(0, length) }
   } finally { await file.close() }
 }
 
@@ -85,16 +56,20 @@ export async function readSessionImagePreview(cwd: string, path: string, searchR
 
 export function createSessionFilePreviewRoutes(security: RuntimeSecurity, sessions: SessionIndex) {
   const routes = new Hono()
-  for (const endpoint of ['/sessions/:sessionId/file-preview', '/sessions/:sessionId/file-preview/image']) {
+  for (const endpoint of ['/sessions/:sessionId/file-preview', '/sessions/:sessionId/file-preview/image', '/sessions/:sessionId/file-preview/text-page', '/sessions/:sessionId/file-preview/stat']) {
     routes.use(endpoint, configurationSecurity(security), bodyLimit({ maxSize: 16_384 }))
     routes.post(endpoint, async (context) => {
-      const parsed = z.object({ path: z.string().min(1).max(4096).refine((path) => !path.includes('\0')), searchRoot: z.string().min(1).max(4096).refine((path) => !path.includes('\0')).optional() }).strict().safeParse(await context.req.json().catch(() => undefined))
+      const schema = z.object({ path: z.string().min(1).max(4096).refine((path) => !path.includes('\0')), searchRoot: z.string().min(1).max(4096).refine((path) => !path.includes('\0')).optional() }).strict()
+      const parsed = (endpoint.endsWith('/text-page') ? schema.extend(textPageRequestFields) : schema).safeParse(await context.req.json().catch(() => undefined))
       if (!parsed.success) return context.json({ error: '文件路径无效。' }, 400)
       try {
         const sessionId = context.req.param('sessionId')
         if (!sessionId) return context.json({ error: '找不到项目会话。' }, 404)
         const session = await sessions.resolve(sessionId)
         if (!session || !session.cwd) return context.json({ error: '找不到项目会话。' }, 404)
+        const input = { cwd: session.cwd, ...parsed.data, signal: context.req.raw.signal }
+        if (endpoint.endsWith('/text-page')) return context.json(await readTextFilePage(input))
+        if (endpoint.endsWith('/stat')) return context.json(await readTextFileStat(input))
         if (endpoint.endsWith('/image')) {
           const image = await readSessionImagePreview(session.cwd, parsed.data.path, parsed.data.searchRoot)
           context.header('Content-Type', image.mime)
@@ -104,7 +79,7 @@ export function createSessionFilePreviewRoutes(security: RuntimeSecurity, sessio
         }
         return context.json(await readSessionFilePreview(session.cwd, parsed.data.path, parsed.data.searchRoot))
       } catch (error) {
-        if (error instanceof PreviewError) return context.json({ error: error.message }, error.status)
+        if (error instanceof PreviewError) return context.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, error.status)
         const code = (error as NodeJS.ErrnoException).code
         if (code === 'ENOENT' || code === 'ENOTDIR') return context.json({ error: '文件已删除或不存在。' }, 404)
         if (code === 'EACCES' || code === 'EPERM' || code === 'ELOOP') return context.json({ error: '无法访问此文件。' }, 403)

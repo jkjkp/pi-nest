@@ -161,3 +161,13 @@ it.skipIf(process.platform === 'win32')('rejects an external FIFO without waitin
   execFileSync('mkfifo', [fifo])
   await expect(readSessionFilePreview(cwd, fifo)).rejects.toMatchObject({ status: 400 })
 })
+
+it('uses the paged reader for legacy session links with search roots and external files', async () => {
+  mkdirSync(join(cwd, 'nested')); writeFileSync(join(cwd, 'nested', 'large.log'), 'line\n'.repeat(300_000))
+  const external = join(directory, 'outside.txt'); writeFileSync(external, 'outside')
+  const security = new RuntimeSecurity()
+  const app = createApp(undefined, security, undefined, sessionIndex.index)
+  const request = (body: unknown) => app.request('/api/sessions/one/file-preview/text-page', { method: 'POST', headers: { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  expect((await request({ path: 'large.log', searchRoot: 'nested', targetLine: 200_000 })).status).toBe(200)
+  expect(await (await request({ path: external })).json()).toMatchObject({ kind: 'page', text: 'outside' })
+})

@@ -1,3 +1,4 @@
+import { readTextFilePage, readTextFileStat, textPageRequestFields } from './text-file-pages.js'
 import { watch, type FSWatcher } from 'node:fs'
 import { readdir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
@@ -7,7 +8,8 @@ import { stream } from 'hono/streaming'
 import { z } from 'zod'
 import type { WorkspaceDirectory, WorkspaceFileScope } from '@pi-nest/contracts'
 import { configurationSecurity } from './configuration-routes.js'
-import { PreviewError, readSessionFilePreview, readSessionImagePreview } from './session-file-preview.js'
+import { PreviewError } from './preview-file.js'
+import { readSessionFilePreview, readSessionImagePreview } from './session-file-preview.js'
 import { isWorkspacePath } from './workspace-file-path.js'
 import type { ProjectRegistry } from './project-registry.js'
 import type { RuntimeSecurity } from './runtime-security.js'
@@ -39,7 +41,7 @@ export function createWorkspaceFileRoutes(security: RuntimeSecurity, projects: P
   }
   const routes = new Hono().use('*', configurationSecurity(security), bodyLimit({ maxSize: 32_768 }))
   routes.onError((error, context) => {
-    if (error instanceof PreviewError) return context.json({ error: error.message }, error.status)
+    if (error instanceof PreviewError) return context.json({ error: error.message, ...(error.code ? { code: error.code } : {}) }, error.status)
     const code = (error as NodeJS.ErrnoException).code
     if (code === 'ENOENT' || code === 'ENOTDIR') return context.json({ error: '文件或目录不存在。' }, 404)
     if (['EACCES', 'EPERM', 'ELOOP'].includes(code ?? '')) return context.json({ error: '没有访问此路径的权限。' }, 403)
@@ -69,6 +71,16 @@ export function createWorkspaceFileRoutes(security: RuntimeSecurity, projects: P
       return context.body(new Uint8Array(image.buffer))
     }
     return context.json(await readSessionFilePreview(root, target, undefined, root))
+  })
+  for (const endpoint of ['/text-page', '/stat']) routes.post(endpoint, async context => {
+    const base = z.object({ scope: scopeSchema, path: pathSchema.min(1) }).strict()
+    const schema = endpoint === '/text-page' ? base.extend(textPageRequestFields) : base
+    const parsed = schema.safeParse(await context.req.json().catch(() => undefined))
+    if (!parsed.success) return context.json({ error: '文件分页请求无效。' }, 400)
+    const root = await rootFor(parsed.data.scope)
+    const target = await targetWithin(root, parsed.data.path)
+    const input = { ...parsed.data, cwd: root, path: target, allowedRoot: root, signal: context.req.raw.signal }
+    return context.json(endpoint === '/stat' ? await readTextFileStat(input) : await readTextFilePage(input))
   })
   routes.post('/watch', async context => {
     const parsed = watchSchema.safeParse(await context.req.json().catch(() => undefined))
