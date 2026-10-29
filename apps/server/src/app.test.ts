@@ -207,6 +207,17 @@ describe('Pi Nest API', () => {
     expect(runtime.deleteSession).toHaveBeenCalledWith('session-1')
   })
 
+  it('returns handled admission for a first control command without a fake first message', async () => {
+    runtime.beginPrompt.mockReturnValue({ accepted: Promise.resolve('handled'), settled: Promise.resolve({ stopReason: 'stop' }) })
+    const response = await app().request('/api/sessions', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd: '/working', prompt: '/ponytail off' }),
+    })
+    expect(response.status).toBe(201)
+    const body = await response.json() as { disposition?: string; session: { firstMessage?: string } }
+    expect(body.disposition).toBe('handled')
+    expect(body.session.firstMessage).toBeUndefined()
+  })
+
   it('creates a native session only when the first prompt is admitted, then exposes a safe summary', async () => {
     runtime.beginPrompt.mockReturnValue({ accepted: Promise.resolve(), settled: new Promise(() => undefined) })
 

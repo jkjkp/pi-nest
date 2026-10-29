@@ -56,8 +56,10 @@ export function useWorkspaceDraft({ sessionRuns, draftProject, attachmentDraft, 
       if (selection?.model && !draftModels.some((model) => model.provider === selection.model?.provider && model.id === selection.model.id)) throw new Error('所选模型已不可用，请重新选择。')
       const initialSettings = selection ? { ...selection, ...(selection.thinkingLevel !== undefined ? { thinkingLevel: draftThinking } : {}) } : undefined
       const created = await createSession(draftProject.cwd, firstPrompt, attachments, initialSettings)
+      useWorkspaceStore.getState().transferFilePreview(`project:${draftProject.cwd}`, created.id)
       attachmentDraft.clear(attachedItems)
-      sessionRuns.adopt({ historyTurnCount: 0, prompt: firstPrompt || '请查看附件。', ...(input ? { attachments: input.attachments, submissionId: input.submissionId } : {}), sessionId: created.id })
+      if (created.disposition === 'handled') sessionRuns.openSession(created.id)
+      else sessionRuns.adopt({ historyTurnCount: 0, prompt: firstPrompt || '请查看附件。', ...(input ? { attachments: input.attachments, submissionId: input.submissionId } : {}), sessionId: created.id })
       queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => [created, ...(current ?? []).filter((session) => session.id !== created.id)])
       setDraftPrompt((value) => value.trim() === firstPrompt ? '' : value)
       setSearchParams({ session: created.id })

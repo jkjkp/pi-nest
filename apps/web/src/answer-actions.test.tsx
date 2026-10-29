@@ -17,6 +17,7 @@ afterEach(async () => { await act(() => root.unmount()); container.remove(); vi.
 function button(label: string) { return container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)! }
 
 it('copies the original reply with borderless icons matching the text size', async () => {
+  vi.useFakeTimers()
   const writeText = vi.fn(async () => {})
   vi.spyOn(navigator, 'clipboard', 'get').mockReturnValue({ writeText } as unknown as Clipboard)
   await act(() => root.render(<AnswerActions text={'**原文**\n第二段'} onBranch={vi.fn(async () => {})} />))
@@ -26,11 +27,43 @@ it('copies the original reply with borderless icons matching the text size', asy
   const icon = button('复制回复').querySelector('svg')!.outerHTML
   await act(async () => button('复制回复').click())
   expect(writeText).toHaveBeenCalledExactlyOnceWith('**原文**\n第二段')
+  expect(button('已复制').querySelector('svg')?.classList.contains('lucide-check')).toBe(true)
+  expect(button('已复制').classList.contains('border-0')).toBe(true)
+  expect(button('已复制').title).toBe('已复制')
+  expect(document.querySelector('[role="status"]')?.textContent).toBe('复制成功')
+  const successToast = container.querySelector<HTMLElement>('[role="status"]')!
+  expect(successToast.parentElement).toBe(button('已复制').parentElement)
+  expect(successToast.classList.contains('bottom-full')).toBe(true)
+  await act(() => vi.advanceTimersByTime(499))
+  expect(button('已复制')).not.toBeNull()
+  await act(() => vi.advanceTimersByTime(1))
   expect(button('复制回复').querySelector('svg')!.outerHTML).toBe(icon)
-  expect(button('复制回复').title).toBe('复制回复')
-  expect(button('已复制')).toBeNull()
+  expect(document.querySelector('[role="status"]')?.textContent).toBe('复制成功')
+  await act(() => vi.advanceTimersByTime(500))
+  expect(document.querySelector('[role="status"]')).toBeNull()
   await act(async () => button('复制回复').click())
   expect(writeText).toHaveBeenCalledTimes(2)
+})
+
+it('restarts success feedback on repeated copies and cleans up on unmount', async () => {
+  vi.useFakeTimers()
+  vi.spyOn(navigator, 'clipboard', 'get').mockReturnValue({ writeText: vi.fn(async () => {}) } as unknown as Clipboard)
+  await act(() => root.render(<AnswerActions text="answer" />))
+  await act(async () => button('复制回复').click())
+  await act(() => vi.advanceTimersByTime(400))
+  await act(async () => button('已复制').click())
+  await act(() => vi.advanceTimersByTime(499))
+  expect(button('已复制')).not.toBeNull()
+  await act(() => vi.advanceTimersByTime(1))
+  expect(button('复制回复')).not.toBeNull()
+  await act(() => vi.advanceTimersByTime(499))
+  expect(document.querySelector('[role="status"]')?.textContent).toBe('复制成功')
+  await act(() => vi.advanceTimersByTime(1))
+  expect(document.querySelector('[role="status"]')).toBeNull()
+  await act(async () => button('复制回复').click())
+  await act(() => root.render(null))
+  expect(document.querySelector('[role="status"]')).toBeNull()
+  expect(vi.getTimerCount()).toBe(0)
 })
 
 it.each([true, false])('shows a one-second toast on copy failure without inline text (clipboard available: %s)', async (available) => {
@@ -39,6 +72,8 @@ it.each([true, false])('shows a one-second toast on copy failure without inline 
   await act(() => root.render(<AnswerActions text="answer" />))
   expect(button('分支到聊天').disabled).toBe(true)
   await act(async () => button('复制回复').click())
+  expect(button('已复制')).toBeNull()
+  expect(button('复制回复').disabled).toBe(false)
   expect(container.querySelector('[role="alert"]')).toBeNull()
   expect(document.querySelector('[role="alert"]')?.textContent).toBe('复制失败')
   await act(() => vi.advanceTimersByTime(999))

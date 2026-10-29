@@ -16,7 +16,7 @@ it('shows a proportional ring and keeps cost out of the compact trigger', () => 
 })
 
 it('keeps unknown post-compaction context distinct from zero and retains the original color at capacity', () => {
-  expect(renderToStaticMarkup(<SessionStatistics details={{ data: { ...data, contextUsage: { ...data.contextUsage, tokens: null, percent: null } } }} onRetry={() => undefined} />)).toContain('占用未知')
+  expect(renderToStaticMarkup(<SessionStatistics details={{ data: { ...data, contextUsage: { ...data.contextUsage, tokens: null, percent: null } } }} onRetry={() => undefined} />)).toContain('上下文用量待更新')
   expect(renderToStaticMarkup(<SessionStatistics details={{ data: { ...data, contextUsage: { ...data.contextUsage, percent: 100 } } }} onRetry={() => undefined} />)).not.toContain('text-destructive')
   expect(renderToStaticMarkup(<SessionStatistics onRetry={() => undefined} />)).not.toContain('0.0%')
 })

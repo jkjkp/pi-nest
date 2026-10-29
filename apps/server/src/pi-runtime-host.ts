@@ -1,6 +1,6 @@
 import { piAssistantStopReason } from '@pi-nest/contracts/pi-events'
 import { cacheHitRateFromUsage, latestCacheHitRate } from './runtime-statistics.js'
-import type { PiRuntimeEvent, RuntimeFailureKind as PiRuntimeFailureKind } from '@pi-nest/contracts'
+import type { PiRuntimeEvent, PiPromptDisposition, RuntimeFailureKind as PiRuntimeFailureKind } from '@pi-nest/contracts'
 import { PiRpcConnectionError, PiRpcProcess, type PiRpcProcessState, type PiInputImage } from '@pi-nest/pi-adapter'
 
 export type PiRuntimeSession = {
@@ -20,7 +20,7 @@ export type PiRuntimePromptResult = {
 }
 
 export type PiRuntimePrompt = {
-  accepted: Promise<void>
+  accepted: Promise<PiPromptDisposition>
   settled: Promise<PiRuntimePromptResult>
 }
 
@@ -42,6 +42,13 @@ function defaultProcessFactory(session: PiRuntimeSession) {
     expectedSessionId: session.id,
     sessionFile: session.sessionFile,
   })
+}
+
+export function promptDisposition(response: Record<string, unknown>) {
+  const data = response.data as { disposition?: unknown } | undefined
+  const value = data?.disposition
+  if (value !== 'handled' && value !== 'started' && value !== 'queued') throw new Error('Pi RPC returned an invalid prompt disposition; do not retry automatically')
+  return value
 }
 
 function stateFrom(response: Record<string, unknown>) {
@@ -146,13 +153,13 @@ export class PiRuntimeHost {
   }
 
   beginPrompt(message: string, images?: PiInputImage[]): PiRuntimePrompt {
-    let accept: () => void = () => undefined
+    let accept: (disposition: PiPromptDisposition) => void = () => undefined
     let rejectAcceptance: (cause: unknown) => void = () => undefined
     let accepted = false
-    const acceptance = new Promise<void>((resolve, reject) => {
-      accept = () => {
+    const acceptance = new Promise<PiPromptDisposition>((resolve, reject) => {
+      accept = (disposition) => {
         accepted = true
-        resolve()
+        resolve(disposition)
       }
       rejectAcceptance = reject
     })
@@ -163,7 +170,7 @@ export class PiRuntimeHost {
     return { accepted: acceptance, settled }
   }
 
-  private async runPrompt(message: string, accept: () => void, images?: PiInputImage[]): Promise<PiRuntimePromptResult> {
+  private async runPrompt(message: string, accept: (disposition: PiPromptDisposition) => void, images?: PiInputImage[]): Promise<PiRuntimePromptResult> {
     if (this.running) throw new Error('Pi runtime session is already running')
     await this.start()
     const process = this.process
@@ -190,8 +197,8 @@ export class PiRuntimeHost {
         const model = state.model as { input?: string[] } | undefined
         if (Array.isArray(model?.input) && !model.input.includes('image')) throw new Error('当前模型不支持图片输入，请选择视觉模型。')
       }
-      await process.send({ type: 'prompt', message, ...(images?.length ? { images } : {}) })
-      accept()
+      const response = await process.send({ type: 'prompt', message, ...(images?.length ? { images } : {}) })
+      accept(promptDisposition(response))
       const state = stateFrom(await process.send({ type: 'get_state' }))
       this.model = modelFrom(state)
       this.thinkingLevel = typeof state.thinkingLevel === 'string' ? state.thinkingLevel : undefined

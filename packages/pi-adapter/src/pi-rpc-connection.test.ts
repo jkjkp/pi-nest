@@ -41,6 +41,30 @@ function createConnection(child: FakeChild) {
 }
 
 describe('PiRpcConnection', () => {
+  it('lets compaction outlive query timeouts while keeping abort available', async () => {
+    vi.useFakeTimers()
+    const child = new FakeChild()
+    const { connection } = createConnection(child)
+    const failures = vi.fn()
+    connection.onFailure(failures)
+    await connection.start()
+    const compact = connection.send({ type: 'compact' })
+    const rejection = vi.fn()
+    void compact.catch(rejection)
+    const command = JSON.parse(child.stdin.read().toString())
+    try {
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(rejection).not.toHaveBeenCalled()
+      expect(failures).not.toHaveBeenCalled()
+      const abort = connection.send({ type: 'abort' })
+      const abortCommand = JSON.parse(child.stdin.read().toString())
+      child.stdout.write(`${JSON.stringify({ type: 'response', id: abortCommand.id, command: 'abort', success: true })}\n`)
+      await expect(abort).resolves.toMatchObject({ success: true })
+      child.stdout.write(`${JSON.stringify({ type: 'response', id: command.id, command: 'compact', success: true, data: { summary: 'done' } })}\n`)
+      await expect(compact).resolves.toMatchObject({ data: { summary: 'done' } })
+    } finally { await connection.close(); vi.useRealTimers() }
+  })
+
   it('distinguishes command rejection from connection failure and keeps the connection usable', async () => {
     const child = new FakeChild()
     const { connection } = createConnection(child)

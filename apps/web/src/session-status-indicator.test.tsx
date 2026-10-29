@@ -3,10 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { SessionStatusIndicator } from './session-status-indicator.js'
 
 describe('sidebar status', () => {
-  it('keeps a fixed slot and makes active work take priority over unread replies', () => {
+  it('releases empty status space and makes active work take priority over unread replies', () => {
     const idle = renderToStaticMarkup(<SessionStatusIndicator status="idle" unread={false} />)
-    expect(idle).toContain('size-4 shrink-0')
-    expect(idle).not.toContain('aria-label')
+    expect(idle).toBe('')
     const running = renderToStaticMarkup(<SessionStatusIndicator status="running" unread />)
     expect(running).toContain('正在回复')
     expect(running).toContain('motion-reduce:animate-none')

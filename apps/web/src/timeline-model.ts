@@ -35,6 +35,7 @@ export type TimelinePart =
 
 export type TimelineItem = {
   fileChanges?: PiFileChange[]
+  fileChangesIncomplete?: boolean
   attachmentWarning?: string
   attachments?: AttachmentRef[]
   steering?: RuntimeTurn['steering']
@@ -309,7 +310,10 @@ function historyItems(entries: PiSessionHistoryEntry[]): TimelineItem[] {
     if (entry.type !== 'custom' || entry.raw.customType !== 'pi-nest-file-changes') continue
     const data = record(entry.raw.data)
     const target = data?.version === 1 && typeof data.turnId === 'string' && byId.get(data.turnId)
-    if (target && Array.isArray(data?.files)) target.fileChanges = data.files.flatMap((value) => { const stats = fileChangeStatistics(value); return stats ? [stats] : [] })
+    if (target && Array.isArray(data?.files)) {
+      target.fileChanges = data.files.flatMap((value) => { const stats = fileChangeStatistics(value); return stats ? [stats] : [] })
+      target.fileChangesIncomplete = data.incomplete === true
+    }
   }
   return items
 }
@@ -378,6 +382,7 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
     // History-dependent fields belong to this merge, not the shared event projection.
     const item: TimelineItem = { ...projection.item, id: persisted?.id ?? turn.id, startedAt: persisted?.startedAt ?? turn.startedAt, runtimeTiming, attachmentWarning: undefined }
     item.fileChanges = persisted?.fileChanges
+    item.fileChangesIncomplete = persisted?.fileChangesIncomplete
     item.attachments = turn.attachments ?? persisted?.attachments
     item.displayId = `${turn.id}:${turn.submittedAt ?? turn.startedAt}`
     item.steering = turn.steering ? { ...turn.steering, ...(persisted ? { status: 'applied' as const } : {}) } : undefined

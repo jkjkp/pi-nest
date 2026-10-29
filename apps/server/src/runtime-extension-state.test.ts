@@ -55,7 +55,7 @@ describe('RuntimeExtensionState', () => {
     expect(extensions.pendingDialogs('session-b')).toHaveLength(1)
     taken!.restore()
     expect(extensions.pendingDialogs('session-a')).toEqual([])
-    extensions.close()
+    await extensions.close()
     expect(extensions.pendingDialogs('session-b')).toEqual([])
   })
 
@@ -72,4 +72,14 @@ describe('RuntimeExtensionState', () => {
     expect(extensions.snapshot('session-a').freshness).toBe('unknown')
     expect(extensions.pendingDialogs('session-a')).toEqual([])
   })
+})
+
+
+it('does not confirm another plugin cached status when a fresh plugin publishes', async () => {
+  const { directory, extensions } = await state()
+  await extensions.trackProjection('s', { type: 'setStatus', statusKey: 'ponytail', statusText: 'FULL' })
+  const restored = new RuntimeExtensionState(new ProjectionSidecarStore({ directory }))
+  await restored.ready
+  await restored.trackProjection('s', { type: 'setStatus', statusKey: 'other', statusText: 'ready' })
+  expect(restored.snapshot('s')).toEqual({ freshness: 'known', statuses: { other: 'ready' }, widgets: {} })
 })

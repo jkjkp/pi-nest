@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { lastCompletedAssistantText, parseComposerCommand } from './composer-commands.js'
+import { composerCommands, lastCompletedAssistantText, parseComposerCommand } from './composer-commands.js'
 import type { SessionRunController } from './session-run-controller.js'
 import type { useWorkspaceSession } from './use-workspace-session.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
-type CompactNotice = { message: string; running?: boolean; cancelling?: boolean; error?: boolean }
+type CompactNotice = { message: string; running?: boolean; cancelling?: boolean; error?: boolean; inline?: boolean; compacted?: boolean }
 
 type Workspace = ReturnType<typeof useWorkspaceSession>
 type CommandUi = { fork: (onFork: (entryId: string, revision: string) => Promise<void>) => void; rename: () => void; statistics: () => void; settings: () => void }
@@ -28,14 +28,14 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
 
   const compactNotice = compactNotices[workspace.selectedSessionId]
   useEffect(() => {
-    if (!compactNotice || compactNotice.running) return
+    if (!workspace.isActive || !compactNotice || compactNotice.running) return
     const sessionId = workspace.selectedSessionId
-    const timer = setTimeout(() => setCompactNotices((current) => {
+    // oxlint-disable-next-line react/set-state-in-effect -- Dismiss session-local feedback when the next message starts.
+    setCompactNotices((current) => {
       if (current[sessionId] !== compactNotice) return current
       const next = { ...current }; delete next[sessionId]; return next
-    }), compactNotice.error ? 2000 : 3000)
-    return () => clearTimeout(timer)
-  }, [compactNotice, workspace.selectedSessionId])
+    })
+  }, [compactNotice, workspace.selectedSessionId, workspace.isActive])
 
   async function cancelCompact() {
     const sessionId = workspace.selectedSessionId
@@ -55,24 +55,32 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
     const parsed = parseComposerCommand(text)
     if (!parsed) return false
     const command = parsed
+    const definition = composerCommands.find((entry) => entry.name === command.name)!
+    const submitted = useWorkspaceStore.getState()
+    const submittedRevision = submitted.draftRevisions[sessionId] ?? 0
     setCompactNotices((current) => {
-      if (!current[sessionId]) return current
+      if (!current[sessionId] || current[sessionId].compacted) return current
       const next = { ...current }; delete next[sessionId]; return next
     })
     function report(message: string, error = false) {
       if (currentSession.current === sessionId) setNotice({ sessionId, message, error })
     }
+    function consumeDraft() {
+      const store = useWorkspaceStore.getState()
+      if ((store.draftRevisions[sessionId] ?? 0) !== submittedRevision) return
+      store.setDraft(sessionId, '')
+    }
     function complete(message?: string) {
       if (currentSession.current !== sessionId) return
-      const store = useWorkspaceStore.getState()
-      if (store.drafts[sessionId] === text) store.setDraft(sessionId, '')
+      consumeDraft()
       setNotice(message ? { sessionId, message } : undefined)
     }
     async function execute() {
       try {
+        if (command.error) throw new Error(command.error)
         if (workspace.isDraft || !workspace.selectedSession) throw new Error('请先进入已有会话，再执行命令。')
-        if (['session', 'copy', 'settings', 'fork', 'clone', 'rename'].includes(command.name) && command.argument) throw new Error(`用法：/${command.name}（无需参数）`)
-        if (['compact', 'rename', 'fork', 'clone'].includes(command.name)) {
+        if (!definition.acceptsArguments && command.argument) throw new Error(`用法：/${command.name}（无需参数）`)
+        if (definition.requiresIdle) {
           if (workspace.isActive || workspace.runtimeStates[sessionId]?.lifecycle === 'active') throw new Error('请等待当前任务结束后再执行此命令。')
           if (workspace.mutatingSessionId === sessionId || ['loading', 'switching'].includes(workspace.modelStatus) || ['loading', 'switching'].includes(workspace.thinkingStatus) || workspace.runtimeStates[sessionId]?.lifecycle === 'loading') throw new Error('正在处理会话操作，请稍后重试。')
         }
@@ -83,13 +91,10 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
           case 'compact': {
             compacting.current.add(sessionId)
             setNotice(undefined)
-            const store = useWorkspaceStore.getState()
-            if (store.drafts[sessionId] === text) store.setDraft(sessionId, '')
+            consumeDraft()
             setCompactNotices((current) => ({ ...current, [sessionId]: { message: '压缩上下文… (Esc 取消)', running: true } }))
             const completed = await sessionRuns.compact(sessionId, command.argument || undefined)
-            const current = useWorkspaceStore.getState()
-            if (completed !== false && current.drafts[sessionId] === text) current.setDraft(sessionId, '')
-            setCompactNotices((current) => ({ ...current, [sessionId]: { message: completed === false ? '已取消上下文压缩' : '上下文压缩完成' } }))
+            setCompactNotices((current) => ({ ...current, [sessionId]: completed === false ? { message: '已取消上下文压缩' } : { message: '上下文已压缩', compacted: true } }))
             break
           }
           case 'rename':
@@ -135,9 +140,7 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : '命令执行失败，请重试。'
         if (compacting.current.has(sessionId)) {
-          const store = useWorkspaceStore.getState()
-          if (!store.drafts[sessionId]) store.setDraft(sessionId, text)
-          setCompactNotices((current) => ({ ...current, [sessionId]: { message, error: true } }))
+          setCompactNotices((current) => ({ ...current, [sessionId]: { message, error: true, inline: true } }))
         } else report(message, true)
       } finally {
         compacting.current.delete(sessionId)
@@ -149,5 +152,6 @@ export function useWorkspaceCommands(workspace: Workspace, sessionRuns: SessionR
     return true
   }
 
-  return { submit, cancelCompact, busy: busySessions.includes(workspace.selectedSessionId), notice: compactNotice ?? (notice?.sessionId === workspace.selectedSessionId ? notice : undefined) }
+  const commandNotice = notice?.sessionId === workspace.selectedSessionId ? notice : undefined
+  return { submit, cancelCompact, busy: busySessions.includes(workspace.selectedSessionId), compacted: compactNotice?.compacted === true, notice: compactNotice?.compacted ? commandNotice : compactNotice ?? commandNotice }
 }

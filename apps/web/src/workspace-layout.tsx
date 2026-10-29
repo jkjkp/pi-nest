@@ -38,7 +38,7 @@ export function WorkspaceLayout({ title, titleTooltip, navigation, preview, prev
           <SheetTrigger asChild>
             <Button aria-label="打开会话导航" className="md:hidden" size="icon-sm" variant="ghost"><Menu aria-hidden="true" /></Button>
           </SheetTrigger>
-          <SheetContent className="p-0" side="left">
+          <SheetContent className="inset-y-2 left-2 rounded-lg p-0" side="left">
             <SheetTitle className="sr-only">会话导航</SheetTitle>
             <SheetDescription className="sr-only">选择要查看的 Pi 原生会话。</SheetDescription>
             {navigation}
@@ -53,7 +53,7 @@ export function WorkspaceLayout({ title, titleTooltip, navigation, preview, prev
       '--navigation-width': `${displayedNavigationWidth}px`,
       '--side-panel-width': previewOpen ? `min(${Number.isFinite(previewWidth) ? previewWidth : 300}px, calc((100% - var(--navigation-width)) / 2))` : '0px',
     } as CSSProperties}>
-      <aside className="relative hidden min-h-0 min-w-0 border-r bg-card/60 md:block">{navigation}<SidebarResizeHandle panel="navigation" containerRef={containerRef} width={navigationWidth} onWidthChange={setNavigationWidth} /></aside>
+      <aside className="relative hidden min-h-0 min-w-0 p-2 md:block"><div className="h-full min-h-0 overflow-hidden rounded-lg border bg-card/60">{navigation}</div><SidebarResizeHandle panel="navigation" containerRef={containerRef} width={navigationWidth} onWidthChange={setNavigationWidth} /></aside>
       {children}
       {preview}
     </div>

@@ -157,6 +157,11 @@ it('explains unavailable statistics for each file without pretending they are ze
   expect(container.textContent).not.toContain('+0')
 })
 
+it('warns when workspace statistics are incomplete even when no changes were captured', async () => {
+  await act(() => root.render(<TurnFileSummary files={[]} state="complete" incomplete />))
+  expect(container.querySelector('[role="status"]')?.textContent).toContain('统计可能不完整')
+})
+
 it.each([
   { cwd: 'D:\\Project', relative: 'src\\a.ts', absolute: 'd:/project/src/a.ts' },
   { cwd: '\\\\server\\share\\Project', relative: 'src\\a.ts', absolute: '//server/share/Project/src/a.ts' },

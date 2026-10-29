@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { RuntimeWebSocketClient } from './runtime-websocket-client.js'
 import { createSessionRunController } from './session-run-controller.js'
 import { useWorkspaceStore } from './workspace-store.js'
+import { createStore } from 'zustand/vanilla'
+import { createWorkspaceState } from './workspace-store.js'
 
 class FakeSocket {
   readyState = 0
@@ -19,6 +21,34 @@ class FakeSocket {
   open() { this.readyState = 1; this.emit('open', {}) }
   receive(message: unknown) { this.emit('message', { data: JSON.stringify(message) }) }
 }
+
+it('replays history without overwriting drafts and still accepts a newer live editor update', async () => {
+  vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+  const socket = new FakeSocket()
+  const factory = vi.fn(() => socket as never)
+  const client = new RuntimeWebSocketClient({
+    fetchFn: vi.fn(async () => new Response(JSON.stringify({ runtimeId: 'runtime-1', token: 'token', websocketPath: '/api/runtime' }))),
+    socketFactory: factory,
+  })
+  const state = createStore(createWorkspaceState)
+  state.getState().setDraft('session-a', '用户新草稿')
+  createSessionRunController({ state, invalidateHistory: vi.fn(), runtime: client })
+  try {
+    const watch = client.watch('session-a')
+    await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce())
+    socket.open()
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    socket.receive({ type: 'session_snapshot', sessionId: 'session-a', atSequence: 3, replayAfter: 0, extensionUi: { freshness: 'known', statuses: {}, widgets: {} }, runtime: { lifecycle: 'active', revision: 1 } })
+    socket.receive({ type: 'ack', command: 'watch', id: socket.sent[0]!.id, sessionId: 'session-a' })
+    await watch
+    for (let sequence = 1; sequence <= 3; sequence++) {
+      socket.receive({ type: 'pi_event', sessionId: 'session-a', sequence, observedAt: 'now', event: { type: 'extension_ui_request', method: 'set_editor_text', text: '/compact' } })
+    }
+    expect(state.getState().drafts['session-a']).toBe('用户新草稿')
+    socket.receive({ type: 'pi_event', sessionId: 'session-a', sequence: 4, observedAt: 'now', event: { type: 'extension_ui_request', method: 'set_editor_text', text: '新的扩展内容' } })
+    expect(state.getState().drafts['session-a']).toBe('新的扩展内容')
+  } finally { vi.unstubAllGlobals() }
+})
 
 describe('RuntimeWebSocketClient', () => {
   it('rejects an unsuccessful queue command without failing the current run', async () => {

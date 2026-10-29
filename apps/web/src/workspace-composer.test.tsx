@@ -21,10 +21,10 @@ beforeEach(() => {
       creatingDraft: false, prompt: 'next', currentRun: undefined, history: undefined,
       setDraft: vi.fn(), setDraftPrompt: vi.fn(), status: 'running', isActive: true, submittingInput: false,
       steerQueued: vi.fn(), planStatus: '', planPolicy: undefined, extensionStatus: '', planTurnId: undefined,
-      retryHistory: vi.fn(), setPendingJump: vi.fn(),
+      retryHistory: vi.fn(), requestTurnJump: vi.fn(),
       attachmentDraft: { items: [], add: vi.fn(), busy: false } as unknown as Props['state']['attachmentDraft'],
     },
-    commands: { cancelCompact: vi.fn(), busy: false, notice: undefined, submit: vi.fn(() => false) },
+    commands: { cancelCompact: vi.fn(), busy: false, compacted: false, notice: undefined, submit: vi.fn(() => false) },
     sessionRuns: { getCommands: vi.fn(async () => []) } as unknown as SessionRunController,
     textareaRef: createRef(), setComposer: vi.fn(), onSubmit: vi.fn(), onAbort: vi.fn(),
     controls: <span>model controls</span>, canQuery: false, settingsBusy: false, onError: vi.fn(),
@@ -32,6 +32,19 @@ beforeEach(() => {
 })
 afterEach(async () => { await act(() => root.unmount()); client.clear(); container.remove(); vi.unstubAllGlobals() })
 async function render() { await act(() => root.render(<QueryClientProvider client={client}><WorkspaceComposer {...props} /></QueryClientProvider>)) }
+
+it('places the compaction marker before the input and outside the chat history', async () => {
+  props = { ...props, commands: { ...props.commands, compacted: true } }
+  await render()
+  const marker = container.querySelector('[data-slot="context-compacted"]')!
+  const composer = container.querySelector('[data-slot="message-composer"]')!
+  expect(marker.textContent).toBe('上下文已压缩')
+  expect(marker.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(composer.contains(marker)).toBe(false)
+  props = { ...props, commands: { ...props.commands, compacted: false } }
+  await render()
+  expect(container.querySelector('[data-slot="context-compacted"]')).toBeNull()
+})
 
 it('preserves queue, steering, composition keys and the dialog focus ref when switching sessions', async () => {
   await render()

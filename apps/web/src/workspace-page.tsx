@@ -12,7 +12,7 @@ import { RenderErrorBoundary } from './render-error-boundary.js'
 import { useWorkspaceCommands } from './use-workspace-commands.js'
 import { SessionRenameDialog } from './session-rename-dialog.js'
 import { SessionStatistics } from './session-statistics.js'
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { ArrowDown, CircleX, Folder, LoaderCircle } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
@@ -37,9 +37,9 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
-    sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
+    sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, jumpError, cancelTurnJump, finishTurnJump,
     startDraft, openProject, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
-    readTurnPrompt, jumpToUnloadedTurn, openProjectFolder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
+    readTurnPrompt, requestTurnJump, openProjectFolder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
   const [attachmentError, setAttachmentError] = useState<string>()
   const isHome = !selectedSessionId && !isDraft
@@ -56,10 +56,14 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const setModelSelectorOpen = (open: boolean) => setModelSelector({ sessionId: modelSelectorKey, open })
   const {
     setComposer, showScrollToBottom, scrollToBottom, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
-    scrollToFinalAnswer, followFinalAnswer, jumpToTurn, rememberLayoutPosition, restoreLayoutPosition,
+    scrollToFinalAnswer, followFinalAnswer, beginTurnNavigation, rememberLayoutPosition, restoreLayoutPosition,
     rememberReadingPosition, registerTimelineScroll,
-  } = useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId: currentRun?.turns.findLast((turn) => turn.steering)?.id, isActive })
-  const preview = useWorkspaceFilePreview(selectedSessionId, rememberLayoutPosition, restoreLayoutPosition)
+  } = useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId: currentRun?.turns.findLast((turn) => turn.steering)?.id, isActive, pendingJump, onCancelTurnJump: cancelTurnJump })
+  const navigateToTurn = useCallback((turnId: string, cursor?: string, loaded = false) => {
+    beginTurnNavigation()
+    return requestTurnJump(turnId, cursor, loaded)
+  }, [beginTurnNavigation, requestTurnJump])
+  const preview = useWorkspaceFilePreview(selectedSessionId || (draftProject ? `project:${draftProject.cwd}` : 'home'), rememberLayoutPosition, restoreLayoutPosition, { cwd: displaySession?.cwd ?? draftProject?.cwd, scope: selectedSessionId ? { kind: 'session', id: selectedSessionId } : draftProject?.cwd ? { kind: 'project', cwd: draftProject.cwd } : undefined })
   const promptTextareaRef = useRef<HTMLTextAreaElement>(null)
 
   const [commandPanels, setCommandPanels] = useState<{ sessionId: string; statistics: boolean; fork?: (entryId: string, revision: string) => Promise<void>; rename?: { session: NonNullable<typeof selectedSession> } }>({ sessionId: selectedSessionId, statistics: false })
@@ -124,8 +128,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
         await handleRename(id, name)
       }} />}
       <WorkspaceLayout title={sessionTitle} titleTooltip={displaySession ? sessionDisplayName(displaySession) : undefined}
-        navigation={navigation} containerRef={workspaceGrid} previewOpen={!isHome && Boolean(preview.selection) && preview.open}
-        preview={<WorkspaceFilePreview preview={preview} isHome={isHome} containerRef={workspaceGrid} />}>
+        navigation={navigation} containerRef={workspaceGrid} previewOpen={preview.open}
+        preview={<WorkspaceFilePreview preview={preview} containerRef={workspaceGrid} />}>
         <section onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={(event) => { try { attachmentDrop(event, attachmentDraft.add) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '附件无法添加') } }} className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
           <header className="flex min-h-10 shrink-0 items-center gap-3 border-b bg-background/95 py-0.5 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -133,7 +137,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
               <h1 className="min-w-0 truncate text-[13px] leading-5 font-normal" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
               {selectedSession && <span className="inline-flex size-4 shrink-0" role={runtimeLoading ? 'status' : undefined} aria-label={runtimeLoading ? '正在加载 Pi 运行时' : undefined}>{runtimeLoading && <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />}</span>}
             </div>
-            <WorkspaceFilePreviewToggle available={Boolean(preview.selection)} open={preview.open} onToggle={preview.toggle} buttonRef={preview.toggleRef} />
+            <WorkspaceFilePreviewToggle open={preview.open} onToggle={preview.toggle} buttonRef={preview.toggleRef} />
             {selectedSessionId && <SessionInspector key={selectedSessionId} run={currentRun} session={displaySession} />}
           </header>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
@@ -159,19 +163,19 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   onFinalAnswerStart={scrollToFinalAnswer}
                   onFinalAnswerStream={followFinalAnswer}
                   onRetrySteering={retrySteering}
-                  onJumpToTurn={jumpToTurn}
+                  onRequestTurnJump={navigateToTurn}
                   onReadTurnPrompt={readTurnPrompt}
-                  onJumpToUnloadedTurn={jumpToUnloadedTurn}
                   branchDisabled={mutatingSessionId !== undefined}
                   onBranchAnswer={async (entryId, revision) => {
                     const result = await session.createBranch({ kind: 'fork', entryId, revision })
                     selectSession(result.session.id)
                   }}
                   onRetry={retryHistory}
-                  onPendingJumpHandled={() => setPendingJump(undefined)}
+                  onTurnJumpFinished={finishTurnJump}
                   overlayRoot={railOverlay}
                   pendingInputs={currentRun?.pendingInputs}
-                  pendingJumpTurnId={pendingJump?.sessionId === selectedSessionId ? pendingJump.turnId : undefined}
+                  pendingJump={pendingJump?.sessionId === selectedSessionId ? pendingJump : undefined}
+                  jumpError={jumpError}
                   scrollViewport={scrollViewport}
                   registerTimelineScroll={registerTimelineScroll}
                   systemEvents={currentRun?.systemEvents}
@@ -212,11 +216,11 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           {!isHome && <WorkspaceComposer
             state={{ creatingDraft, attachmentDraft, selectedSessionId, selectedSession, isDraft, draftProject, prompt, currentRun, history,
               setDraft, setDraftPrompt, status, isActive, submittingInput, steerQueued, planStatus, planPolicy,
-              extensionStatus, planTurnId, retryHistory, setPendingJump }}
+              extensionStatus, planTurnId, retryHistory, requestTurnJump: navigateToTurn }}
             commands={commands} sessionRuns={sessionRuns} textareaRef={promptTextareaRef} setComposer={setComposer}
             onSubmit={submitPrompt} onAbort={() => { void abortPrompt() }} error={attachmentError} onError={setAttachmentError}
             settingsBusy={modelStatus === 'loading' || modelStatus === 'switching' || thinkingStatus === 'loading' || thinkingStatus === 'switching'}
-            canQuery={!commands.busy && watchReady && !isActive && runtimeStates[selectedSessionId]?.lifecycle === 'idle' && modelStatus !== 'loading' && modelStatus !== 'switching' && thinkingStatus !== 'loading' && thinkingStatus !== 'switching'}
+            canQuery={!commands.busy && watchReady && ['idle', 'active'].includes(runtimeStates[selectedSessionId]?.lifecycle ?? '') && modelStatus !== 'loading' && modelStatus !== 'switching' && thinkingStatus !== 'loading' && thinkingStatus !== 'switching'}
             controls={<>
                   {selectedSession && <SessionStatistics key={`statistics:${selectedSessionId}`} open={commandPanels.sessionId === selectedSessionId && commandPanels.statistics} onOpenChange={(statistics) => setCommandPanels((panels) => ({ ...panels, sessionId: selectedSessionId, statistics }))} details={runtimeStatistics} onRetry={() => void sessionRuns.getSessionStatistics(selectedSessionId)} />}
 

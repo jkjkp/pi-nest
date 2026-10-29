@@ -4,12 +4,13 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import type { TurnIndexEntry } from './history.js'
 import { railAlignedOffset, railRowHeight, railScrollWindow, railWindowSize, railWindowStart } from './turn-navigation-rail-state.js'
 
-export function TurnNavigationRail({ activeTurnId, entries, onJump, onReadPrompt, overlayRoot }: {
+export function TurnNavigationRail({ activeTurnId, entries, onJump, onReadPrompt, overlayRoot, navigationError }: {
   activeTurnId?: string
   entries: TurnIndexEntry[]
   onJump: (turnId: string) => void | Promise<void>
   onReadPrompt?: (entry: TurnIndexEntry) => Promise<string>
   overlayRoot?: HTMLElement | null
+  navigationError?: string
 }) {
   const [open, setOpen] = useState(false)
   const [outlineWindow, setOutlineWindow] = useState({ start: 0, moreAbove: false, moreBelow: false })
@@ -119,7 +120,7 @@ export function TurnNavigationRail({ activeTurnId, entries, onJump, onReadPrompt
       </div>
       {preview && hovered && <div role="region" aria-label="完整用户消息" className="absolute z-30 max-h-[min(360px,40vh)] overflow-auto rounded-xl border bg-popover p-3 text-sm text-popover-foreground shadow-lg" style={layout.above ? { ...(layout.previewHeight >= 80 ? { bottom: 'calc(100% + 8px)', maxHeight: layout.previewHeight } : { top: 0, maxHeight: layout.height }), right: 0, width: '100%' } : { right: '100%', top: 0, width: layout.previewWidth, maxHeight: layout.height }} onPointerDown={(event) => event.stopPropagation()}>{touch.current && <button aria-label="关闭完整消息" className="mb-2 text-xs underline" onClick={() => setHovered(undefined)} type="button">关闭</button>}{preview.text !== undefined ? <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{preview.text}</p> : preview.error ? <div role="alert">{preview.error}<button className="ml-2 underline" onClick={() => setRetry((value) => value + 1)} type="button">重试</button></div> : <p role="status">正在读取完整消息…</p>}</div>}
     </div>}
-    {jumpError && <p role="alert" className="absolute top-full right-0 w-48 rounded border bg-popover p-2 text-xs text-destructive">跳转失败，请重试</p>}
+    {(jumpError || navigationError) && <p role="alert" className="absolute top-full right-0 w-48 rounded border bg-popover p-2 text-xs text-destructive">{navigationError ?? '跳转失败，请重试'}</p>}
   </aside>
   return overlayRoot ? createPortal(rail, overlayRoot) : rail
 }

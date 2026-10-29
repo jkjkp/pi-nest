@@ -88,7 +88,7 @@ describe('session run controller', () => {
       expect(workspace.getState().runs.shared?.pendingInputs).toEqual([])
       expect(rightRuntime.extensionUiResponse).not.toHaveBeenCalled()
 
-      rightRuntime.snapshot({ sessionId: 'shared', runtime: { lifecycle: 'active', revision: 2 }, activeTurn: { runId: 'run-1', prompt: 'right', startedAt: 'now' }, extensionUi: { statuses: { plan: 'right status' }, widgets: {} } })
+      rightRuntime.snapshot({ sessionId: 'shared', runtime: { lifecycle: 'active', revision: 2 }, activeTurn: { runId: 'run-1', prompt: 'right', startedAt: 'now' }, extensionUi: { freshness: 'known', statuses: { plan: 'right status' }, widgets: {} } })
       expect(other.getState().extensionStatuses.shared).toEqual({ plan: 'right status' })
       expect(workspace.getState().extensionStatuses.shared).toEqual({ plan: 'left status' })
       leftRuntime.emit({ sessionId: 'shared', runId: 'run-1', sequence: 5, observedAt: 'now', event: { type: 'agent_settled' } })
@@ -814,8 +814,8 @@ describe('session run controller', () => {
     expect(workspace.getState()).toMatchObject({
       runtimeStates: { 'session-a': { lifecycle: 'idle', revision: 2 } },
       watchStates: { 'session-a': 'ready' },
-      extensionStatuses: { 'session-a': { plan: 'planning' } },
-      extensionWidgets: { 'session-a': { plan: ['step one'] } },
+      extensionStatuses: { 'session-a': {} },
+      extensionWidgets: { 'session-a': {} },
     })
     const emit = (event: Record<string, unknown>) => runtime.emit({ event, sessionId: 'session-a', sequence: 3, observedAt: 'now' })
     emit({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'plan', statusText: 'implementing' })
@@ -825,6 +825,8 @@ describe('session run controller', () => {
     expect(workspace.getState().extensionWidgets['session-a']).toEqual({ plan: ['step two'] })
     expect(workspace.getState().drafts['session-a']).toBe('next prompt')
     runtime.shouldApplyExtensionUi.mockReturnValue(false)
+    emit({ type: 'extension_ui_request', method: 'set_editor_text', text: '/compact' })
+    expect(workspace.getState().drafts['session-a']).toBe('next prompt')
     emit({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'plan', statusText: 'old' })
     expect(workspace.getState().extensionStatuses['session-a']).toEqual({ plan: 'implementing' })
     runtime.getRuntimeState.mockResolvedValueOnce({ isCompacting: false, isStreaming: false, model: { id: 'model', provider: 'provider' } } as any)
@@ -1044,6 +1046,25 @@ it('refreshes statistics on restoration, compaction and model changes instead of
   expect(runtime.getSessionStatistics).toHaveBeenCalledTimes(3)
 })
 
+it.each(['manual', 'auto'])('replaces stale context usage after %s compaction and refreshes it after the next completed run', async (mode) => {
+  const runtime = runtimeMock()
+  const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
+  const stats = { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 }, cost: 0.1, contextUsage: { tokens: 420, percent: 42, contextWindow: 1000 } }
+  runtime.getSessionStatistics.mockResolvedValueOnce(stats)
+  await controller.getSessionStatistics('session-a')
+  runtime.getSessionStatistics.mockResolvedValueOnce({ ...stats, contextUsage: { tokens: null, percent: null, contextWindow: 1000 } } as never)
+  if (mode === 'manual') await controller.compact('session-a')
+  else {
+    runtime.emit({ event: { type: 'auto_compaction_end' }, sessionId: 'session-a', observedAt: 'now', sequence: 1 })
+    await tick()
+  }
+  expect(workspace.getState().runtimeStatistics['session-a']?.data?.contextUsage?.percent).toBeNull()
+  runtime.getSessionStatistics.mockResolvedValueOnce({ ...stats, contextUsage: { tokens: 80, percent: 8, contextWindow: 1000 } })
+  runtime.status({ sessionId: 'session-a', lifecycle: 'idle', revision: 2, completedRun: { runId: 'next', stopReason: 'stop' } } as never)
+  await tick()
+  expect(workspace.getState().runtimeStatistics['session-a']?.data?.contextUsage?.percent).toBe(8)
+})
+
 it('forwards compaction instructions and refreshes history and statistics after success', async () => {
   const runtime = runtimeMock()
   const invalidateHistory = vi.fn()
@@ -1098,4 +1119,59 @@ it('keeps a successful compaction successful when refreshing history fails', asy
   const controller = createSessionRunController({ state: workspace, invalidateHistory, runtime: runtime as never })
   await expect(controller.compact('session-a')).resolves.toBe(true)
   expect(runtime.getSessionStatistics).toHaveBeenCalledWith('session-a')
+})
+
+it('uses the native compaction result when an RPC error arrives after compaction succeeded', async () => {
+  const runtime = runtimeMock()
+  const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
+  runtime.compact.mockImplementationOnce(async () => {
+    runtime.emit({ event: { type: 'compaction_end', reason: 'manual', aborted: false, result: { summary: 'saved summary' } }, sessionId: 'session-a', sequence: 1, observedAt: 'now' })
+    throw new Error('Connection lost after compaction')
+  })
+  await expect(controller.compact('session-a')).resolves.toBe(true)
+  expect(runtime.getSessionStatistics).toHaveBeenCalledWith('session-a')
+})
+
+it.each(['replay', 'auto'])('does not treat a %s result as confirmation of a failed manual compaction', async (source) => {
+  const runtime = runtimeMock()
+  const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
+  runtime.compact.mockImplementationOnce(async () => {
+    runtime.shouldApplyExtensionUi.mockReturnValue(source !== 'replay')
+    runtime.emit({ event: { type: 'compaction_end', reason: source === 'auto' ? 'threshold' : 'manual', aborted: false, result: { summary: 'other result' } }, sessionId: 'session-a', sequence: 1, observedAt: 'now' })
+    throw new Error('Manual compaction failed')
+  })
+  await expect(controller.compact('session-a')).rejects.toThrow('Manual compaction failed')
+})
+
+
+it('executes an extension control without optimistic turns or completion notifications', async () => {
+  const runtime = { ...runtimeMock(), executeExtensionCommand: vi.fn().mockResolvedValue({ disposition: 'handled' }) }
+  const controller = createSessionRunController({ state: { getState: workspace.getState }, runtime: runtime as never, invalidateHistory: vi.fn() })
+  await controller.executeExtensionCommand('session-a', '/ponytail off')
+  expect(runtime.executeExtensionCommand).toHaveBeenCalledWith('session-a', '/ponytail off')
+  expect(workspace.getState().runs['session-a']?.turns ?? []).toEqual([])
+  expect(workspace.getState().sessionNotifications['session-a']?.completedRunId).toBeUndefined()
+  expect(runtime.prompt).not.toHaveBeenCalled()
+})
+
+
+it.each(['before', 'after'])('keeps native plugin-started turns when events arrive %s the command receipt', async (order) => {
+  const runtime = { ...runtimeMock(), executeExtensionCommand: vi.fn() }
+  const controller = createSessionRunController({ state: { getState: workspace.getState }, runtime: runtime as never, invalidateHistory: vi.fn() })
+  const emit = () => {
+    const base = { sessionId: 's', runId: 'native-plugin-run', observedAt: '2026-10-29T01:00:00.000Z' }
+    runtime.emit({ ...base, sequence: 1, event: { type: 'agent_start' } })
+    runtime.emit({ ...base, sequence: 2, event: { type: 'message_start', message: { role: 'user', content: 'expanded skill request' } } })
+    runtime.emit({ ...base, sequence: 3, event: { type: 'agent_settled' } })
+  }
+  runtime.executeExtensionCommand.mockImplementation(async () => {
+    if (order === 'before') emit()
+    return { disposition: 'handled' }
+  })
+  await controller.executeExtensionCommand('s', '/ponytail-review')
+  if (order === 'after') emit()
+  const turns = workspace.getState().runs.s?.turns
+  expect(turns).toHaveLength(1)
+  expect(turns?.[0]).toMatchObject({ prompt: 'expanded skill request', completedAt: expect.any(String) })
+  expect(runtime.prompt).not.toHaveBeenCalled()
 })

@@ -4,14 +4,13 @@ import { MessageAttachments } from './attachment-ui.js'
 import { ModelCallErrorNotice } from './model-call-error-notice.js'
 import { RenderErrorBoundary } from './render-error-boundary.js'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual'
 
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 
 import { AssistantMarkdown } from './assistant-markdown.js'
 import { historyPageCursorForTurn, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
-import type { TimelineScrollController, TurnJumpAlignment } from './timeline-pagination.js'
+import { timelineReadingOffset, type TimelineJump, type TimelineScrollController } from './timeline-pagination.js'
 import { timelineNavigationTurns } from './timeline-navigation.js'
 import { timelineItems, type RuntimeTurn, type TimelineItem } from './timeline-model.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
@@ -23,7 +22,7 @@ import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 import type { PendingInput, PromptStatus } from './session-run-model.js'
 
-export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onRetrySteering, onJumpToTurn, onJumpToUnloadedTurn, onReadTurnPrompt, onLoadEarlier, onPendingJumpHandled, onRetry, onRetryNavigation, onBranchAnswer, branchDisabled = false, navigationNotice, overlayRoot, pendingInputs = [], pendingJumpTurnId, runMessage, runStatus, sessionId, sessionCwd, scrollViewport, registerTimelineScroll, systemEvents = [], turnIndex, turns = [] }: {
+export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onRetrySteering, onRequestTurnJump, onReadTurnPrompt, onLoadEarlier, onTurnJumpFinished, onRetry, onRetryNavigation, onBranchAnswer, branchDisabled = false, navigationNotice, overlayRoot, pendingInputs = [], pendingJump, jumpError, runMessage, runStatus, sessionId, sessionCwd, scrollViewport, registerTimelineScroll, systemEvents = [], turnIndex, turns = [] }: {
   error: boolean
   hasEarlier?: boolean
   history: PiSessionHistoryResponse | undefined
@@ -33,11 +32,10 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   onFinalAnswerStart?: (turnId: string) => void
   onRetrySteering?: (turnId: string) => void
   onFinalAnswerStream?: () => void
-  onJumpToTurn?: (turnId: string, scrollTo: (behavior: ScrollBehavior) => void, alignment: TurnJumpAlignment) => void
-  onJumpToUnloadedTurn?: (turnId: string, cursor: string | undefined) => void | Promise<void>
+  onRequestTurnJump?: (turnId: string, cursor: string | undefined, loaded: boolean) => void | Promise<void>
   onReadTurnPrompt?: (turnId: string, cursor: string | undefined) => Promise<string>
   onLoadEarlier?: () => void
-  onPendingJumpHandled?: () => void
+  onTurnJumpFinished?: (id: number, error?: string) => void
   onRetry: () => void
   onBranchAnswer?: (entryId: string, revision: string) => Promise<void>
   branchDisabled?: boolean
@@ -45,7 +43,8 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   navigationNotice?: string
   overlayRoot?: HTMLElement | null
   pendingInputs?: PendingInput[]
-  pendingJumpTurnId?: string
+  pendingJump?: TimelineJump
+  jumpError?: string
   runMessage?: string
   runStatus?: PromptStatus
   sessionId?: string
@@ -57,11 +56,23 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   turns?: RuntimeTurn[]
 }) {
   const historyLoadRequested = useRef(false)
+  const stopJump = useRef<(() => void) | undefined>(undefined)
   const [canLoadEarlier, setCanLoadEarlier] = useState(false)
   const items = useMemo(() => timelineItems(history?.entries, turns, systemEvents), [history?.entries, systemEvents, turns])
+  const currentItems = useRef(items)
+  useLayoutEffect(() => { currentItems.current = items }, [items])
   const activeExecutionItem = items.findLast((item) => !item.steering || item.steering.status === 'applied')
   const persistedIndex = turnIndex && turnIndex.revision === history?.revision ? turnIndex.entries : undefined
   const railEntries = useMemo(() => timelineNavigationTurns(persistedIndex, items), [items, persistedIndex])
+  const jumpIndex = pendingJump?.phase === 'locating' ? items.findIndex((item) => item.id === pendingJump.turnId) : -1
+  const rangeExtractor = useCallback((range: Parameters<typeof defaultRangeExtractor>[0]) => {
+    const indexes = defaultRangeExtractor(range)
+    if (jumpIndex < 0) return indexes
+    // Keep the landing window mounted until asynchronous size and scroll deliveries agree.
+    const start = Math.max(0, jumpIndex - 8)
+    const end = Math.min(range.count - 1, jumpIndex + 8)
+    return [...new Set([...indexes, ...Array.from({ length: end - start + 1 }, (_, offset) => start + offset)])].sort((a, b) => a - b)
+  }, [jumpIndex])
   // oxlint-disable-next-line react/incompatible-library -- The virtualizer owns DOM measurement state outside React.
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -75,26 +86,29 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     getScrollElement: () => scrollViewport ?? null,
     initialRect: { height: 800, width: 0 },
     overscan: 8,
+    rangeExtractor,
     // Keep size corrections and item positions in one paint without re-entering React.
     directDomUpdates: true,
     useFlushSync: false,
     useAnimationFrameWithResizeObserver: true,
   })
   const virtualItems = virtualizer.getVirtualItems()
-  const activeVirtualItem = virtualizer.getVirtualItemForOffset((virtualizer.scrollOffset ?? 0) + 48)
+  const activeVirtualItem = virtualizer.getVirtualItemForOffset((virtualizer.scrollOffset ?? 0) + timelineReadingOffset)
   const activeTurnId = items[activeVirtualItem?.index ?? 0]?.id
   useLayoutEffect(() => {
     if (!registerTimelineScroll || !scrollViewport || !history) return
     registerTimelineScroll({
       sessionId: history.session.id,
+      cancelJump: () => stopJump.current?.(),
       capture: () => {
         const top = scrollViewport.getBoundingClientRect().top
-        const turn = [...scrollViewport.querySelectorAll<HTMLElement>('[data-turn-id]')].find((node) => node.getBoundingClientRect().bottom > top + 48)
+        const turn = [...scrollViewport.querySelectorAll<HTMLElement>('[data-turn-id]')].find((node) => node.getBoundingClientRect().bottom > top + timelineReadingOffset)
         return { turnId: turn?.dataset.turnId, offset: turn ? turn.getBoundingClientRect().top - top : 0, scrollTop: scrollViewport.scrollTop }
       },
       restore: (position) => {
         if (!position.turnId) {
-          scrollViewport.scrollTo({ top: position.scrollTop, behavior: 'instant' })
+          const top = Math.max(0, Math.min(scrollViewport.scrollHeight - scrollViewport.clientHeight, position.scrollTop))
+          if (Math.abs(top - scrollViewport.scrollTop) > 1) scrollViewport.scrollTo({ top, behavior: 'instant' })
           return 'restored'
         }
         const index = items.findIndex((item) => item.id === position.turnId)
@@ -116,26 +130,76 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     historyLoadRequested.current = false
   }, [history?.session.id])
   useEffect(() => {
-    if ((virtualizer.scrollOffset ?? 0) > 0) setCanLoadEarlier(true)
-  }, [virtualizer.scrollOffset])
+    if (!scrollViewport) return
+    const resumePaging = (event: Event) => {
+      if (!pendingJump && !event.defaultPrevented && (event.type !== 'keydown' || event instanceof KeyboardEvent && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key))) setCanLoadEarlier(true)
+    }
+    for (const type of ['wheel', 'touchstart', 'keydown']) scrollViewport.addEventListener(type, resumePaging)
+    return () => { for (const type of ['wheel', 'touchstart', 'keydown']) scrollViewport.removeEventListener(type, resumePaging) }
+  }, [scrollViewport, pendingJump])
   useEffect(() => {
     if (!isLoadingEarlier) historyLoadRequested.current = false
   }, [isLoadingEarlier])
   const loadEarlier = useCallback(() => {
-    if (!hasEarlier || isLoadingEarlier || !onLoadEarlier) return
+    if (stopJump.current || !hasEarlier || isLoadingEarlier || !onLoadEarlier) return
     onLoadEarlier()
   }, [hasEarlier, isLoadingEarlier, onLoadEarlier])
 
   useLayoutEffect(() => {
-    if (!pendingJumpTurnId) return
-    const index = items.findIndex((item) => item.id === pendingJumpTurnId)
-    if (index < 0) return
-    const alignment = 'start' as const
-    const scrollTo = (behavior: ScrollBehavior) => virtualizer.scrollToIndex(index, { align: alignment, behavior })
-    if (onJumpToTurn) onJumpToTurn(pendingJumpTurnId, scrollTo, alignment)
-    else scrollTo('auto')
-    onPendingJumpHandled?.()
-  }, [items, onJumpToTurn, onPendingJumpHandled, pendingJumpTurnId, railEntries, virtualizer])
+    if (!pendingJump || !scrollViewport) return
+    setCanLoadEarlier(false)
+    let cancelled = false
+    let frame: number | undefined
+    let stable = 0
+    let locatedIndex: number | undefined
+    const deadline = performance.now() + 1000
+    const previousAdjustment = virtualizer.shouldAdjustScrollPositionOnItemSizeChange
+    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false
+    const stop = () => {
+      if (cancelled) return
+      cancelled = true
+      if (frame !== undefined) cancelAnimationFrame(frame)
+      virtualizer.scrollToOffset(scrollViewport.scrollTop, { behavior: 'instant' })
+    }
+    stopJump.current = stop
+    const finish = (error?: string) => {
+      stop()
+      onTurnJumpFinished?.(pendingJump.id, error)
+    }
+    const align = () => {
+      if (cancelled) return
+      const index = currentItems.current.findIndex((item) => item.id === pendingJump.turnId)
+      if (performance.now() > deadline) { finish('未能稳定定位目标轮次，请重试'); return }
+      if (index < 0) { finish('目标轮次已不可用，请重试'); return }
+      const rows = [...scrollViewport.querySelectorAll<HTMLElement>('[data-index]')]
+      // Measure the mounted window together before committing the navigation landing.
+      for (const row of rows) virtualizer.resizeItem(Number(row.dataset.index), row.getBoundingClientRect().height)
+      virtualizer.getVirtualItems()
+      const turn = [...scrollViewport.querySelectorAll<HTMLElement>('[data-turn-id]')].find((node) => node.dataset.turnId === pendingJump.turnId)
+      if (!turn) {
+        if (locatedIndex !== index) {
+          virtualizer.scrollToIndex(index, { align: 'start', behavior: 'instant' })
+          locatedIndex = index
+        }
+        stable = 0
+      } else {
+        const delta = turn.getBoundingClientRect().top - scrollViewport.getBoundingClientRect().top - timelineReadingOffset
+        const top = Math.max(0, Math.min(scrollViewport.scrollHeight - scrollViewport.clientHeight, scrollViewport.scrollTop + delta))
+        if (Math.abs(top - scrollViewport.scrollTop) > 2) {
+          virtualizer.scrollToOffset(top, { behavior: 'instant' })
+          stable = 0
+        } else if (Math.abs((virtualizer.scrollOffset ?? scrollViewport.scrollTop) - scrollViewport.scrollTop) > 2) stable = 0
+        else if (++stable >= 2) { finish(); return }
+      }
+      frame = requestAnimationFrame(align)
+    }
+    if (pendingJump.phase === 'locating') align()
+    return () => {
+      stop()
+      if (stopJump.current === stop) stopJump.current = undefined
+      virtualizer.shouldAdjustScrollPositionOnItemSizeChange = previousAdjustment
+    }
+  }, [pendingJump, scrollViewport, virtualizer, onTurnJumpFinished])
 
   const readPrompt = useCallback(async (entry: import('./history.js').TurnIndexEntry) => {
     const loaded = items.find((item) => item.id === entry.id)?.prompt
@@ -144,7 +208,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     return onReadTurnPrompt(entry.id, historyPageCursorForTurn(railEntries, entry.id))
   }, [items, onReadTurnPrompt, railEntries])
 
-  if (isLoading && items.length === 0) return <LoadingTimeline />
+  if (isLoading && items.length === 0) return null
   if (error && items.length === 0) return <HistoryError onRetry={onRetry} />
 
   const pendingImplementation = pendingInputs.filter((input) => input.mode === 'plan_implementation')
@@ -153,15 +217,8 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   }
 
 
-  const jump = (turnId: string) => {
-    const index = items.findIndex((item) => item.id === turnId)
-    if (index < 0) return onJumpToUnloadedTurn?.(turnId, historyPageCursorForTurn(railEntries, turnId))
-    const alignment = 'start' as const
-    const scrollTo = (behavior: ScrollBehavior) => virtualizer.scrollToIndex(index, { align: alignment, behavior })
-    if (onJumpToTurn) onJumpToTurn(turnId, scrollTo, alignment)
-    else scrollTo('auto')
-  }
-  return <section className="conversation-stage pb-6">{navigationNotice && <div className="conversation-stage-content mb-2 flex items-center justify-end gap-2 text-xs text-muted-foreground" role="status"><span>{navigationNotice}</span><Button onClick={onRetryNavigation} size="sm" variant="ghost" type="button">重试</Button></div>}{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail key={history?.session.id} onReadPrompt={readPrompt} activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" ref={virtualizer.containerRef}><div className="absolute left-0 top-0 w-full"><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>{virtualItems.map((virtualItem) => {
+  const jump = (turnId: string) => onRequestTurnJump?.(turnId, historyPageCursorForTurn(railEntries, turnId), items.some((item) => item.id === turnId))
+  return <section className="conversation-stage pb-6">{navigationNotice && <div className="conversation-stage-content mb-2 flex items-center justify-end gap-2 text-xs text-muted-foreground" role="status"><span>{navigationNotice}</span><Button onClick={onRetryNavigation} size="sm" variant="ghost" type="button">重试</Button></div>}{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail navigationError={jumpError} key={history?.session.id} onReadPrompt={readPrompt} activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" ref={virtualizer.containerRef}><div className="absolute left-0 top-0 w-full"><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>{virtualItems.map((virtualItem) => {
     const item = items[virtualItem.index]!
     return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement}><RenderErrorBoundary scope="turn" sessionId={history?.session.id} turnId={item.id}><TurnItem onBranchAnswer={onBranchAnswer} branchDisabled={branchDisabled || isRunning} revision={history?.revision} sessionId={sessionId ?? history?.session.id} cwd={sessionCwd ?? history?.session.cwd} hasFollowingTurn={item !== activeExecutionItem} onRetrySteering={onRetrySteering} canRetrySteering={isRunning} isRunning={isRunning && item === activeExecutionItem} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} runMessage={item === activeExecutionItem ? runMessage : undefined} runStatus={item === activeExecutionItem ? runStatus : undefined} /></RenderErrorBoundary></div>
   })}</div>{pendingImplementation.map((input) => <PendingUserInput input={input} key={input.id} />)}</div></section>
@@ -183,10 +240,6 @@ function HistoryLoadSentinel({ canLoad, hasEarlier, isLoading, onLoad, requested
   }, [canLoad, hasEarlier, isLoading, onLoad, requested, scrollViewport])
 
   return <div aria-live="polite" className="h-5 text-center text-xs text-muted-foreground" data-history-load-sentinel="" ref={target}>{isLoading ? '正在加载更早历史…' : null}</div>
-}
-
-function LoadingTimeline() {
-  return <section aria-label="正在加载会话历史" className="space-y-7">{Array.from({ length: 3 }, (_, index) => <Skeleton className="h-20 max-w-2xl" key={index} />)}</section>
 }
 
 function HistoryError({ onRetry }: { onRetry: () => void }) {
@@ -213,7 +266,7 @@ const TurnItem = memo(function TurnItem({ onBranchAnswer, branchDisabled, revisi
       {item.modelErrors?.map((error, index) => <ModelCallErrorNotice error={error} key={index} />)}
       {item.plan && <section aria-label="计划正文" id={`plan-${item.id}`} className="rounded-lg border bg-card p-4"><h2 className="mb-3 text-sm font-normal">计划已制定</h2><AssistantMarkdown source={item.plan.text} isStreaming={false} /></section>}
       <FinalAnswer onBranch={!branchDisabled && branchEntry && revision && onBranchAnswer ? () => onBranchAnswer(branchEntry.id, revision) : undefined} isRunning={isRunning} onStart={() => onFinalAnswerStart?.(item.id)} onStream={onFinalAnswerStream} parts={presentation.finalAnswer} turnId={item.id} />
-      {summaryState && files.length > 0 && <TurnFileSummary files={files} state={summaryState} />}
+      {summaryState && (files.length > 0 || item.fileChangesIncomplete) && <TurnFileSummary files={files} state={summaryState} incomplete={item.fileChangesIncomplete} />}
     </article>
   )
 })

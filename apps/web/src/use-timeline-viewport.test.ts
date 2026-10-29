@@ -266,7 +266,7 @@ it.each(['wheel', 'jump', 'cleanup', 'execution'])('cancels the return deadline 
     test.hook.scrollToBottom()
     vi.advanceTimersByTime(500)
     if (action === 'wheel') test.wheel()
-    if (action === 'jump') test.hook.jumpToTurn('old-turn', vi.fn(), 'start')
+    if (action === 'jump') test.hook.beginTurnNavigation()
     if (action === 'cleanup') cleanupSession?.()
     if (action === 'execution') test.click()
     const calls = test.viewport.scrollTo.mock.calls.length

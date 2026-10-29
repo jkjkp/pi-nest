@@ -35,6 +35,7 @@ export type RuntimeCommandPayload = { sessionId: string } & (
   | { type: 'watch'; resume?: { after: number } }
   | { type: 'unwatch' | 'resume' | 'abort' | 'get_runtime_state' | 'get_session_stats' | 'get_available_models' | 'get_available_thinking_levels' | 'get_commands' }
   | ({ type: 'prompt' | 'steer' | 'follow_up' } & AttachmentInput)
+  | { type: 'extension_command'; message: string }
   | { type: 'steer_queued'; message: string; index: number; inputId?: string }
   | { type: 'resume_queued'; inputId: string }
   | { type: 'drop_queued'; inputId: string }
@@ -46,6 +47,7 @@ export type RuntimeCommandPayload = { sessionId: string } & (
 export type RuntimeCommand = RuntimeCommandPayload & { id: string }
 
 export type RuntimeAck = { command: string; data?: unknown; id: string; sessionId: string; type: 'ack' }
+export type PiPromptDisposition = 'handled' | 'started' | 'queued'
 export type RuntimePromptAck = { runId: string }
 export type ResyncRequired = { reason: 'event_buffer_expired' | 'sequence_gap'; sessionId: string; type: 'resync_required' }
 export type RuntimeMessage = RuntimeAck | RuntimeError | ResyncRequired | ({ type: 'pi_event' } & PiRuntimeEvent) | ({ type: 'session_snapshot' } & SessionSnapshot) | ({ type: 'runtime_status' } & RuntimeStatus)
@@ -163,3 +165,7 @@ export type PiFileChange = { version: 1; path: string; sequence: number } & (
   | { added: number; removed: number; changeType: 'created' | 'deleted' | 'modified' | 'unchanged' }
   | { reason: 'binary' | 'too_large' | 'unreadable' | 'unrecorded' | 'diff_limit' }
 )
+
+export type WorkspaceFileScope = { kind: 'session'; id: string } | { kind: 'project'; cwd: string }
+export type WorkspaceFileEntry = { name: string; path: string; kind: 'directory' | 'file' | 'link' | 'other' }
+export type WorkspaceDirectory = { root: string; path: string; entries: WorkspaceFileEntry[]; nextOffset?: number }

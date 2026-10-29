@@ -141,12 +141,13 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
             busy = true
             throw new Error('Pi runtime is busy')
           }
-          await prompt.accepted
+          const disposition = await prompt.accepted
           return {
+            ...(disposition ? { disposition } : {}),
             session: {
               createdAt: created.createdAt,
               cwd: created.cwd,
-              firstMessage,
+              firstMessage: disposition === 'handled' ? undefined : firstMessage,
               id: created.id,
               updatedAt,
             },

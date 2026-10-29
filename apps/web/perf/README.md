@@ -23,3 +23,7 @@ window.workspaceSmoke.publishHistory('smoke-a')
 `runMarkdownRetentionProbe()` repeatedly mounts, streams and releases 30 messages. In an isolated browser, CDP `HeapProfiler.collectGarbage` plus `Runtime.queryObjects` for `window.markdownParserPrototype` can check retained parser instances. Release the query result handles between probes. This tests parser-instance retention, not total application heap usage.
 
 See `results-2026-10-18.json` for the measured environment and results. Large single lists/tables and reference-definition documents intentionally retain full-tail/full-document parsing and still produce long tasks. Wall-clock thresholds are not CI assertions; the tests assert grammar input reduction, prefix parity, DOM identity, lifecycle and safety behavior.
+
+## Historical turn navigation
+
+The **历史跳转夹具** button mounts a separate 500-turn conversation with the production history, viewport and virtualizer hooks. Buttons select distant turns, retain only the latest 40 turns, and hold/release a synthetic page request to check cancellation. No model or native session is accessed. **导航轨迹** records 90 animation frames and retains changed offsets plus the final frame; it is a layout observation, not a duration benchmark. See `results-2026-10-29-navigation.json` for the before/after summary and verification limits.

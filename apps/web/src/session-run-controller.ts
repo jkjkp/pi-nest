@@ -31,6 +31,7 @@ export type SessionRunController = {
   compact: (sessionId: string, customInstructions?: string) => Promise<boolean>
   cancelCompact: (sessionId: string) => Promise<void>
   followUp: (sessionId: string, message: string, input?: InputAttachments) => Promise<void>
+  executeExtensionCommand: (sessionId: string, message: string) => Promise<void>
   getCommands: (sessionId: string) => Promise<PiRuntimeCommand[]>
   getAvailableModels: (sessionId: string) => Promise<PiRuntimeModel[]>
   getAvailableThinkingLevels: (sessionId: string) => Promise<string[]>
@@ -220,8 +221,8 @@ export function createSessionRunController({ invalidateHistory, runtime, state: 
       store.setRuntimeDetails(event.sessionId, { ...(details ?? { isCompacting: false, isStreaming: store.runtimeStates[event.sessionId]?.lifecycle === 'active' }), thinkingLevel: raw.level })
     }
     if (raw.type === 'extension_ui_request') {
-      if (raw.method === 'set_editor_text' && typeof raw.text === 'string') store.setDraft(event.sessionId, stripAnsiText(raw.text))
       if (runtime.shouldApplyExtensionUi(event)) {
+        if (raw.method === 'set_editor_text' && typeof raw.text === 'string') store.setDraft(event.sessionId, stripAnsiText(raw.text))
         if (raw.method === 'setStatus' && typeof raw.statusKey === 'string' && raw.statusKey) store.setExtensionStatus(event.sessionId, raw.statusKey, typeof raw.statusText === 'string' ? raw.statusText : undefined)
         if (raw.method === 'setWidget' && typeof raw.widgetKey === 'string' && raw.widgetKey) store.setExtensionWidget(event.sessionId, raw.widgetKey, Array.isArray(raw.widgetLines) && raw.widgetLines.every((line) => typeof line === 'string') ? raw.widgetLines : undefined)
       }
@@ -353,7 +354,7 @@ export function createSessionRunController({ invalidateHistory, runtime, state: 
       store.setRuntimeStatistics(status.sessionId, { ...store.runtimeStatistics[status.sessionId], loading: false, error: '等待 Pi 运行恢复后更新统计。' })
     }
     if (status.lifecycle === 'idle' && !status.completedRun) requestStateStatistics(status.sessionId, `idle:${status.revision}`)
-    if (status.lifecycle === 'failed') store.clearExtensionUi(status.sessionId)
+    if (status.lifecycle === 'failed' || status.lifecycle === 'notLoaded') store.clearExtensionUi(status.sessionId)
     if (status.lifecycle === 'active' && !activeRuns.has(status.sessionId)) {
       activeRuns.set(status.sessionId, { awaitingRunId: false, runId: undefined, stopReason: undefined })
       stateStore.getState().setRun(status.sessionId, { pendingInputs: [], status: 'running', systemEvents: [], turns: [] })
@@ -442,15 +443,20 @@ export function createSessionRunController({ invalidateHistory, runtime, state: 
       const operation = { cancelled: false, started: false }
       compactions.set(sessionId, operation)
       let aborted = false
+      let completed = false
       const unsubscribe = runtime.onPiEvent((event) => {
-        if (event.sessionId === sessionId && event.event.type === 'compaction_end' && event.event.aborted === true) aborted = true
+        if (event.sessionId !== sessionId || event.event.type !== 'compaction_end' || !runtime.shouldApplyExtensionUi(event)) return
+        if (event.event.aborted === true) aborted = true
+        const result = event.event.result
+        if (event.event.reason === 'manual' && event.event.aborted === false && result && typeof result === 'object' && !Array.isArray(result) && !event.event.errorMessage) completed = true
       })
       try {
         await resumeRuntime(sessionId)
         if (operation.cancelled) return false
         operation.started = true
         try { await runtime.compact(sessionId, customInstructions) }
-        catch (cause) { if (aborted) return false; throw cause }
+        // A persisted native result remains successful if its RPC acknowledgement is lost.
+        catch (cause) { if (aborted) return false; if (!completed) throw cause }
         operation.started = false
         try { await invalidateHistory(sessionId) }
         catch { /* The history query reports refresh errors; compaction has already succeeded. */ }
@@ -466,6 +472,11 @@ export function createSessionRunController({ invalidateHistory, runtime, state: 
       catch (cause) { operation.cancelled = false; throw cause }
     },
     followUp: (sessionId, message, input) => submitRunningInput(sessionId, message, 'follow_up', input),
+    executeExtensionCommand: async (sessionId, message) => {
+      await runtime.watch(sessionId, foregroundSessionId && foregroundSessionId !== sessionId ? 'background' : 'foreground')
+      if (!activeRuns.has(sessionId) && stateStore.getState().runtimeStates[sessionId]?.lifecycle !== 'active') await resumeRuntime(sessionId)
+      await runtime.executeExtensionCommand(sessionId, message)
+    },
     getCommands: async (sessionId) => (await runtime.getCommands(sessionId)).commands,
     getAvailableModels: async (sessionId) => (await runtime.getAvailableModels(sessionId)).models,
     getAvailableThinkingLevels: async (sessionId) => (await runtime.getAvailableThinkingLevels(sessionId)).levels,

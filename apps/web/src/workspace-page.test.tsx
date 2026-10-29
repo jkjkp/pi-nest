@@ -33,6 +33,7 @@ const sessionRuns = {
   cancelCompact: async () => undefined,
   followUp: async () => undefined,
   getCommands: async () => [],
+  executeExtensionCommand: async () => undefined,
   getAvailableModels: async () => [],
   getAvailableThinkingLevels: async () => [],
   getSessionStatistics: async () => undefined,

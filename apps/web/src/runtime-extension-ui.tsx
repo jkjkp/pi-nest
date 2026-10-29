@@ -27,7 +27,7 @@ type Dialog = {
   title: string
   value?: string
 }
-type ExtensionUi = { dialogs: Dialog[]; reply: (dialog: Dialog, response: { cancelled?: boolean; confirmed?: boolean; value?: string }) => Promise<void>; setValue: (dialog: Dialog, value: string, customText?: boolean) => void }
+type ExtensionUi = { statusNotice?: { sessionId: string; message: string }; dialogs: Dialog[]; reply: (dialog: Dialog, response: { cancelled?: boolean; confirmed?: boolean; value?: string }) => Promise<void>; setValue: (dialog: Dialog, value: string, customText?: boolean) => void }
 
 const ExtensionUiContext = createContext<ExtensionUi | undefined>(undefined)
 
@@ -88,9 +88,11 @@ export function isPonytailLoadedNotice(message: string, type: string) {
 }
 
 /** Native Pi RPC Extension UI bridge. It keeps protocol values untouched and lets workspace render dialogs inline. */
-export function RuntimeExtensionUi({ children, runtime, sessionRuns }: { children: React.ReactNode; runtime: RuntimeWebSocketClient; sessionRuns: SessionRunController }) {
+export function RuntimeExtensionUi({ children, runtime, sessionRuns, activeSessionId }: { children: React.ReactNode; runtime: RuntimeWebSocketClient; sessionRuns: SessionRunController; activeSessionId?: string }) {
   const [dialogs, setDialogs] = useState<Dialog[]>([])
-  const [notice, setNotice] = useState<{ message: string; type: 'error' | 'info' | 'warning' }>()
+  const [notice, setNotice] = useState<{ sessionId: string; message: string; type: 'error' | 'info' | 'warning' }>()
+  const [noticeSessionId, setNoticeSessionId] = useState(activeSessionId)
+  if (noticeSessionId !== activeSessionId) { setNoticeSessionId(activeSessionId); setNotice(undefined) }
   const customAnswers = useRef(new Map<string, Dialog>())
   const submissions = useRef(new Set<string>())
 
@@ -151,6 +153,7 @@ export function RuntimeExtensionUi({ children, runtime, sessionRuns }: { childre
         setDialogs((current) => current.filter((item) => item.id !== raw.dialogId || item.sessionId !== event.sessionId || customAnswers.current.get(item.sessionId)?.id === item.id))
         return
       }
+      if (raw.type === 'extension_ui_request' && !runtime.shouldApplyExtensionUi(event)) return
       if (raw.type === 'extension_ui_request' && raw.method === 'setTitle' && typeof raw.title === 'string') document.title = stripAnsiLine(raw.title)
       if (raw.type === 'extension_ui_request' && raw.method === 'notify' && typeof raw.message === 'string') {
         const message = stripAnsiLine(raw.message)
@@ -161,7 +164,7 @@ export function RuntimeExtensionUi({ children, runtime, sessionRuns }: { childre
           }))
         } else if (!isPlanModeLifecycleNotice(message)) {
           const type = raw.notifyType === 'error' || raw.notifyType === 'warning' ? raw.notifyType : 'info'
-          if (!isPonytailLoadedNotice(message, type)) setNotice({ message, type })
+          if (!isPonytailLoadedNotice(message, type)) setNotice({ sessionId: event.sessionId, message, type })
         }
       }
     })
@@ -193,8 +196,8 @@ export function RuntimeExtensionUi({ children, runtime, sessionRuns }: { childre
   }, [runtime, acceptCustomEditor])
 
   useEffect(() => {
-    if (!notice || notice.type !== 'info') return
-    const timer = window.setTimeout(() => setNotice(undefined), 5_000)
+    if (!notice || notice.type === 'error') return
+    const timer = window.setTimeout(() => setNotice(undefined), notice.type === 'info' ? 500 : 5_000)
     return () => window.clearTimeout(timer)
   }, [notice])
 
@@ -207,7 +210,14 @@ export function RuntimeExtensionUi({ children, runtime, sessionRuns }: { childre
       : item))
   }
 
-  return <ExtensionUiContext.Provider value={{ dialogs, reply, setValue }}>{children}{notice && <div aria-live="polite" className="fixed bottom-4 right-4 z-50 flex max-w-md items-start gap-3 rounded bg-card p-3 shadow"><p className="min-w-0 break-words text-sm">{notice.message}</p><Button aria-label="关闭通知" className="h-auto p-0 text-muted-foreground" onClick={() => setNotice(undefined)} size="sm" type="button" variant="ghost">关闭</Button></div>}</ExtensionUiContext.Provider>
+  return <ExtensionUiContext.Provider value={{ dialogs, reply, setValue, statusNotice: notice?.type === 'info' && (activeSessionId === undefined || notice.sessionId === activeSessionId) ? notice : undefined }}>{children}{notice && notice.type !== 'info' && (activeSessionId === undefined || notice.sessionId === activeSessionId) && <div aria-live="polite" className="fixed bottom-4 right-4 z-50 flex max-w-md items-start gap-3 rounded bg-card p-3 shadow"><p className="min-w-0 break-words text-sm">{notice.message}</p><Button aria-label="关闭通知" className="h-auto p-0 text-muted-foreground" onClick={() => setNotice(undefined)} size="sm" type="button" variant="ghost">关闭</Button></div>}</ExtensionUiContext.Provider>
+}
+
+/** Brief status feedback stays next to its composer without taking layout space. */
+export function ExtensionStatusNotice({ sessionId }: { sessionId: string }) {
+  const notice = useContext(ExtensionUiContext)?.statusNotice
+  if (!notice || notice.sessionId !== sessionId) return null
+  return <div data-slot="extension-status-notice" role="status" aria-atomic="true" className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-max max-w-[calc(100%-1rem)] -translate-x-1/2 rounded-md bg-gray-600 px-3 py-2 text-center text-xs break-words text-white shadow-sm">{notice.message}</div>
 }
 
 function optionParts(label: string) {

@@ -50,11 +50,11 @@ export function SessionNavigationRow({
   return (
     <ContextMenu onOpenChange={setMenuOpen}>
       <ContextMenuTrigger asChild>
-        <div className={`group/session flex items-center gap-1 rounded-lg ${selected ? 'bg-primary/10' : 'hover:bg-muted/50'}`} ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
-          {branch && (branch.hasChildren ? <Button aria-label={`${branch.expanded ? '折叠' : '展开'} ${sessionDisplayName(session)} 的分支`} aria-expanded={branch.expanded} className="ml-1 size-6 shrink-0 border-0" size="icon-sm" variant="ghost" onClick={branch.onToggle} onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><ChevronRight aria-hidden="true" className={`size-3.5 ${branch.expanded ? 'rotate-90' : ''}`} /></Button> : <span aria-hidden="true" className="ml-1 grid size-6 shrink-0 place-items-center text-muted-foreground"><MessageSquare className="size-3.5" /></span>)}
+        <div data-menu-open={menuOpen || undefined} className={`group/session relative flex items-center gap-1 rounded-md hover:pr-9 focus-within:pr-9 data-[menu-open=true]:pr-9 [@media(hover:none)]:pr-9 ${selected ? 'bg-primary/10' : 'hover:bg-muted/50'}`} ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
+          {branch && (branch.hasChildren ? <Button aria-label={`${branch.expanded ? '折叠' : '展开'} ${sessionDisplayName(session)} 的分支`} aria-expanded={branch.expanded} className="ml-1 size-6 shrink-0 border-0" size="icon-sm" variant="ghost" onClick={branch.onToggle} onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}><ChevronRight aria-hidden="true" className={`size-3 ${branch.expanded ? 'rotate-90' : ''}`} /></Button> : <span aria-hidden="true" className="ml-1 grid size-6 shrink-0 place-items-center text-muted-foreground"><MessageSquare className="size-3" /></span>)}
           <Button
             aria-current={selected ? 'page' : undefined}
-            className="h-9 min-w-0 flex-1 justify-start border-0 bg-transparent px-2 text-left hover:bg-transparent"
+            className="h-auto min-h-10 min-w-0 flex-1 justify-start gap-2 rounded-md border-0 bg-transparent px-2 py-2 text-left text-sm hover:bg-transparent"
             onClick={() => onSelect(session.id)}
             ref={setActivatorNodeRef}
             variant="ghost"
@@ -65,20 +65,20 @@ export function SessionNavigationRow({
             {session.parentSessionMissing && <span title="来源会话不可用" aria-label="来源会话不可用" className="shrink-0 text-xs text-muted-foreground">↗</span>}
             <SessionStatusIndicator status={status} unread={unread} />
           </Button>
-          {branch?.summary && <span role="status" title={branch.summary} className="max-w-[40%] shrink-0 truncate text-[10px] text-muted-foreground">{branch.summary}</span>}
-          <Button aria-label={`删除 ${sessionDisplayName(session)}`} title={isRunActive(status) ? '运行中的会话无法删除' : '删除会话'} className="pointer-events-none mr-1 shrink-0 text-muted-foreground opacity-0 hover:text-destructive disabled:opacity-0 group-hover/session:pointer-events-auto group-hover/session:opacity-100 group-hover/session:disabled:opacity-50 focus-visible:pointer-events-auto focus-visible:opacity-100" disabled={cannotDelete} onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onDelete(session) }} size="icon-sm" type="button" variant="ghost"><Trash2 aria-hidden="true" className="size-3.5" /></Button>
+          {branch?.summary && <span role="status" title={branch.summary} className="max-w-[40%] shrink-0 truncate text-xs text-muted-foreground">{branch.summary}</span>}
+          <Button aria-label={`删除 ${sessionDisplayName(session)}`} title={isRunActive(status) ? '运行中的会话无法删除' : '删除会话'} className="pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground opacity-0 hover:text-destructive disabled:opacity-0 group-hover/session:pointer-events-auto group-hover/session:opacity-100 group-hover/session:disabled:opacity-50 group-focus-within/session:pointer-events-auto group-focus-within/session:opacity-100 group-focus-within/session:disabled:opacity-50 group-data-[menu-open=true]/session:pointer-events-auto group-data-[menu-open=true]/session:opacity-100 group-data-[menu-open=true]/session:disabled:opacity-50 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:disabled:opacity-50" disabled={cannotDelete} onPointerDown={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onDelete(session) }} size="icon-sm" type="button" variant="ghost"><Trash2 aria-hidden="true" className="size-3" /></Button>
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem disabled={mutationSessionId === session.id} onSelect={() => onRename(session)}>
-          <Pencil aria-hidden="true" className="mr-2 size-3.5" />重命名
+          <Pencil aria-hidden="true" className="mr-2 size-3" />重命名
         </ContextMenuItem>
         <ContextMenuItem disabled={isRunActive(status) || mutationSessionId !== undefined} onSelect={() => onClone(session)}>
-          <Copy aria-hidden="true" className="mr-2 size-3.5" />克隆对话
+          <Copy aria-hidden="true" className="mr-2 size-3" />克隆对话
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={cannotDelete} onSelect={() => onDelete(session)}>
-          <Trash2 aria-hidden="true" className="mr-2 size-3.5" />删除
+          <Trash2 aria-hidden="true" className="mr-2 size-3" />删除
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

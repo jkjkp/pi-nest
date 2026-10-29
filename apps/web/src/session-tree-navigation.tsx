@@ -51,11 +51,11 @@ export function SessionTreeNavigation({ sessions, selectedSessionId, runs, searc
 
   // shortcut: Indentation stops at six levels to preserve title space; add horizontal navigation if deeper trees need it.
   return <SortableContext items={rows.map(({ session }) => `session:${session.id}`)} strategy={verticalListSortingStrategy}>
-    {rows.map(({ session, depth, guides, last, hasChildren, expanded }) => <div key={session.id} className="relative" data-session-id={session.id} data-depth={depth} style={{ paddingLeft: (Math.min(depth, 6) + 1) * 12 }}>
+    {rows.map(({ session, depth, guides, last, hasChildren, expanded }) => <div key={session.id} className="relative" data-session-id={session.id} data-depth={depth} style={{ paddingLeft: Math.min(depth, 6) * 12 }}>
       <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0">
         {guides.slice(-6).map((continues, index) => continues && <span key={index} className="absolute inset-y-0 border-l border-border/70" style={{ left: index * 12 + 6 }} />)}
-        <span className={`absolute top-0 w-1.5 border-l border-border/70 ${last ? 'border-b' : ''}`} style={{ left: Math.min(depth, 6) * 12 + 6, height: last ? 18 : '100%' }} />
-        {!last && <span className="absolute top-[18px] w-1.5 border-t border-border/70" style={{ left: Math.min(depth, 6) * 12 + 6 }} />}
+        <span className={`absolute top-0 w-1.5 border-l border-border/70 ${last ? 'border-b' : ''}`} style={{ left: Math.min(depth, 6) * 12 + 6, height: last ? 20 : '100%' }} />
+        {!last && <span className="absolute top-[20px] w-1.5 border-t border-border/70" style={{ left: Math.min(depth, 6) * 12 + 6 }} />}
       </span>
       <SessionNavigationRow {...rowProps} sortParentId={tree.parents.get(session.id)} session={session} selected={session.id === selectedSessionId} run={runs[session.id]} branch={{ hasChildren, expanded, onToggle: () => setCollapsed(session.id, expanded), summary: expanded ? '' : summaries.get(session.id) ?? '' }} />
     </div>)}

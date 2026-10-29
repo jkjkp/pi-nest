@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import type { SessionRunController } from './session-run-controller.js'
-import { commandToken, completeCommand, matchingCommands } from './composer-commands.js'
+import { commandToken, completeCommand, matchingCommands, parseComposerCommand } from './composer-commands.js'
 
 type Props = Omit<ComponentProps<typeof Textarea>, 'value' | 'onChange' | 'ref'> & {
   value: string
@@ -52,14 +52,17 @@ export function CommandComposer({ value, onValueChange, onExecuteCommand, textar
     setDismissed(false)
   }
 
-  function choose(name: string, enter = false) {
+  function choose(name: string, execute = false) {
     if (!token) return
     const next = completeCommand(value, token, name)
-    pendingCaret.current = next.caret
     setDismissed(true)
+    if (execute && !value.slice(0, token.start).trim() && parseComposerCommand(next.value)) {
+      onExecuteCommand(next.value)
+      return
+    }
+    pendingCaret.current = next.caret
     onValueChange(next.value)
     textareaRef.current?.focus()
-    if (enter && ['clone', 'compact', 'rename', 'session'].includes(name) && next.value.trim() === `/${name}`) onExecuteCommand(next.value)
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -83,14 +86,14 @@ export function CommandComposer({ value, onValueChange, onExecuteCommand, textar
   return <div className="relative w-full min-w-0" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false) }}>
     {open && <div className="absolute inset-x-0 bottom-full z-30 mb-3 overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-md" aria-label="命令提示">
       <div id={listId} ref={list} role="listbox" aria-label="可用命令" className="max-h-[min(16rem,35dvh)] overflow-y-auto overscroll-contain p-1.5">
-        {commands.map((command, itemIndex) => <button key={command.name} id={`${listId}-${itemIndex}`} type="button" role="option" aria-selected={itemIndex === index} tabIndex={-1} className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm ${itemIndex === index ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'}`} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(command.name)}>
+        {commands.map((command, itemIndex) => <button key={command.name} id={`${listId}-${itemIndex}`} type="button" role="option" aria-selected={itemIndex === index} tabIndex={-1} className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm ${itemIndex === index ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'}`} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(command.name, true)}>
           <span className="shrink-0 font-normal">/{command.name}</span><span className="min-w-0 truncate text-muted-foreground">{command.description}</span>
         </button>)}
         {!commands.length && commandsQuery.data !== undefined && !commandsQuery.isFetching && !commandsQuery.isError && <p className="px-3 py-2 text-sm text-muted-foreground">没有匹配的命令</p>}
       </div>
       {commandsQuery.isFetching ? <p role="status" className="px-4 py-2 text-xs text-muted-foreground">正在读取命令…</p>
         : commandsQuery.isError ? <div role="alert" className="flex items-center gap-2 px-4 py-2 text-xs">命令列表加载失败<Button type="button" size="sm" variant="ghost" disabled={!canQuery} onMouseDown={(event) => event.preventDefault()} onClick={() => void commandsQuery.refetch()}>重试</Button></div>
-          : !canQuery && !commandsQuery.data && <p role="status" className="px-4 py-2 text-xs text-muted-foreground">会话空闲且运行时就绪后可读取更多命令</p>}
+          : !canQuery && !commandsQuery.data && <p role="status" className="px-4 py-2 text-xs text-muted-foreground">运行时就绪后可读取更多命令</p>}
     </div>}
     <Textarea {...props} value={value} ref={textareaRef} aria-autocomplete="list" aria-controls={open ? listId : undefined} aria-haspopup="listbox" aria-activedescendant={open && commands[index] ? `${listId}-${index}` : undefined}
       onChange={(event) => { updateSelection(event.currentTarget); onValueChange(event.target.value) }}

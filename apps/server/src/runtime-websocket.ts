@@ -11,6 +11,7 @@ import type { SessionIndex } from './session-index.js'
 
 const attachmentsShape = { attachmentIds: z.array(z.string().regex(/^(?:[a-f0-9-]{36}|[a-f0-9]{64})$/)).min(1).max(8).optional(), submissionId: z.string().uuid().optional() }
 const commandSchema = z.discriminatedUnion('type', [
+  z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('extension_command'), message: z.string().trim().min(1).max(20_000) }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_commands') }).strict(),
   z.object({ id: z.string().min(1).max(128), resume: z.object({ after: z.number().int().nonnegative() }).strict().optional(), sessionId: z.string().min(1), type: z.literal('watch') }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('unwatch') }).strict(),
@@ -138,6 +139,15 @@ export class RuntimeWebSocketBroker {
       }
     }
 
+    if (command.data.type === 'extension_command') {
+      try {
+        const result = await this.runtime.executeExtensionCommand(watched.session, command.data.message)
+        return this.ack(socket, command.data.id, command.data.type, command.data.sessionId, result)
+      } catch (cause) {
+        return this.error(socket, command.data.id, cause instanceof PiRuntimeBusyError ? 'SESSION_BUSY' : 'COMMAND_FAILED', cause instanceof Error ? cause.message : '插件命令执行失败', command.data.sessionId)
+      }
+    }
+
     if (command.data.type === 'get_session_stats') {
       try {
         const result = this.runtime.getSessionStatistics(command.data.sessionId)
@@ -155,7 +165,9 @@ export class RuntimeWebSocketBroker {
             ? { type: 'compact', ...(command.data.customInstructions ? { customInstructions: command.data.customInstructions } : {}) }
           : { type: command.data.type === 'get_runtime_state' ? 'get_state' : command.data.type }
       try {
-        const result = this.runtime.commandWhenIdle(watched.session, rpc)
+        const result = command.data.type === 'get_commands' && this.runtime.isPromptActive(command.data.sessionId)
+          ? this.runtime.commandWhileRunning(command.data.sessionId, rpc)
+          : this.runtime.commandWhenIdle(watched.session, rpc)
         if (!result) return this.error(socket, command.data.id, 'RUNTIME_NOT_LOADED', 'Pi runtime is not loaded', command.data.sessionId)
         const response = await result
         return this.ack(socket, command.data.id, command.data.type, command.data.sessionId, this.safeData(command.data.type, response))

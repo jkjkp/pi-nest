@@ -57,7 +57,7 @@ it.each([['/session', 'statistics'], ['/settings', 'settings']] as const)('opens
   if (text === '/session') expect(context.render().notice).toBeUndefined()
 })
 it('passes compaction instructions, blocks duplicate commands and preserves new input', async () => {
-  const context = setup('/compact 保留接口设计')
+  const context = setup('/compact -- 保留接口设计')
   let release!: () => void
   vi.mocked(context.sessionRuns.compact).mockReturnValue(new Promise((resolve) => { release = () => resolve(true) }))
   context.submit()
@@ -72,11 +72,11 @@ it('passes compaction instructions, blocks duplicate commands and preserves new 
   expect(context.draft()).toBe('新草稿')
   expect(context.render().busy).toBe(false)
 })
-it('keeps failed commands and does not clear a draft after switching sessions', async () => {
+it('does not refill a failed compact command or clear a draft after switching sessions', async () => {
   const context = setup('/compact')
   vi.mocked(context.sessionRuns.compact).mockRejectedValueOnce(new Error('Cannot compact'))
   context.submit(); await tick()
-  expect(context.draft()).toBe('/compact')
+  expect(context.draft()).toBe('')
   expect(context.render().notice?.message).toBe('Cannot compact')
   let release!: () => void
   vi.mocked(context.sessionRuns.compact).mockReturnValueOnce(new Promise((resolve) => { release = () => resolve(true) }))
@@ -240,7 +240,7 @@ it('keeps compaction progress across session switches and reports cancellation',
   expect(context.render().notice).toEqual({ message: '已取消上下文压缩' })
   expect(context.draft()).toBe('')
 })
-it('preserves new input on failure and expires compaction completion feedback', async () => {
+it('keeps inline compaction feedback until the next message without expiring it', async () => {
   vi.useFakeTimers()
   const context = setup('/compact')
   let reject!: (cause: Error) => void
@@ -251,10 +251,14 @@ it('preserves new input on failure and expires compaction completion feedback', 
   expect(context.draft()).toBe('新输入')
   expect(context.render().notice).toMatchObject({ error: true, message: 'Failed' })
   vi.advanceTimersByTime(2000)
-  expect(context.render().notice).toBeUndefined()
+  expect(context.render().notice).toMatchObject({ error: true, inline: true, message: 'Failed' })
   context.submit(); await tick()
-  expect(context.render().notice?.message).toBe('上下文压缩完成')
-  vi.advanceTimersByTime(3000)
+  expect(context.render().compacted).toBe(true)
+  vi.advanceTimersByTime(30000)
+  expect(context.render().compacted).toBe(true)
+  context.workspace.isActive = true
+  context.render()
+  expect(context.render().compacted).toBe(false)
   expect(context.render().notice).toBeUndefined()
 })
 it('allows retrying a failed cancellation without losing the active compaction', async () => {
@@ -272,7 +276,7 @@ it('allows retrying a failed cancellation without losing the active compaction',
   expect(context.render().notice?.message).toBe('已取消上下文压缩')
 })
 
-it('clears a stale compact command restored during successful compaction', async () => {
+it('preserves an identical command written after compaction was submitted', async () => {
   const context = setup('/compact ')
   let finish!: (value: boolean) => void
   vi.mocked(context.sessionRuns.compact).mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
@@ -280,6 +284,31 @@ it('clears a stale compact command restored during successful compaction', async
   expect(context.draft()).toBe('')
   useWorkspaceStore.getState().setDraft('one', '/compact ')
   finish(true); await tick()
-  expect(context.draft()).toBe('')
-  expect(context.render().notice?.message).toBe('上下文压缩完成')
+  expect(context.draft()).toBe('/compact ')
+  expect(context.render().compacted).toBe(true)
+})
+
+it('keeps the marker across editing, other commands and session switches without changing history', async () => {
+  const context = setup('/compact')
+  const originalHistory = context.workspace.history
+  context.submit(); await tick()
+  expect(context.render().compacted).toBe(true)
+  useWorkspaceStore.getState().setDraft('one', '新草稿')
+  expect(context.render().compacted).toBe(true)
+  context.render().submit('/session'); await tick()
+  expect(context.render().compacted).toBe(true)
+  context.workspace.selectedSessionId = 'two'
+  expect(context.render().compacted).toBe(false)
+  context.workspace.selectedSessionId = 'one'
+  expect(context.render().compacted).toBe(true)
+  expect(context.workspace.history).toBe(originalHistory)
+})
+
+it('rejects an empty explicit compact argument without clearing input or invoking Pi', async () => {
+  const context = setup('/compact --')
+  expect(context.submit()).toBe(true)
+  await tick()
+  expect(context.sessionRuns.compact).not.toHaveBeenCalled()
+  expect(context.draft()).toBe('/compact --')
+  expect(context.render().notice).toMatchObject({ error: true, message: expect.stringContaining('/compact --') })
 })

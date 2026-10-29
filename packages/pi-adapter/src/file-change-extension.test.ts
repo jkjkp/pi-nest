@@ -14,13 +14,20 @@ it('loads the bundled extension in real Pi RPC and persists net counts through h
   const agentDir = join(directory, 'agent')
   mkdirSync(agentDir)
   writeFileSync(join(directory, 'existing.txt'), 'original\nkeep\n')
+  mkdirSync(join(directory, '中文 目录'))
+  const yaml = join(directory, '中文 目录/fs-rules.yaml')
+  writeFileSync(yaml, 'rules:\n  - old\n')
   let request = 0
   const actions = [
     { name: 'write', arguments: { path: 'new.txt', content: 'one\n' } },
     { name: 'write', arguments: { path: 'existing.txt', content: 'temporary\nkeep\n' } },
     { name: 'edit', arguments: { path: 'existing.txt', edits: [{ oldText: 'temporary', newText: 'final' }] } },
+    { name: 'write', arguments: { path: 'update.mjs', content: "import { writeFileSync } from 'node:fs'; writeFileSync('中文 目录/fs-rules.yaml', 'rules:\\n  - final\\n  - extra\\n')\n" } },
+    { name: 'bash', arguments: { command: 'node update.mjs' } },
     undefined,
     { name: 'write', arguments: { path: 'existing.txt', content: 'original\nkeep\n' } },
+    undefined,
+    { name: 'bash', arguments: { command: "printf 'rules:\\n  - partial\\n' > '中文 目录/fs-rules.yaml'; exit 7" } },
   ]
   const server = createServer(async (req, res) => {
     for await (const _chunk of req) { /* Drain the local fixture request. */ }
@@ -47,19 +54,23 @@ it('loads the bundled extension in real Pi RPC and persists net counts through h
     await expect.poll(() => events.some((event) => event.type === 'agent_settled'), { timeout: 15000 }).toBe(true)
     const entries = SessionManager.open(sessionFile).getBranch()
     const tools = entries.filter((entry) => entry.type === 'message' && entry.message.role === 'toolResult')
-    expect(tools).toHaveLength(3)
-    expect(tools.map((entry) => entry.type === 'message' && entry.message.role === 'toolResult' ? (entry.message.details as { piNestFileChange: unknown }).piNestFileChange : undefined)).toMatchObject([
+    expect(tools).toHaveLength(5)
+    expect(tools.slice(0, 3).map((entry) => entry.type === 'message' && entry.message.role === 'toolResult' ? (entry.message.details as { piNestFileChange: unknown }).piNestFileChange : undefined)).toMatchObject([
       { added: 1, removed: 0, changeType: 'created' },
       { added: 1, removed: 1 },
       { added: 1, removed: 1 },
     ])
     const summary = entries.findLast((entry) => entry.type === 'custom' && entry.customType === 'pi-nest-file-changes')
-    expect(summary).toMatchObject({ data: { turnId: entries.find((entry) => entry.type === 'message' && entry.message.role === 'user')?.id, files: [
-      { path: join(directory, 'new.txt'), added: 1, removed: 0 },
-      { path: join(directory, 'existing.txt'), added: 1, removed: 1 },
-    ] } })
+    expect(summary).toMatchObject({ data: { turnId: entries.find((entry) => entry.type === 'message' && entry.message.role === 'user')?.id, files: expect.arrayContaining([
+      expect.objectContaining({ path: join(directory, 'new.txt'), added: 1, removed: 0 }),
+      expect.objectContaining({ path: join(directory, 'existing.txt'), added: 1, removed: 1 }),
+      expect.objectContaining({ path: join(directory, 'update.mjs'), added: 1, removed: 0 }),
+      expect.objectContaining({ path: yaml, added: 2, removed: 1 }),
+    ]) } })
+    expect((summary as { data: { files: unknown[] } } | undefined)?.data.files).toHaveLength(4)
+    expect(readFileSync(yaml, 'utf8')).toBe('rules:\n  - final\n  - extra\n')
     expect(readFileSync(join(directory, 'existing.txt'), 'utf8')).toBe('final\nkeep\n')
-    expect(events.filter((event) => event.type === 'tool_execution_end').map((event) => event.result)).toMatchObject([
+    expect(events.filter((event) => event.type === 'tool_execution_end').slice(0, 3).map((event) => event.result)).toMatchObject([
       { details: { piNestFileChange: { added: 1, removed: 0 } } },
       { details: { piNestFileChange: { added: 1, removed: 1 } } },
       { details: { piNestFileChange: { added: 1, removed: 1 } } },
@@ -70,7 +81,7 @@ it('loads the bundled extension in real Pi RPC and persists net counts through h
     const reply = entries.findLast((entry) => entry.type === 'message' && entry.message.role === 'assistant')!
     const fork = branchPiSession({ kind: 'fork', entryId: reply.id, revision: createHash('sha256').update(prior).digest('hex'), sessionFile, expectedSessionId: manager.getSessionId(), expectedCwd: directory })
     const forked = SessionManager.open(fork.session.sessionFile).getBranch()
-    expect(forked.filter((entry) => entry.type === 'message' && entry.message.role === 'toolResult').at(-1)).toMatchObject({ message: { details: { piNestFileChange: { added: 1, removed: 1 } } } })
+    expect(forked.filter((entry) => entry.type === 'message' && entry.message.role === 'toolResult').at(-3)).toMatchObject({ message: { details: { piNestFileChange: { added: 1, removed: 1 } } } })
     const persisted = JSON.stringify(summary)
     expect(persisted).not.toContain('original\\n')
     expect(persisted).not.toContain('final\\n')
@@ -81,6 +92,11 @@ it('loads the bundled extension in real Pi RPC and persists net counts through h
     const nextSummary = SessionManager.open(sessionFile).getBranch().findLast((entry) => entry.type === 'custom' && entry.customType === 'pi-nest-file-changes')
     expect(nextSummary).toMatchObject({ data: { files: [{ path: join(directory, 'existing.txt'), added: 1, removed: 1 }] } })
     expect(readFileSync(join(directory, 'existing.txt'), 'utf8')).toBe('original\nkeep\n')
+    const secondSettled = events.filter((event) => event.type === 'agent_settled').length
+    await rpc.send({ type: 'prompt', message: 'a command that changes a file and then fails' })
+    await expect.poll(() => events.filter((event) => event.type === 'agent_settled').length, { timeout: 15000 }).toBe(secondSettled + 1)
+    const failedSummary = SessionManager.open(sessionFile).getBranch().findLast((entry) => entry.type === 'custom' && entry.customType === 'pi-nest-file-changes')
+    expect(failedSummary).toMatchObject({ data: { files: [{ path: yaml, changeType: 'modified', added: 1, removed: 2 }] } })
   } finally {
     await rpc.close()
     await new Promise<void>((done) => server.close(() => done()))

@@ -47,9 +47,9 @@ export async function fetchSessions() {
 }
 
 export async function createSession(cwd: string, prompt: string, attachments?: { attachmentIds: string[]; submissionId: string; draftId: string }, initialSettings?: PiSessionInitialSettings) {
-  const body = await configurationRequest<{ session?: PiSessionSummary }>('/api/sessions', { body: JSON.stringify({ cwd, prompt, ...attachments, ...(initialSettings ? { initialSettings } : {}) }), method: 'POST' })
+  const body = await configurationRequest<{ session?: PiSessionSummary; disposition?: 'handled' | 'started' | 'queued' }>('/api/sessions', { body: JSON.stringify({ cwd, prompt, ...attachments, ...(initialSettings ? { initialSettings } : {}) }), method: 'POST' })
   if (!body.session?.id || !body.session.cwd) throw new Error('Invalid Pi session creation response')
-  return body.session
+  return { ...body.session, ...(body.disposition ? { disposition: body.disposition } : {}) }
 }
 
 export async function openProjectFolder(cwd: string) {

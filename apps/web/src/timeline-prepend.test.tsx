@@ -69,6 +69,7 @@ it.each([0, 60, 1620])('anchors the current message after pagination, streaming,
     }
   }
   const scroll = async (position: number) => {
+    await act(() => viewport.dispatchEvent(new Event('wheel')))
     top = position
     await act(() => viewport.dispatchEvent(new Event('scroll')))
   }

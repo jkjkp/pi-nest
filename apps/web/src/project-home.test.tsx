@@ -200,3 +200,15 @@ it('handles native picker cancellation and failure without registering a project
   expect(addProject).not.toHaveBeenCalled()
   expect(container.querySelector('[data-route]')?.textContent).toBe('/')
 })
+
+
+it('opens a handled first-session command without adopting an optimistic answer', async () => {
+  client.setQueryData(['projects'], [{ cwd: '/projects/control', createdAt: '2026-10-17T00:00:00Z' }])
+  vi.mocked(createSession).mockResolvedValue({ id: 'control-session', cwd: '/projects/control', disposition: 'handled' })
+  await mount('/?draftProject=cwd%3A%2Fprojects%2Fcontrol')
+  await fill(container.querySelector<HTMLTextAreaElement>('textarea')!, '/ponytail off')
+  await act(() => container.querySelector<HTMLButtonElement>('[aria-label="发送提示词"]')!.click())
+  expect(controller.adopt).not.toHaveBeenCalled()
+  expect(controller.openSession).toHaveBeenCalledWith('control-session')
+  expect(container.querySelector('[data-route]')?.textContent).toBe('/?session=control-session')
+})

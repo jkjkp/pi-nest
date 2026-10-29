@@ -5,6 +5,7 @@ type ExtensionUiProjection = { freshness: 'known' | 'restored'; statuses: Map<st
 
 /** Owns extension projections and dialogs; runtime coordination stays in the Registry. */
 export class RuntimeExtensionState {
+  private readonly writes = new Map<string, Promise<unknown>>()
   private readonly projections = new Map<string, ExtensionUiProjection>()
   private readonly dialogs = new Map<string, Map<string, PiRuntimeEvent>>()
   readonly ready: Promise<void>
@@ -50,7 +51,8 @@ export class RuntimeExtensionState {
     this.dialogs.delete(sessionId)
   }
 
-  close() {
+  async close() {
+    await Promise.all(this.writes.values())
     this.projections.clear()
     this.dialogs.clear()
   }
@@ -74,7 +76,7 @@ export class RuntimeExtensionState {
 
   async clearProjection(sessionId: string) {
     this.projections.set(sessionId, { freshness: 'known', statuses: new Map(), widgets: new Map() })
-    await this.sidecars.delete(sessionId)
+    await this.write(sessionId, () => this.sidecars.delete(sessionId))
   }
 
   async trackProjection(sessionId: string, event: Record<string, unknown>) {
@@ -83,6 +85,7 @@ export class RuntimeExtensionState {
       const key = event.statusKey
       if (typeof key !== 'string' || !key) return
       const projection = this.projections.get(sessionId) ?? { freshness: 'known' as const, statuses: new Map(), widgets: new Map() }
+      if (projection.freshness === 'restored') { projection.statuses.clear(); projection.widgets.clear() }
       this.projections.set(sessionId, projection)
       projection.freshness = 'known'
       if (typeof event.statusText === 'string') projection.statuses.set(key, event.statusText)
@@ -94,6 +97,7 @@ export class RuntimeExtensionState {
     const key = event.widgetKey
     if (typeof key !== 'string' || !key) return
     const projection = this.projections.get(sessionId) ?? { freshness: 'known' as const, statuses: new Map(), widgets: new Map() }
+    if (projection.freshness === 'restored') { projection.statuses.clear(); projection.widgets.clear() }
     this.projections.set(sessionId, projection)
     projection.freshness = 'known'
     if (Array.isArray(event.widgetLines) && event.widgetLines.every((line) => typeof line === 'string')) projection.widgets.set(key, [...event.widgetLines])
@@ -101,11 +105,18 @@ export class RuntimeExtensionState {
     await this.persistExtensionUi(sessionId, projection)
   }
 
+  private write(sessionId: string, operation: () => Promise<unknown>) {
+    const pending = (this.writes.get(sessionId) ?? Promise.resolve()).then(operation)
+    this.writes.set(sessionId, pending)
+    void pending.finally(() => { if (this.writes.get(sessionId) === pending) this.writes.delete(sessionId) })
+    return pending
+  }
+
   private async persistExtensionUi(sessionId: string, value: ExtensionUiProjection) {
     const projection: ExtensionUiProjectionData = {
       statuses: Object.fromEntries(value.statuses),
       widgets: Object.fromEntries([...value.widgets].map(([key, lines]) => [key, [...lines]])),
     }
-    await this.sidecars.save(sessionId, projection)
+    await this.write(sessionId, () => this.sidecars.save(sessionId, projection))
   }
 }

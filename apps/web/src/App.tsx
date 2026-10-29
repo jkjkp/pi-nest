@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from 'react-router'
+import { Navigate, Route, Routes, useSearchParams } from 'react-router'
 
 import { TooltipProvider } from '@/components/ui/tooltip'
 
@@ -9,9 +9,10 @@ import { WorkspacePage } from './workspace-page.js'
 import { SettingsPage } from './settings-page.js'
 
 function App({ runtime, sessionRuns }: { runtime: RuntimeWebSocketClient; sessionRuns: SessionRunController }) {
+  const [searchParams] = useSearchParams()
   return (
     <TooltipProvider>
-      <RuntimeExtensionUi runtime={runtime} sessionRuns={sessionRuns}>
+      <RuntimeExtensionUi runtime={runtime} sessionRuns={sessionRuns} activeSessionId={searchParams.get('session') ?? ''}>
         <Routes>
           <Route path="/" element={<WorkspacePage sessionRuns={sessionRuns} />} />
           <Route path="/settings/:category?" element={<SettingsPage />} />

@@ -71,7 +71,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const planPolicy = planModePolicy(extensionWidgets[selectedSessionId])
   const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
   const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
-  const { history, historyQuery, historyError, historyTurnCount, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump, readTurnPrompt, jumpToUnloadedTurn, loadEarlier, retryHistory } = useSessionHistory(selectedSessionId, Boolean(selectedSessionId))
+  const { history, historyQuery, historyError, historyTurnCount, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, jumpError, cancelTurnJump, finishTurnJump, readTurnPrompt, requestTurnJump, loadEarlier, retryHistory } = useSessionHistory(selectedSessionId, Boolean(selectedSessionId))
   const completedRunId = useWorkspaceStore((state) => state.sessionNotifications[selectedSessionId]?.completedRunId)
   const planTurnId = timelineItems(history?.entries, currentRun?.turns ?? [], currentRun?.systemEvents ?? []).findLast((item) => item.plan)?.id
 
@@ -161,7 +161,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     if (draftProject?.cwd === project.cwd || selectedSession?.cwd === project.cwd) setSearchParams({})
   }
 
-  function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up') {
+  function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up', commandsChecked = false) {
     if (attachmentDraft.items.length && (attachmentDraft.busy || prompt.trimStart().startsWith('/'))) {
       const error = attachmentDraft.busy ? '请等待附件上传完成，或移除失败的附件。' : '带附件时暂不支持命令，请先移除附件。'
       if (isDraft) setDraftError(error); else setControlError(error)
@@ -171,6 +171,32 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     setControlError(undefined)
     if (isDraft) return void submitDraft()
     if (!selectedSessionId || (!prompt.trim() && !attachmentDraft.items.length)) return
+    if (!commandsChecked && /^\/[^\s/]+(?:\s|$)/.test(prompt.trim())) {
+      const sessionId = selectedSessionId
+      if (runningInputRequests.current.has(sessionId)) return
+      const revision = useWorkspaceStore.getState().draftRevisions[sessionId]
+      runningInputRequests.current.add(sessionId)
+      setRunningInputSessions([...runningInputRequests.current])
+      void (async () => {
+        let sendAsPrompt = false
+        try {
+          const commands = await queryClient.fetchQuery({ queryKey: ['runtime-commands', sessionId], queryFn: () => sessionRuns.getCommands(sessionId), staleTime: 0 })
+          const name = prompt.trim().match(/^\/([^\s/]+)/)?.[1]
+          if (commands.some((command) => command.name === name && command.source === 'extension')) {
+            await sessionRuns.executeExtensionCommand(sessionId, prompt)
+            if (useWorkspaceStore.getState().draftRevisions[sessionId] === revision) setDraft(sessionId, '')
+          } else {
+            sendAsPrompt = selectedSessionIdRef.current === sessionId && useWorkspaceStore.getState().draftRevisions[sessionId] === revision
+          }
+        } catch (cause) { setControlError(cause instanceof Error ? cause.message : '插件命令执行失败', sessionId) }
+        finally {
+          runningInputRequests.current.delete(sessionId)
+          setRunningInputSessions([...runningInputRequests.current])
+        }
+        if (sendAsPrompt) submitPrompt(mode, true)
+      })()
+      return
+    }
     const input = attachmentDraft.submission(prompt)
     const attachedItems = [...attachmentDraft.items]
     const acceptedAttachments = () => attachmentDraft.clear(attachedItems)
@@ -260,9 +286,9 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, collapsedProjectKeys,
     navigationOrder, setNavigationOrder, setProjectCollapsed, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models: isDraft ? draftModels : models, thinkingLevels: isDraft ? draftLevels : thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus: isDraft ? draftSettingsStatus : thinkingStatus, thinkingError: isDraft ? draftSettingsError : thinkingError, thinkingFailure, currentThinkingLevel: isDraft ? draftThinking : runtimeDetails[selectedSessionId]?.thinkingLevel,
-    sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, setPendingJump,
+    sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, jumpError, cancelTurnJump, finishTurnJump,
     selectSession, createBranch, startDraft, openProject, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
-    readTurnPrompt, jumpToUnloadedTurn, openProjectFolder, changeModel, changeThinkingLevel,
+    readTurnPrompt, requestTurnJump, openProjectFolder, changeModel, changeThinkingLevel,
     loadEarlier, retryHistory,
   }
 }

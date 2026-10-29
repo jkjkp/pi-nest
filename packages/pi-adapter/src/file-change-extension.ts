@@ -16,18 +16,20 @@ export default async function fileChangeExtension(pi: ExtensionAPI) {
     if (!dirty) return
     const files = tracker.finish()
     dirty = false
-    if (turnId && files.length) pi.appendEntry('pi-nest-file-changes', { version: 1, turnId, files })
+    if (turnId && (files.length || tracker.incomplete)) pi.appendEntry('pi-nest-file-changes', { version: 1, turnId, files, ...(tracker.incomplete ? { incomplete: true } : {}) })
   }
   pi.on('session_start', reset)
   pi.on('session_shutdown', () => { flush(); reset() })
   pi.on('agent_settled', () => { flush(); reset() })
   pi.on('message_start', ({ message }) => { if (message.role === 'user') { flush(); reset() } })
   pi.on('tool_call', (event, context) => {
-    if (event.toolName !== 'edit' && event.toolName !== 'write') return
-    if (!('path' in event.input) || typeof event.input.path !== 'string') return
     turnId ??= context.sessionManager.getBranch().findLast((entry) => entry.type === 'message' && entry.message.role === 'user')?.id
+    if ((event.toolName === 'edit' || event.toolName === 'write') && typeof event.input.path === 'string') {
+      calls.set(event.toolCallId, tracker.before(context.cwd, resolveToCwd(event.input.path, context.cwd)))
+    }
+    // Any tool, including custom tools, can mutate files indirectly.
+    tracker.beforeWorkspace(context.cwd, context.sessionManager.getSessionFile())
     dirty = true
-    calls.set(event.toolCallId, tracker.before(context.cwd, resolveToCwd(event.input.path, context.cwd)))
   })
   pi.on('tool_result', (event, context) => {
     const path = calls.get(event.toolCallId)

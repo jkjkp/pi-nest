@@ -14,10 +14,13 @@ it('restores final statistics to the recorded user turn even when appended after
   const entries = [
     { id: 'user-one', parentId: null, type: 'message', timestamp, raw: { type: 'message', message: { role: 'user', content: 'first' } } },
     { id: 'user-two', parentId: 'user-one', type: 'message', timestamp, raw: { type: 'message', message: { role: 'user', content: 'second' } } },
-    { id: 'stats', parentId: 'user-two', type: 'custom', timestamp, raw: { type: 'custom', customType: 'pi-nest-file-changes', data: { version: 1, turnId: 'user-one', files: [stats, { path: 'malformed' }] } } },
+    { id: 'stats', parentId: 'user-two', type: 'custom', timestamp, raw: { type: 'custom', customType: 'pi-nest-file-changes', data: { version: 1, turnId: 'user-one', incomplete: true, files: [stats, { path: 'malformed' }] } } },
   ]
   const turns = timelineItems(entries, [], [])
   expect(turns[0]?.fileChanges).toEqual([stats])
+  expect(turns[0]?.fileChangesIncomplete).toBe(true)
   expect(turns[1]?.fileChanges).toBeUndefined()
   expect(turns.every((turn) => turn.diagnostics.length === 0)).toBe(true)
+  const merged = timelineItems(entries, [{ id: 'live', prompt: 'first', startedAt: timestamp, events: [] }], [])
+  expect(merged.find((turn) => turn.id === 'user-one')?.fileChangesIncomplete).toBe(true)
 })

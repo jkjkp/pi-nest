@@ -17,6 +17,31 @@ const history = {
 }
 
 describe('SessionTimeline', () => {
+  it('shows incomplete file statistics even when no changed files could be captured', () => {
+    const entries = [...history.entries, { id: 'stats', parentId: 'assistant-1', timestamp: '2026-09-22T00:00:04.000Z', type: 'custom', raw: { type: 'custom', customType: 'pi-nest-file-changes', data: { version: 1, turnId: 'user-1', files: [], incomplete: true } } }]
+    const markup = render(<SessionTimeline error={false} history={{ ...history, entries }} isLoading={false} onRetry={() => undefined} />)
+    expect(markup).toContain('统计可能不完整')
+    expect(markup).toContain('data-turn-file-summary')
+  })
+
+  it('renders nothing while history loads, then displays the loaded messages', () => {
+    expect(render(<SessionTimeline error={false} history={undefined} isLoading onRetry={() => undefined} />)).toBe('')
+    expect(render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)).toContain('answer')
+  })
+
+  it('keeps available messages visible while history loads', () => {
+    const markup = render(<SessionTimeline error={false} history={undefined} isLoading onRetry={() => undefined} turns={[{ id: 'live', prompt: 'Live question', events: [], startedAt: '2026-10-28T00:00:00Z' }]} />)
+    expect(markup).toContain('Live question')
+  })
+
+  it('preserves empty history and history failure feedback after loading', () => {
+    const empty = render(<SessionTimeline error={false} history={{ ...history, entries: [] }} isLoading={false} onRetry={() => undefined} />)
+    expect(empty).toContain('当前活动分支尚无可展示的原生条目。')
+    const failed = render(<SessionTimeline error history={undefined} isLoading={false} onRetry={() => undefined} />)
+    expect(failed).toContain('无法读取会话历史')
+    expect(failed).toContain('重试')
+  })
+
   it('keeps the answer readable while showing navigation failure and a retry action', () => {
     const markup = render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} navigationNotice="完整轮次导航暂不可用" onRetryNavigation={() => undefined} />)
     expect(markup).toContain('完整轮次导航暂不可用')

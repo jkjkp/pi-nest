@@ -25,3 +25,9 @@ it('uses text sweep feedback without a redundant cancel button for compaction', 
   expect(markup).not.toContain('<button')
   expect(markup).not.toContain('animate-spin')
 })
+
+it('keeps compact errors inline instead of showing a transient floating toast', () => {
+  const markup = renderToStaticMarkup(<CommandNotice notice={{ message: '压缩失败', error: true, inline: true }} />)
+  expect(markup).toContain('role="alert"')
+  expect(markup).not.toContain('fixed')
+})

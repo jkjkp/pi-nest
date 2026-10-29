@@ -48,7 +48,7 @@ export class PiRpcConnection {
   private readonly listeners = new Set<(record: PiRpcRecord) => void>()
   private readonly pending = new Map<
     string,
-    { reject: (error: Error) => void; resolve: (response: PiRpcResponse) => void; timer: NodeJS.Timeout }
+    { reject: (error: Error) => void; resolve: (response: PiRpcResponse) => void; timer: NodeJS.Timeout | undefined }
   >()
   private readonly stopTimeoutMs: number
   private buffer = ''
@@ -112,7 +112,8 @@ export class PiRpcConnection {
     }
 
     return new Promise<PiRpcResponse>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      // Compaction waits for a model response; abort and process failure end the wait.
+      const timer = type === 'compact' ? undefined : setTimeout(() => {
         this.pending.delete(id)
         const error = new PiRpcConnectionError('rpc_timeout', `Pi RPC command timed out: ${type} (${id})`)
         this.fail(error)

@@ -118,7 +118,7 @@ describe('workspace presentation helpers', () => {
   it('keeps extension UI isolated by session and replaces snapshots as whole projections', () => {
     useWorkspaceStore.setState({ extensionStatuses: {}, extensionWidgets: {}, runtimeStates: {} })
     const store = useWorkspaceStore.getState()
-    store.replaceExtensionUi('one', { statuses: { agent: 'working' }, widgets: { todo: ['a'] } })
+    store.replaceExtensionUi('one', { freshness: 'known', statuses: { agent: 'working' }, widgets: { todo: ['a'] } })
     store.setExtensionStatus('one', 'agent', undefined)
     store.setExtensionWidget('two', 'todo', ['b'])
     store.setRuntimeState('one', { lifecycle: 'active', revision: 2 })

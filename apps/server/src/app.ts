@@ -1,3 +1,4 @@
+import { createWorkspaceFileRoutes } from './workspace-files.js'
 import { createAttachmentRoutes } from './attachment-routes.js'
 import { createSessionFilePreviewRoutes } from './session-file-preview.js'
 import { serveWebRelease } from './web-release.js'
@@ -23,6 +24,7 @@ export function createApp(
     .route('/api/configuration', createConfigurationRoutes(runtime, security, projects, sessions))
     .use('/api/sessions/:sessionId/settings', configurationSecurity(security))
     .route('/api/attachments', createAttachmentRoutes(runtime.attachments, security, projects, sessions))
+    .route('/api/workspace-files', createWorkspaceFileRoutes(security, projects, sessions))
     .route('/api/projects', createProjectRoutes(projects, security))
     .route('/api', createSessionFilePreviewRoutes(security, sessions))
     .route('/api', createSessionRoutes(runtime, projects, security, sessions))

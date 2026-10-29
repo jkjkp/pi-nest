@@ -141,14 +141,14 @@ export function SessionNavigation({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b">
-        <div className="flex h-14 items-center gap-2 px-4">
+        <div className="flex h-14 items-center gap-2 px-5">
           <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-normal text-primary-foreground">PN</span>
           <h2 className="min-w-0 truncate text-sm font-normal tracking-tight">Pi Nest</h2>
         </div>
         <label className="relative block px-3 pb-3" htmlFor="session-search">
-          <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-2.5 size-3.5 text-muted-foreground" />
+          <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-3.5 size-3 text-muted-foreground" />
           <input
-            className="h-8 w-full rounded-md border bg-background/60 py-1 pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="h-10 w-full rounded-md border bg-background/60 py-2 pl-7 pr-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-3 focus-visible:ring-ring/50"
             id="session-search"
             onChange={(event) => setSearchValue(event.target.value)}
             placeholder="搜索项目或会话"
@@ -157,18 +157,18 @@ export function SessionNavigation({
           />
         </label>
       </div>
-      <div className="flex shrink-0 items-center justify-between px-4 pt-3 pb-1">
+      <div className="flex shrink-0 items-center justify-between gap-2 px-5 pt-4 pb-2">
         <h3 className="text-xs font-normal text-muted-foreground">项目</h3>
         <div className="flex items-center gap-1">
         <div role="group" aria-label="会话显示方式" className="flex items-center rounded-md p-0.5">
-          <Button aria-label="列表视图" title="列表视图" aria-pressed={navigationView === 'list'} size="icon-sm" className="size-6 border-0" variant={navigationView === 'list' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('list')}><List aria-hidden="true" className="size-3.5" /></Button>
-          <Button aria-label="树状视图" title="树状视图" aria-pressed={navigationView === 'tree'} size="icon-sm" className="size-6 border-0" variant={navigationView === 'tree' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('tree')}><ListTree aria-hidden="true" className="size-3.5" /></Button>
+          <Button aria-label="列表视图" title="列表视图" aria-pressed={navigationView === 'list'} size="icon-sm" className="size-7 border-0" variant={navigationView === 'list' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('list')}><List aria-hidden="true" className="size-3" /></Button>
+          <Button aria-label="树状视图" title="树状视图" aria-pressed={navigationView === 'tree'} size="icon-sm" className="size-7 border-0" variant={navigationView === 'tree' ? 'secondary' : 'ghost'} onClick={() => setNavigationView('tree')}><ListTree aria-hidden="true" className="size-3" /></Button>
         </div>
-        <Button aria-label="创建项目" className="border-0" size="icon-sm" variant="ghost" onClick={onAddProject}><Plus aria-hidden="true" className="size-4" /></Button>
+        <Button aria-label="创建项目" className="border-0" size="icon-sm" variant="ghost" onClick={onAddProject}><Plus aria-hidden="true" className="size-3" /></Button>
         </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="space-y-1 p-2">
+        <div className="space-y-2 px-3 pt-1 pb-3">
           {isLoading && Array.from({ length: 5 }, (_, index) => <Skeleton key={index} className="h-16" />)}
           {error && <p className="p-3 text-sm text-destructive">会话列表不可用</p>}
           {actionError && !renaming && !deleting && !removingProject && <p className="px-3 py-1 text-xs text-destructive" role="alert">{actionError}</p>}
@@ -310,13 +310,13 @@ function SortableProject({
   const stopProjectInteraction = (event: React.SyntheticEvent) => event.stopPropagation()
 
   return (
-    <section className="space-y-1" ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
-      <div className="flex items-center rounded-md transition-colors hover:bg-muted" onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false) }} onFocusCapture={() => setFocused(true)} onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)}>
+    <section className="space-y-0.5" ref={setNodeRef} style={{ transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined, transition }}>
+      <div className="relative flex items-center rounded-md transition-colors hover:bg-muted" onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false) }} onFocusCapture={() => setFocused(true)} onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)}>
       <button
         aria-controls={sessionListId}
         aria-expanded={expanded}
         aria-label={`项目 ${project.name}，目录 ${projectDescription}，${project.sessions.length} 个会话，${expanded ? '已展开' : '已折叠'}`}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-normal outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        className={`flex min-h-10 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-2 text-left text-sm font-normal outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${actionsVisible ? 'pr-[5rem]' : '[@media(hover:none)]:pr-[5rem]'}`}
         onClick={() => onToggle(project.key, !collapsed)}
         ref={setActivatorNodeRef}
         title={project.cwd}
@@ -324,25 +324,25 @@ function SortableProject({
         {...attributes}
         {...listeners}
       >
-        <ChevronRight aria-hidden="true" className={`size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`} />
-        <Folder aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+        <ChevronRight aria-hidden="true" className={`size-3 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`} />
+        <Folder aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
         <NavigationTitle stopped={isDragging || menuOpen}>{project.name}</NavigationTitle>
       </button>
-      <div className="flex w-[4.5rem] shrink-0 items-center justify-end gap-0.5 pr-1">
+      <div className={`absolute inset-y-0 right-0 flex w-[4.5rem] items-center justify-end gap-0.5 pr-1 ${actionsVisible ? '' : 'pointer-events-none [@media(hover:none)]:pointer-events-auto'}`}>
         <DropdownMenu onOpenChange={setMenuOpen} open={menuOpen}>
           <DropdownMenuTrigger asChild>
-            <Button aria-label={`${project.name} 更多操作`} className={`size-7 border-0 transition-opacity motion-reduce:transition-none ${actionsClass}`} disabled={!project.cwd} onClick={stopProjectInteraction} onPointerDown={stopProjectInteraction} size="icon-sm" type="button" variant="ghost"><Ellipsis aria-hidden="true" /></Button>
+            <Button aria-label={`${project.name} 更多操作`} className={`size-7 border-0 transition-opacity motion-reduce:transition-none ${actionsClass}`} disabled={!project.cwd} onClick={stopProjectInteraction} onPointerDown={stopProjectInteraction} size="icon-sm" type="button" variant="ghost"><Ellipsis aria-hidden="true" className="size-3" /></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem disabled={!project.cwd} onSelect={() => { if (project.cwd) void onReveal(project.cwd) }}><FolderOpen aria-hidden="true" className="mr-2 size-3.5" />打开项目文件夹</DropdownMenuItem>
             <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={!project.cwd} onSelect={() => onRemove(project)}><Trash2 aria-hidden="true" className="mr-2 size-3.5" />移除项目</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button aria-label={`在 ${project.name} 新建对话`} className={`size-7 border-0 transition-opacity motion-reduce:transition-none ${actionsClass}`} disabled={!project.cwd} onClick={(event) => { stopProjectInteraction(event); onNewConversation(project) }} onPointerDown={stopProjectInteraction} size="icon-sm" type="button" variant="ghost"><SquarePen aria-hidden="true" /></Button>
+        <Button aria-label={`在 ${project.name} 新建对话`} className={`size-7 border-0 transition-opacity motion-reduce:transition-none ${actionsClass}`} disabled={!project.cwd} onClick={(event) => { stopProjectInteraction(event); onNewConversation(project) }} onPointerDown={stopProjectInteraction} size="icon-sm" type="button" variant="ghost"><SquarePen aria-hidden="true" className="size-3" /></Button>
       </div>
       </div>
       {expanded && (
-        <div className="space-y-1 pl-2" id={sessionListId}>
+        <div className={`space-y-0.5 ${navigationView === 'tree' ? 'pl-2' : 'pl-10'}`} id={sessionListId}>
           {navigationView === 'tree' ? <SessionTreeNavigation sessions={project.sessions} projectKey={project.key} searchValue={searchValue} projectMatches={Boolean(searchValue.trim()) && `${project.name} ${project.cwd ?? ''}`.toLocaleLowerCase().includes(searchValue.trim().toLocaleLowerCase())} disabled={disabled} mutationSessionId={mutationSessionId} onClone={onClone} onDelete={onDelete} onRename={onRename} onSelect={onSelect} runs={runs} selectedSessionId={selectedSessionId} /> : <SortableContext items={project.sessions.map((session) => `session:${session.id}`)} strategy={verticalListSortingStrategy}>
             {project.sessions.map((session) => (
               <SessionNavigationRow

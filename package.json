@@ -11,7 +11,7 @@
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint": "pnpm -r --if-present lint",
-    "test": "pnpm -r --if-present test && node --test scripts/web-release.test.mjs",
+    "test": "pnpm -r --if-present test && node --test scripts/web-release.test.mjs scripts/patch-ponytail.test.mjs",
     "start:local": "pnpm start",
     "dev:hmr": "pnpm --parallel --filter './apps/*' dev",
     "start": "pnpm build && node scripts/start-local.mjs"

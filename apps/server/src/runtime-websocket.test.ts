@@ -51,6 +51,8 @@ function runtime() {
   const subscribers = new Map<string, Set<(event: any) => void>>()
   return {
     attachments: new AttachmentStore(),
+    isPromptActive: vi.fn(() => false),
+    executeExtensionCommand: vi.fn().mockResolvedValue({ disposition: 'handled' }),
     abort: vi.fn().mockResolvedValue(true),
     commandWhenIdle: vi.fn<(...args: any[]) => Promise<any> | undefined>().mockResolvedValue({ data: { levels: ['low', 'high'], models: [{ id: 'model-2', name: 'Model 2', provider: 'test' }] } }),
     getSessionStatistics: vi.fn().mockResolvedValue({ data: { tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, total: 6 }, cost: 0.1, contextUsage: { tokens: null, percent: null, contextWindow: 1000000 }, sessionFile: "/private/session.jsonl" } }),
@@ -440,4 +442,33 @@ it('rejects forbidden, missing, and corrupted attachments before resuming the ru
     expect(host.beginPrompt).not.toHaveBeenCalled()
     resume.mockRestore()
   } finally { await registry.close(); await rm(directory, { force: true, recursive: true }) }
+})
+
+
+it('routes registered extension submissions separately and refuses attachments', async () => {
+  const registry = runtime()
+  const broker = createBroker(registry)
+  const client = socket()
+  broker.open(client)
+  await broker.message(client, JSON.stringify({ id: 'w', sessionId: 'session-1', type: 'watch' }))
+  await broker.message(client, JSON.stringify({ id: 'ext', sessionId: 'session-1', type: 'extension_command', message: '/ponytail off' }))
+  expect(registry.executeExtensionCommand).toHaveBeenCalledWith(nativeBinding, '/ponytail off')
+  expect(registry.beginPrompt).not.toHaveBeenCalled()
+  expect(client.sent).toContainEqual({ type: 'ack', command: 'extension_command', id: 'ext', sessionId: 'session-1', data: { disposition: 'handled' } })
+  await broker.message(client, JSON.stringify({ id: 'bad', sessionId: 'session-1', type: 'extension_command', message: '/ponytail off', attachmentIds: [crypto.randomUUID()] }))
+  expect(registry.executeExtensionCommand).toHaveBeenCalledTimes(1)
+  expect(client.sent).toContainEqual(expect.objectContaining({ type: 'error', code: 'INVALID_COMMAND', id: 'bad' }))
+})
+
+it('reads command metadata while streaming without acquiring the idle mutation lock', async () => {
+  const registry = runtime()
+  registry.isPromptActive.mockReturnValue(true)
+  registry.commandWhileRunning.mockResolvedValue({ data: { commands: [{ name: 'ponytail', source: 'extension' }] } } as never)
+  const broker = createBroker(registry)
+  const client = socket()
+  broker.open(client)
+  await broker.message(client, JSON.stringify({ id: 'w', sessionId: 'session-1', type: 'watch' }))
+  await broker.message(client, JSON.stringify({ id: 'list', sessionId: 'session-1', type: 'get_commands' }))
+  expect(registry.commandWhenIdle).not.toHaveBeenCalled()
+  expect(client.sent).toContainEqual(expect.objectContaining({ id: 'list', type: 'ack', data: { commands: [{ name: 'ponytail', source: 'extension' }] } }))
 })

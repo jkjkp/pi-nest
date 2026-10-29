@@ -1,0 +1,67 @@
+{
+  "date": "2026-10-29",
+  "browser": "Codex in-app browser (engine version not exposed by test surface)",
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "fixtureTurns": 500,
+  "baselineSource": "290e2ac (original SessionTimeline and useTimelineViewport served through a temporary Vite loader)",
+  "before": {
+    "target": 250,
+    "sampledFrames": 150,
+    "retainedSamples": 74,
+    "firstMounted": {
+      "scrollTop": 67485,
+      "targetTop": -2084
+    },
+    "last": {
+      "scrollTop": 66532,
+      "targetTop": 0
+    }
+  },
+  "after": {
+    "target250": {
+      "sampledFrames": 90,
+      "samples": [
+        {
+          "scrollTop": 66484,
+          "targetTop": 48
+        },
+        {
+          "scrollTop": 67649,
+          "targetTop": 48
+        },
+        {
+          "scrollTop": 67649,
+          "targetTop": 48
+        }
+      ]
+    },
+    "target10": {
+      "sampledFrames": 90,
+      "samples": [
+        {
+          "scrollTop": 5525,
+          "targetTop": 48
+        },
+        {
+          "scrollTop": 5525,
+          "targetTop": 48
+        }
+      ]
+    },
+    "steadyMountedTurns": 18
+  },
+  "browserChecks": [
+    "loaded long-distance jump",
+    "cold history page landing",
+    "stale delayed A after selecting loaded B",
+    "PageUp interruption before delayed response"
+  ],
+  "consoleWarningsOrErrors": [],
+  "limits": [
+    "Synthetic layout trace, not a wall-clock benchmark",
+    "Real image downloads, native touch and Safari/WebKit not browser-tested; dynamic-height and touch cancellation covered by automated tests"
+  ]
+}

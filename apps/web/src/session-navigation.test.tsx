@@ -11,7 +11,7 @@ const project = {
 }
 
 describe('SessionNavigation project actions', () => {
-  it('reserves a hover-only action area without changing the project row width', () => {
+  it('keeps project actions out of title layout until they are revealed', () => {
     const markup = renderToStaticMarkup(
       <SessionNavigation
         collapsedProjectKeys={{}}
@@ -34,7 +34,8 @@ describe('SessionNavigation project actions', () => {
       />,
     )
 
-    expect(markup).toContain('w-[4.5rem]')
+    expect(markup).toContain('absolute inset-y-0 right-0')
+    expect(markup).toContain('[@media(hover:none)]:pr-[5rem]')
     expect(markup).toContain('pi-nest 更多操作')
     expect(markup).toContain('在 pi-nest 新建对话')
     expect(markup).toContain('创建项目')

@@ -65,6 +65,7 @@ function thinkingProbe(prompt = '', active = false) {
     getAvailableThinkingLevels: vi.fn(async () => ['off', 'medium', 'high']),
     setThinkingLevel: vi.fn(async (_id, _level) => { useWorkspaceStore.getState().setRuntimeDetails('session-1', { isCompacting: false, isStreaming: false, thinkingLevel: 'medium' }) }),
     getRuntimeState: vi.fn(async () => useWorkspaceStore.getState().runtimeDetails['session-1']!),
+    getCommands: vi.fn(async () => []), executeExtensionCommand: vi.fn(async () => undefined),
     start: vi.fn(() => true), steer: vi.fn(), followUp: vi.fn(),
   } as unknown as SessionRunController
   const queryClient = new QueryClient()
@@ -89,10 +90,10 @@ it('validates Pi levels and uses the confirmed value instead of the requested on
   queryClient.clear()
 })
 
-it.each(['/thinking', '/thinking high', '/model', '/model fixture/model'])('submits %s as text without switching settings', (prompt) => {
+it.each(['/thinking', '/thinking high', '/model', '/model fixture/model'])('submits %s as text without switching settings', async (prompt) => {
   const { workspace, controller, queryClient } = thinkingProbe(prompt)
   workspace.submitPrompt()
-  expect(controller.start).toHaveBeenCalledWith(expect.objectContaining({ prompt, sessionId: 'session-1' }))
+  await vi.waitFor(() => expect(controller.start).toHaveBeenCalledWith(expect.objectContaining({ prompt, sessionId: 'session-1' })))
   expect(controller.setThinkingLevel).not.toHaveBeenCalled()
   expect(controller.getAvailableThinkingLevels).not.toHaveBeenCalled()
   queryClient.clear()
@@ -148,7 +149,7 @@ it('shares history page reads between full previews and unloaded jumps without t
   })
   const previews = await Promise.all([workspace.readTurnPrompt('user-1', 'user-2'), workspace.readTurnPrompt('user-1', 'user-2')])
   expect(previews).toEqual([text, text])
-  await workspace.jumpToUnloadedTurn('user-1', 'user-2')
+  await workspace.requestTurnJump('user-1', 'user-2')
   expect(fetchSessionHistory).toHaveBeenCalledTimes(1)
   expect(queryClient.getQueryData(['session-history', 'session-1', 'branch-v2'])).toHaveProperty('pages')
   await expect(workspace.readTurnPrompt('missing', 'user-2')).rejects.toThrow('未找到用户消息')
@@ -160,12 +161,25 @@ it('ignores an older unloaded jump after a newer node was selected', async () =>
   let release!: (page: Awaited<ReturnType<typeof fetchSessionHistory>>) => void
   const page = (id: string) => ({ entries: [{ id, parentId: null, type: 'message', timestamp: '2026-10-12T00:00:00Z', raw: { message: { role: 'user', content: id } } }], hasEarlier: false, revision: 'fixture', session: { id: 'session-1', cwd: '/fixture' } })
   vi.mocked(fetchSessionHistory).mockReset().mockImplementationOnce(() => new Promise((resolve) => { release = resolve })).mockResolvedValueOnce(page('user-2'))
-  const older = workspace.jumpToUnloadedTurn('user-1', 'cursor-1')
-  await workspace.jumpToUnloadedTurn('user-2', 'cursor-2')
+  const older = workspace.requestTurnJump('user-1', 'cursor-1')
+  await workspace.requestTurnJump('user-2', 'cursor-2')
   release(page('user-1'))
   await older
   const cached = queryClient.getQueryData<{ pages: Awaited<ReturnType<typeof fetchSessionHistory>>[] }>(['session-history', 'session-1', 'branch-v2'])!
   expect(cached.pages.flatMap((item) => item.entries.map((entry) => entry.id))).toEqual(['user-2'])
+  queryClient.clear()
+})
+
+it.each(['loaded', 'cancelled'])('invalidates a pending history jump when navigation is %s', async (next) => {
+  const { workspace, queryClient } = thinkingProbe()
+  let release!: (page: Awaited<ReturnType<typeof fetchSessionHistory>>) => void
+  vi.mocked(fetchSessionHistory).mockReset().mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+  const old = workspace.requestTurnJump('old', 'cursor', false)
+  if (next === 'loaded') await workspace.requestTurnJump('new', undefined, true)
+  else workspace.cancelTurnJump()
+  release({ session: { id: 'session-1' }, revision: 'fixture', hasEarlier: false, entries: [] })
+  await old
+  expect(queryClient.getQueryData(['session-history', 'session-1', 'branch-v2'])).toBeUndefined()
   queryClient.clear()
 })
 
@@ -267,5 +281,32 @@ it('clones an idle background session while the selected session runs, blocks du
   await expect(probe.workspace!.createBranch({ kind: 'clone' }, 'other')).resolves.toEqual(result)
   expect(queryClient.getQueryData(['sessions'])).toEqual([result.session, { id: 'source', cwd: '/fixture' }, { id: 'other', cwd: '/fixture' }])
   expect(useWorkspaceStore.getState().drafts).toMatchObject({ source: '保留草稿', other: '未发送', child: '' })
+  queryClient.clear()
+})
+
+
+it.each(['idle', 'running'])('dispatches registered extension controls without a conversation: %s', async (status) => {
+  const { workspace, controller, queryClient } = thinkingProbe('/ponytail off', status === 'running')
+  vi.mocked(controller.getCommands).mockResolvedValue([{ name: 'ponytail', source: 'extension' }])
+  workspace.submitPrompt()
+  await vi.waitFor(() => expect(controller.executeExtensionCommand).toHaveBeenCalledWith('session-1', '/ponytail off'))
+  expect(controller.start).not.toHaveBeenCalled()
+  expect(controller.followUp).not.toHaveBeenCalled()
+  expect(controller.steer).not.toHaveBeenCalled()
+  queryClient.clear()
+})
+
+
+it('preserves edits made while an extension command is awaiting its receipt', async () => {
+  const { workspace, controller, queryClient } = thinkingProbe('/ponytail full')
+  vi.mocked(controller.getCommands).mockResolvedValue([{ name: 'ponytail', source: 'extension' }])
+  let resolve!: () => void
+  vi.mocked(controller.executeExtensionCommand).mockReturnValue(new Promise<void>(done => { resolve = done }))
+  workspace.submitPrompt()
+  await vi.waitFor(() => expect(controller.executeExtensionCommand).toHaveBeenCalledTimes(1))
+  useWorkspaceStore.getState().setDraft('session-1', 'my next message')
+  resolve()
+  await Promise.resolve()
+  expect(useWorkspaceStore.getState().drafts['session-1']).toBe('my next message')
   queryClient.clear()
 })

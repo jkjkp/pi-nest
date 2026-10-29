@@ -32,7 +32,7 @@ class FakeProcess {
       this.stateReads += 1
       return { data: { isStreaming: this.stateReads === 1, model: { provider: 'test', id: 'model' } } }
     }
-    return { success: true }
+    return { success: true, data: { disposition: 'started' } }
   }
 
   async close() { this.closed = true }
@@ -71,7 +71,7 @@ describe('PiRuntimeHost', () => {
     const host = hostFor(process)
     const prompt = host.beginPrompt('hello')
 
-    await expect(prompt.accepted).resolves.toBeUndefined()
+    await expect(prompt.accepted).resolves.toBe('started')
     expect(process.commands).toContainEqual({ type: 'prompt', message: 'hello' })
     process.emit({ type: 'agent_settled' })
     await expect(prompt.settled).resolves.toMatchObject({ stopReason: 'stop' })
@@ -265,7 +265,7 @@ it('falls back to the native session file when no assistant usage was observed',
 it('passes image input to the real RPC shape and refuses a known text-only model before prompt admission', async () => {
   const image = { type: 'image' as const, data: 'base64', mimeType: 'image/png' }
   const process = new FakeProcess()
-  process.send = vi.fn(async (command) => command.type === 'get_state' ? { data: { isStreaming: false, model: { input: ['text', 'image'] } } } : { success: true }) as typeof process.send
+  process.send = vi.fn(async (command) => command.type === 'get_state' ? { data: { isStreaming: false, model: { input: ['text', 'image'] } } } : { success: true, data: { disposition: 'started' } }) as typeof process.send
   const host = hostFor(process)
   const prompt = host.beginPrompt('look', [image])
   await prompt.accepted
@@ -278,4 +278,15 @@ it('passes image input to the real RPC shape and refuses a known text-only model
   void next.settled.catch(() => {})
   await expect(next.accepted).rejects.toThrow('不支持图片')
   expect(unsupported.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'prompt' }))
+})
+
+
+it('rejects unknown native prompt receipts without retrying the input', async () => {
+  const process = new FakeProcess()
+  process.send = vi.fn(async () => ({ success: true, data: { disposition: 'future' } })) as typeof process.send
+  const host = hostFor(process)
+  const prompt = host.beginPrompt('only once')
+  const results = await Promise.allSettled([prompt.accepted, prompt.settled])
+  expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected'])
+  expect(process.send).toHaveBeenCalledTimes(1)
 })

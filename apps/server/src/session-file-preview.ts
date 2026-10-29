@@ -1,3 +1,4 @@
+import { isWorkspacePath } from './workspace-file-path.js'
 import { constants } from 'node:fs'
 import imageSize from 'buffer-image-size'
 import { open, realpath, stat } from 'node:fs/promises'
@@ -11,11 +12,11 @@ import type { RuntimeSecurity } from './runtime-security.js'
 import type { SessionIndex } from './session-index.js'
 
 const maxPreviewBytes = 1_048_576
-class PreviewError extends Error {
+export class PreviewError extends Error {
   constructor(message: string, readonly status: 400 | 403 | 404 | 413 | 415) { super(message) }
 }
 
-async function readPreviewFile(cwd: string, path: string, searchRoot: string | undefined, maxBytes: number) {
+async function readPreviewFile(cwd: string, path: string, searchRoot: string | undefined, maxBytes: number, allowedRoot?: string) {
   // A missing session directory must not prevent opening an absolute path.
   const root = await realpath(cwd).catch(() => resolve(cwd))
   let requested = resolve(root, path)
@@ -31,12 +32,14 @@ async function readPreviewFile(cwd: string, path: string, searchRoot: string | u
     } else throw new PreviewError('搜索范围不是文件或目录。', 400)
   }
   const canonical = await realpath(requested)
+  if (allowedRoot && !isWorkspacePath(allowedRoot, canonical)) throw new PreviewError('文件位于项目范围之外。', 403)
   const file = await open(canonical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
   try {
     const info = await file.stat()
     if (!info.isFile()) throw new PreviewError('此路径不是普通文件。', 400)
     // Recheck identity after opening; never read a replaced path's descriptor.
     const current = await realpath(canonical)
+    if (allowedRoot && !isWorkspacePath(allowedRoot, current)) throw new PreviewError('文件位于项目范围之外。', 403)
     const currentInfo = await stat(current)
     if (info.dev !== currentInfo.dev || info.ino !== currentInfo.ino) throw new PreviewError('文件已变化，请重试。', 400)
     if (info.size > maxBytes) throw new PreviewError(`文件超过 ${maxBytes / 1_048_576} MiB，无法在此预览。`, 413)
@@ -54,8 +57,8 @@ async function readPreviewFile(cwd: string, path: string, searchRoot: string | u
   } finally { await file.close() }
 }
 
-export async function readSessionFilePreview(cwd: string, path: string, searchRoot?: string): Promise<PiSessionFilePreview> {
-  const file = await readPreviewFile(cwd, path, searchRoot, maxPreviewBytes)
+export async function readSessionFilePreview(cwd: string, path: string, searchRoot?: string, allowedRoot?: string): Promise<PiSessionFilePreview> {
+  const file = await readPreviewFile(cwd, path, searchRoot, maxPreviewBytes, allowedRoot)
   let content: string
   try { content = new TextDecoder('utf-8', { fatal: true }).decode(file.buffer) }
   catch { throw new PreviewError('此文件不是 UTF-8 文本，暂不支持预览。', 415) }
@@ -63,8 +66,8 @@ export async function readSessionFilePreview(cwd: string, path: string, searchRo
   return { path: file.path, content }
 }
 
-export async function readSessionImagePreview(cwd: string, path: string, searchRoot?: string) {
-  const file = await readPreviewFile(cwd, path, searchRoot, 10 * maxPreviewBytes)
+export async function readSessionImagePreview(cwd: string, path: string, searchRoot?: string, allowedRoot?: string) {
+  const file = await readPreviewFile(cwd, path, searchRoot, 10 * maxPreviewBytes, allowedRoot)
   const bytes = file.buffer
   const raster = bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
     || bytes.subarray(0, 2).equals(Buffer.from('ffd8', 'hex'))

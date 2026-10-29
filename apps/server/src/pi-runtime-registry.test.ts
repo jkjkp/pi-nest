@@ -760,7 +760,7 @@ describe('PiRuntimeRegistry', () => {
 
     const snapshots: any[] = []
     await registry.watch(session.id, 'tab-b', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
-    expect(snapshots[0]).toMatchObject({ extensionUi: { freshness: 'known', statuses: { agent: 'waiting' } }, runtime: { lifecycle: 'notLoaded' } })
+    expect(snapshots[0]).toMatchObject({ extensionUi: { freshness: 'restored', statuses: { agent: 'waiting' } }, runtime: { lifecycle: 'notLoaded' } })
     await registry.close()
     vi.useRealTimers()
   })
@@ -1202,5 +1202,93 @@ it('validates mutations under the lock before unloading and releases the lock on
     const next = await registry.beginMutation(session.id)
     expect(next).toBeTypeOf('function')
     next?.()
+  } finally { await registry.close() }
+})
+
+
+describe('registered extension commands', () => {
+  it('handles controls without creating a run and rejects non-extension names', async () => {
+    const host = { ...hostMock(), command: vi.fn(async (command: Record<string, unknown>) => command.type === 'get_commands'
+      ? { data: { commands: [{ name: 'ponytail', source: 'extension' }, { name: 'template', source: 'prompt' }] } }
+      : { data: { disposition: 'handled' } }) }
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      await registry.resume(session)
+      await expect(registry.executeExtensionCommand(session, '/ponytail off')).resolves.toEqual({ disposition: 'handled' })
+      expect(registry.isPromptActive(session.id)).toBe(false)
+      expect(host.beginPrompt).not.toHaveBeenCalled()
+      await expect(registry.executeExtensionCommand(session, '/template')).rejects.toThrow('未注册')
+      expect(host.command.mock.calls.filter(([command]) => command.type === 'prompt')).toHaveLength(1)
+    } finally { await registry.close() }
+  })
+
+  it('preserves an active generation while dispatching controls', async () => {
+    const pending = deferred<{ model: undefined; stopReason: string }>()
+    const host = { ...hostMock(), command: vi.fn(async (command: Record<string, unknown>) => command.type === 'get_commands'
+      ? { data: { commands: [{ name: 'ponytail', source: 'extension' }] } }
+      : { data: { disposition: 'handled' } }) }
+    host.prompt.mockReturnValue(pending.promise)
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      const prompt = registry.beginPrompt(session, 'real question')!
+      await prompt.accepted
+      await registry.executeExtensionCommand(session, '/ponytail full')
+      expect(registry.isPromptActive(session.id)).toBe(true)
+      expect(host.beginPrompt).toHaveBeenCalledTimes(1)
+      pending.resolve({ model: undefined, stopReason: 'stop' })
+      await prompt.settled
+    } finally { await registry.close() }
+  })
+})
+
+
+it('does not report a completed generation for a handled first-session input', async () => {
+  const host = { ...hostMock(), beginPrompt: vi.fn(() => ({ accepted: Promise.resolve('handled'), settled: Promise.resolve({ model: undefined, stopReason: 'stop' }) })) }
+  const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    const prompt = registry.beginPrompt(session, '/ponytail off')!
+    await expect(prompt.accepted).resolves.toBe('handled')
+    await prompt.settled
+    const snapshots: any[] = []
+    const stop = await registry.watch(session.id, 'check', 0, () => {}, () => {}, value => snapshots.push(value))
+    stop()
+    expect(snapshots.at(-1).activeTurn).toBeUndefined()
+    expect(snapshots.at(-1).completedRun).toBeUndefined()
+    expect(registry.isPromptActive(session.id)).toBe(false)
+  } finally { await registry.close() }
+})
+
+
+it('protects an in-flight extension command against duplicate dispatch and session mutations', async () => {
+  const receipt = deferred<Record<string, unknown>>()
+  const host = { ...hostMock(), command: vi.fn(async (command: Record<string, unknown>) => command.type === 'get_commands'
+    ? { data: { commands: [{ name: 'ponytail', source: 'extension' }] } } : receipt.promise) }
+  const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    await registry.resume(session)
+    const pending = registry.executeExtensionCommand(session, '/ponytail off')
+    await expect(registry.executeExtensionCommand(session, '/ponytail full')).rejects.toThrow('busy')
+    expect(registry.beginPrompt(session, 'new input')).toBeUndefined()
+    expect(registry.beginMutation(session.id)).toBeUndefined()
+    expect(registry.beginGlobalSettingsUpdate()).toBeUndefined()
+    receipt.resolve({ data: { disposition: 'handled' } })
+    await pending
+    expect(registry.isPromptActive(session.id)).toBe(false)
+  } finally { await registry.close() }
+})
+
+
+it('does not admit another prompt before a handled input has released its host', async () => {
+  const result = deferred<{ model: undefined; stopReason: string }>()
+  const host = { ...hostMock(), beginPrompt: vi.fn(() => ({ accepted: Promise.resolve('handled'), settled: result.promise })) }
+  const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+  try {
+    const prompt = registry.beginPrompt(session, '/ponytail off')!
+    await vi.waitFor(() => expect(host.beginPrompt).toHaveBeenCalledTimes(1))
+    expect(registry.beginPrompt(session, 'next')).toBeUndefined()
+    result.resolve({ model: undefined, stopReason: 'stop' })
+    await expect(prompt.accepted).resolves.toBe('handled')
+    await prompt.settled
+    expect(registry.isPromptActive(session.id)).toBe(false)
   } finally { await registry.close() }
 })

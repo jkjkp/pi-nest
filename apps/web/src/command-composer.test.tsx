@@ -53,25 +53,66 @@ function setup(initial = '/pl', sessionId = 'one', canQuery = true) {
 
 it.each(['/cl', '/clo', '/clon', '/clone', ' /cl'])('executes the selected clone on one Enter for %s', (value) => {
   const context = setup(value)
-  context.execute.mockImplementation((text) => { expect(context.value()).toBe(text) })
+  context.execute.mockImplementation(() => { expect(context.value()).toBe(value) })
   expect(context.key('Enter').preventDefault).toHaveBeenCalledOnce()
   expect(context.execute).toHaveBeenCalledExactlyOnceWith(value.startsWith(' ') ? ' /clone ' : '/clone ')
   expect(context.downstream).not.toHaveBeenCalled()
 })
 
 it.each([
-  ['/cl', 'Tab'], ['你好 /cl', 'Enter'], ['/clone 参数', 'Enter'], ['/session', 'Tab'], ['你好 /sess', 'Enter'],
+  ['/cl', 'Tab'], ['你好 /cl', 'Enter'], ['/session', 'Tab'], ['你好 /sess', 'Enter'],
   ['/ren', 'Tab'], ['你好 /ren', 'Enter'],
 ])('only completes %s with %s', (value, key) => {
   const context = setup(value)
-  if (value === '/clone 参数') {
-    context.input.selectionStart = context.input.selectionEnd = 6
-    context.textarea().onSelect!({ currentTarget: context.input } as never)
-    context.render()
-  }
   expect(context.key(key).preventDefault).toHaveBeenCalledOnce()
   expect(context.execute).not.toHaveBeenCalled()
   expect(context.downstream).not.toHaveBeenCalled()
+})
+
+it.each(['compact', 'rename', 'session', 'copy', 'fork', 'clone', 'settings'])('executes the built-in %s candidate with Enter or click without writing completion text', (name) => {
+  for (const method of ['Enter', 'click']) {
+    hooks.slots = []
+    const context = setup(`/${name}`)
+    if (method === 'Enter') context.key('Enter')
+    else {
+      const option = (context.render().props.children[0] as any).props.children[0].props.children[0][0]
+      option.props.onClick()
+    }
+    expect(context.execute).toHaveBeenCalledExactlyOnceWith(`/${name} `)
+    expect(context.value()).toBe(`/${name}`)
+  }
+})
+
+it('only completes a command fragment inside another command argument', () => {
+  const context = setup('/compact 保留 /compact')
+  context.key('Enter')
+  expect(context.value()).toBe('/compact 保留 /compact ')
+  expect(context.execute).not.toHaveBeenCalled()
+})
+
+it('forwards arguments from a root candidate to the shared command validator', () => {
+  const context = setup('/clone 参数')
+  context.input.selectionStart = context.input.selectionEnd = 6
+  context.textarea().onSelect!({ currentTarget: context.input } as never)
+  context.render()
+  context.key('Enter')
+  expect(context.execute).toHaveBeenCalledExactlyOnceWith('/clone 参数')
+  expect(context.value()).toBe('/clone 参数')
+})
+
+it.each(['Enter', 'click'])('does not execute a root compact candidate with prose after it: %s', (method) => {
+  const text = '/compact 是干啥用的？'
+  const context = setup(text)
+  context.input.selectionStart = context.input.selectionEnd = '/compact'.length
+  context.textarea().onSelect!({ currentTarget: context.input } as never)
+  context.render()
+  if (method === 'Enter') context.key('Enter')
+  else {
+    const option = (context.render().props.children[0] as any).props.children[0].props.children[0][0]
+    option.props.onClick()
+  }
+  expect(context.execute).not.toHaveBeenCalled()
+  expect(context.value()).toBe(text)
 })
 
 it.each(['/model', '/thinking', '/name'])('does not suggest or complete the removed %s command', (value) => {
@@ -192,7 +233,7 @@ it('does not claim no match before the native commands are available', () => {
   const context = setup('/p', 'one', false)
   let markup = renderToStaticMarkup(context.render())
   expect(markup).not.toContain('没有匹配的命令')
-  expect(markup).toContain('会话空闲且运行时就绪后可读取更多命令')
+  expect(markup).toContain('运行时就绪后可读取更多命令')
   query.isFetching = true
   markup = renderToStaticMarkup(context.render())
   expect(markup).not.toContain('没有匹配的命令')

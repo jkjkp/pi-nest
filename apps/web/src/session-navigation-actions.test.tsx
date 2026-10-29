@@ -63,6 +63,7 @@ it('limits borderless project actions to header hover/focus and keeps an open me
     const sessions = container.querySelector<HTMLElement>(`[id="${headerButton.getAttribute('aria-controls')}"]`)!
     const session = sessions.querySelector<HTMLButtonElement>('button')!
     const hidden = (expected: boolean) => {
+      expect(headerButton.classList.contains('pr-[5rem]')).toBe(!expected)
       for (const button of [more, create]) {
         expect(button.classList.contains('opacity-0')).toBe(expected)
         expect(button.classList.contains('pointer-events-none')).toBe(expected)

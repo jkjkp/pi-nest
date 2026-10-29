@@ -157,6 +157,7 @@ export class RuntimeWebSocketClient {
   resumeRuntime(sessionId: string) { return this.command({ type: 'resume', sessionId }) }
 
   prompt(sessionId: string, message: string, input?: { attachmentIds: string[]; submissionId: string }) { return this.command<RuntimePromptAck>({ type: 'prompt', sessionId, message, ...input }) }
+  executeExtensionCommand(sessionId: string, message: string) { return this.command<{ disposition: 'handled' | 'started' | 'queued' }>({ type: 'extension_command', sessionId, message }) }
   abort(sessionId: string) { return this.command({ type: 'abort', sessionId }) }
   steer(sessionId: string, message: string, input?: { attachmentIds: string[]; submissionId: string }) { return this.command({ type: 'steer', sessionId, message, ...input }) }
   followUp(sessionId: string, message: string, input?: { attachmentIds: string[]; submissionId: string }) { return this.command({ type: 'follow_up', sessionId, message, ...input }) }

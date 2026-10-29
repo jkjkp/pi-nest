@@ -3,19 +3,26 @@ import type { RuntimeTurn } from './session-run-model.js'
 import type { PiRuntimeCommand } from '@pi-nest/contracts'
 
 export const composerCommands = [
-  { name: 'compact', description: '压缩上下文 · /compact [说明]' },
-  { name: 'rename', description: '重命名当前会话' },
-  { name: 'session', description: '查看会话用量与上下文' },
-  { name: 'copy', description: '复制最近已完成的助手消息' },
-  { name: 'fork', description: '从历史用户消息处分叉为新会话' },
-  { name: 'clone', description: '复制当前活动分支为新会话' },
-  { name: 'settings', description: '打开当前会话设置' },
+  { name: 'compact', description: '压缩上下文 · /compact [-- 压缩说明]', acceptsArguments: true, requiresIdle: true },
+  { name: 'rename', description: '重命名当前会话', acceptsArguments: false, requiresIdle: true },
+  { name: 'session', description: '查看会话用量与上下文', acceptsArguments: false, requiresIdle: false },
+  { name: 'copy', description: '复制最近已完成的助手消息', acceptsArguments: false, requiresIdle: false },
+  { name: 'fork', description: '从历史用户消息处分叉为新会话', acceptsArguments: false, requiresIdle: true },
+  { name: 'clone', description: '复制当前活动分支为新会话', acceptsArguments: false, requiresIdle: true },
+  { name: 'settings', description: '打开当前会话设置', acceptsArguments: false, requiresIdle: false },
 ] as const
 
 export function parseComposerCommand(value: string) {
   const match = value.trim().match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/)
   const command = composerCommands.find((command) => command.name === match?.[1]?.toLowerCase())
-  return command ? { name: command.name, argument: match?.[2]?.trim() ?? '' } : undefined
+  if (!command) return undefined
+  let argument = match?.[2]?.trim() ?? ''
+  if (command.name === 'compact' && argument) {
+    if (!/^--(?:\s|$)/.test(argument)) return undefined
+    argument = argument.slice(2).trim()
+    if (!argument) return { name: command.name, argument, error: '用法：/compact -- 压缩说明（请在 -- 后填写说明）' }
+  }
+  return { name: command.name, argument }
 }
 
 export type CommandToken = { start: number; end: number; query: string }

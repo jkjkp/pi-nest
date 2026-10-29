@@ -12,6 +12,7 @@ import { SessionTimeline } from '../src/session-timeline.js'
 import { streamingFixtures, prefixes } from './markdown-fixtures.js'
 import { runtimeFixture } from './runtime-fixture.js'
 import { workspaceSmoke } from './workspace-smoke.js'
+import { TimelineNavigationFixture } from './timeline-navigation-fixture.js'
 import './style.css'
 
 const root = createRoot(document.getElementById('content')!)
@@ -166,6 +167,10 @@ async function retentionProbe() {
 }
 
 document.getElementById('run')!.addEventListener('click', () => { void run().catch((error) => { report.textContent = String(error) }) })
+document.getElementById('navigation')!.addEventListener('click', () => {
+  viewport.style.cssText = 'position:fixed;inset:0;z-index:100;background:var(--background)'
+  flushSync(() => root.render(<TimelineNavigationFixture />))
+})
 Object.assign(window, {
   runMarkdownBenchmark: run,
   runMarkdownRuntimeBenchmark: runtimeBenchmark,

@@ -46,13 +46,25 @@ it.each([
 })
 
 it('parses exact commands and preserves parameters without interpreting commands inside prose', () => {
-  expect(parseComposerCommand('  /COMPACT instructions  ')).toEqual({ name: 'compact', argument: 'instructions' })
-  expect(parseComposerCommand('/compact 保留接口\n保留约束')).toEqual({ name: 'compact', argument: '保留接口\n保留约束' })
+  expect(parseComposerCommand('  /COMPACT -- instructions  ')).toEqual({ name: 'compact', argument: 'instructions' })
+  expect(parseComposerCommand('/compact -- 保留接口\n保留约束')).toEqual({ name: 'compact', argument: '保留接口\n保留约束' })
   expect(parseComposerCommand(' /RENAME ')).toEqual({ name: 'rename', argument: '' })
   expect(parseComposerCommand('/name')).toBeUndefined()
   expect(matchingCommands([], 'name')).toEqual([])
   for (const value of ['/model', '/model fixture/model', '/thinking', '/thinking high', '/modelx', '/p', '你好 /model', '*****/model', '/model/path']) expect(parseComposerCommand(value)).toBeUndefined()
   expect(matchingCommands([], '').map((command) => command.name)).toEqual(['compact', 'rename', 'session', 'copy', 'fork', 'clone', 'settings'])
+})
+
+it.each(['/compact 是干啥用的？', '/compact 保留接口设计', '/compact\n这是什么命令', '/compactabc', '/compact?', '/compact --help', '/compact --保留接口'])('leaves %s as ordinary prompt text', (text) => {
+  expect(parseComposerCommand(text)).toBeUndefined()
+})
+
+it.each(['/compact', '/compact ', '  /COMPACT\n'])('recognizes the standalone command %s', (text) => {
+  expect(parseComposerCommand(text)).toEqual({ name: 'compact', argument: '' })
+})
+
+it.each(['/compact --', '/compact -- \n'])('recognizes %s as an incomplete explicit command instead of compacting', (text) => {
+  expect(parseComposerCommand(text)).toMatchObject({ name: 'compact', argument: '', error: expect.stringContaining('/compact --') })
 })
 
 it('copies only the latest completed assistant text across history and runtime without thinking or unfinished output', () => {

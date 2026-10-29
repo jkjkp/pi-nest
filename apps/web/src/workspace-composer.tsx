@@ -1,5 +1,5 @@
 import { useEffect, useImperativeHandle, useState, type ReactNode, type RefObject } from 'react'
-import { ListChecks, ListPlus, LoaderCircle, Puzzle, Send, Square, Terminal } from 'lucide-react'
+import { ListChecks, ListCollapse, ListPlus, LoaderCircle, Puzzle, Send, Square, Terminal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { AttachmentPicker, ComposerAttachments } from './attachment-ui.js'
@@ -9,7 +9,7 @@ import { parseComposerCommand } from './composer-commands.js'
 import { resizeComposerTextarea, useComposerTextarea } from './composer-textarea.js'
 import { useComposerHistory } from './composer-history.js'
 import { timelineItems } from './timeline-model.js'
-import { ExtensionUiInline } from './runtime-extension-ui.js'
+import { ExtensionStatusNotice, ExtensionUiInline } from './runtime-extension-ui.js'
 import type { SessionRunController } from './session-run-controller.js'
 import type { PendingInput } from './session-run-model.js'
 import type { useWorkspaceSession } from './use-workspace-session.js'
@@ -18,7 +18,7 @@ import type { useWorkspaceCommands } from './use-workspace-commands.js'
 type ComposerState = Pick<ReturnType<typeof useWorkspaceSession>,
   'creatingDraft' | 'attachmentDraft' | 'selectedSessionId' | 'selectedSession' | 'isDraft' | 'draftProject' | 'prompt' |
   'currentRun' | 'history' | 'setDraft' | 'setDraftPrompt' | 'status' | 'isActive' | 'submittingInput' |
-  'steerQueued' | 'planStatus' | 'planPolicy' | 'extensionStatus' | 'planTurnId' | 'retryHistory' | 'setPendingJump'>
+  'steerQueued' | 'planStatus' | 'planPolicy' | 'extensionStatus' | 'planTurnId' | 'retryHistory' | 'requestTurnJump'>
 
 export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, setComposer, onSubmit, onAbort, controls, canQuery, settingsBusy, error, onError }: {
   state: ComposerState
@@ -36,7 +36,7 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
 }) {
   const { creatingDraft, attachmentDraft, selectedSessionId, selectedSession, isDraft, draftProject, prompt, currentRun, history,
     setDraft, setDraftPrompt, status, isActive, submittingInput, steerQueued, planStatus, planPolicy,
-    extensionStatus, planTurnId, retryHistory, setPendingJump } = state
+    extensionStatus, planTurnId, retryHistory, requestTurnJump } = state
   const promptTextareaRef = useComposerTextarea(prompt)
   useImperativeHandle(textareaRef, () => promptTextareaRef.current!)
   const promptHistory = useComposerHistory(
@@ -61,7 +61,7 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-transparent px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6" ref={setComposer} data-slot="composer">
       <div className="conversation-stage">
         <div className="conversation-stage-content">
-          <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) setPendingJump({ sessionId: selectedSessionId, turnId: planTurnId }) }} onRetryPlan={retryHistory} /></div>
+          <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) void requestTurnJump(planTurnId, undefined, true) }} onRetryPlan={retryHistory} /></div>
           <PendingInputs inputs={(currentRun?.pendingInputs ?? []).filter((input) => !currentRun?.turns.some((turn) => (turn.steering?.queuedInputId === input.id || input.submissionId && turn.submissionId === input.submissionId && turn.steering) && turn.steering?.status !== 'failed'))} key={selectedSessionId} onResume={(inputId) => { void sessionRuns.resumeQueued(selectedSessionId, inputId).catch((cause) => onError(cause.message)) }} onSteer={steerQueued} onDrop={(input) => {
             void sessionRuns.dropQueued(selectedSessionId, input.id).catch((cause) => onError(cause.message))
             // Restore the text into an empty composer so a failed attachment costs a re-upload, not a retype.
@@ -72,7 +72,9 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
           <ComposerAttachments draft={attachmentDraft} />
           {error && <p role="alert" className="pointer-events-auto mb-2 text-xs text-destructive">{error}<Button variant="ghost" size="sm" onClick={() => onError(undefined)}>关闭</Button></p>}
           <CommandNotice notice={commands.notice} />
-          <div data-slot="message-composer" className="pointer-events-auto flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-card sm:px-6">
+          {commands.compacted && <p role="status" data-slot="context-compacted" className="pointer-events-auto mb-3 flex items-center gap-2 px-4 text-sm text-muted-foreground"><ListCollapse aria-hidden="true" className="size-4" />上下文已压缩</p>}
+          <div data-slot="message-composer" className="pointer-events-auto relative flex min-h-[100px] w-full flex-col justify-between gap-1 rounded-[2.5rem] border bg-muted px-5 py-3 shadow-sm dark:border-white/10 dark:bg-card sm:px-6">
+        <ExtensionStatusNotice sessionId={selectedSessionId} />
         <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
         <CommandComposer
           onExecuteCommand={(value) => { if (attachmentDraft.items.length) onError('带附件时暂不支持命令，请先移除附件。'); else commands.submit(value) }}

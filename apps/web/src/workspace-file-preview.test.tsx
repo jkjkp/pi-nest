@@ -7,6 +7,7 @@ import { WorkspaceFilePreview, WorkspaceFilePreviewToggle } from './workspace-fi
 import { useWorkspaceFilePreview } from './use-workspace-file-preview.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
+vi.mock('./project-files-tree.js', () => ({ ProjectFilesTree: () => <section aria-label="项目文件树">项目文件树</section> }))
 vi.mock('./session-file-preview.js', () => ({ SessionFilePreview: ({ path, onClose }: { path: string; onClose: () => void }) => <section aria-label="当前文件预览"><p>{path}</p><button onClick={onClose}>收起预览</button></section> }))
 let root: Root
 let container: HTMLDivElement
@@ -17,8 +18,8 @@ const after = vi.fn()
 function View({ sessionId = 'a' }: { sessionId?: string }) {
   const grid = useRef<HTMLDivElement>(null)
   const preview = useWorkspaceFilePreview(sessionId, before, after)
-  return <WorkspaceLayout title={sessionId} navigation={<span>navigation</span>} previewOpen={Boolean(preview.selection) && preview.open} containerRef={grid} preview={<WorkspaceFilePreview preview={preview} isHome={false} containerRef={grid} />}>
-    <section><button onClick={() => preview.openFile(`${sessionId}.ts`, 12)}>查看文件</button><WorkspaceFilePreviewToggle available={Boolean(preview.selection)} open={preview.open} onToggle={preview.toggle} buttonRef={preview.toggleRef} /></section>
+  return <WorkspaceLayout title={sessionId} navigation={<span>navigation</span>} previewOpen={preview.open} containerRef={grid} preview={<WorkspaceFilePreview preview={preview} containerRef={grid} />}>
+    <section><button onClick={() => preview.openFile(`${sessionId}.ts`, 12)}>查看文件</button><WorkspaceFilePreviewToggle open={preview.open} onToggle={preview.toggle} buttonRef={preview.toggleRef} /></section>
   </WorkspaceLayout>
 }
 async function render(sessionId = 'a') { await act(() => root.render(<View sessionId={sessionId} />)) }
@@ -42,7 +43,7 @@ it('keeps preview selection scoped to its session and restores the file opener o
   await render()
   const opener = await click('查看文件')
   expect(document.querySelectorAll('[aria-label="当前文件预览"]')).toHaveLength(1)
-  expect(useWorkspaceStore.getState().filePreviews.a).toMatchObject({ path: 'a.ts', line: 12, open: true })
+  expect(useWorkspaceStore.getState().filePreviews.a).toMatchObject({ tabs: [{ path: 'a.ts', line: 12 }], open: true })
   await click('收起预览')
   expect(document.activeElement).toBe(opener)
   expect(useWorkspaceStore.getState().filePreviews.a?.open).toBe(false)
@@ -53,7 +54,7 @@ it('keeps preview selection scoped to its session and restores the file opener o
   expect(document.querySelector('[aria-label="当前文件预览"]')).toBeNull()
   const toggle = container.querySelector<HTMLButtonElement>('[aria-label="打开文件预览"]')!
   await act(() => toggle.click())
-  expect(before).toHaveBeenCalledOnce()
+  expect(before).toHaveBeenCalledTimes(4)
   expect(document.querySelector('[aria-label="当前文件预览"]')?.textContent).toContain('a.ts')
   expect(useWorkspaceStore.getState().filePreviews.b?.open).toBe(true)
 })
@@ -74,3 +75,12 @@ it('moves between desktop and modal presentation without duplicating content or 
   expect(media.removeEventListener).toHaveBeenCalled()
   expect(listeners.size).toBe(0)
 })
+
+ it('always shows the borderless toggle and opens files without selecting a file first', async () => {
+   await render()
+   const toggle = container.querySelector<HTMLButtonElement>('[aria-label="打开文件预览"]')!
+   expect(toggle).not.toBeNull()
+   await act(() => toggle.click())
+   expect(document.querySelector('[aria-label="项目文件树"]')).not.toBeNull()
+   expect(useWorkspaceStore.getState().filePreviews.a).toMatchObject({ open: true, tabs: [] })
+ })

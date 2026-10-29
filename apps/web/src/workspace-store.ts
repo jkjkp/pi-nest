@@ -2,10 +2,10 @@ import { clampSidebarWidth } from './sidebar-width.js'
 import { create, type StateCreator } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 
-import type { FilePreviewSelection, FileReadingPosition } from './file-preview-state.js'
+import { emptyFilePanel, fileTabKey, filePreviewKey, restoreFilePanels, restoreFilePositions, type FilePreviewPanel, type FileReadingPosition } from './file-preview-state.js'
 import type { NavigationOrder } from './navigation-order.js'
 import { activeRuntimeTurn, isRunActive, nativeUserMessage, runtimeEventOwner, runtimeTurnAcceptsEvent, type PendingInput, type SessionRunSummary } from './session-run-model.js'
-import type { PiRuntimeStatistics, PiRuntimeEvent, PiRuntimeState, RuntimeStatus } from '@pi-nest/contracts'
+import type { PiRuntimeStatistics, PiRuntimeExtensionUi, PiRuntimeEvent, PiRuntimeState, RuntimeStatus } from '@pi-nest/contracts'
 
 export { isRunActive, nativeUserMessage } from './session-run-model.js'
 export type { PromptStatus, PendingInput, SessionRunSummary } from './session-run-model.js'
@@ -22,10 +22,14 @@ type SessionNotification = { pendingRunId?: string; completedRunId?: string; rea
 
 // Keep runtime, queue and notification writes in SessionRunController so recovery shares the live event path.
 type WorkspaceState = {
-  filePreviews: Record<string, FilePreviewSelection>
+  filePreviews: Record<string, FilePreviewPanel>
   fileReadingPositions: Record<string, FileReadingPosition>
-  openFilePreview: (sessionId: string, path: string, line?: number, searchRoot?: string) => void
+  openFilePreview: (sessionId: string, path: string, line?: number, searchRoot?: string, workspace?: boolean) => void
   setFilePreviewOpen: (sessionId: string, open: boolean) => void
+  selectFileTab: (scope: string, tab?: string) => void
+  closeFileTab: (scope: string, tab: string) => void
+  updateFileTree: (scope: string, update: Partial<Pick<FilePreviewPanel, 'expanded' | 'scrollTop'>>) => void
+  transferFilePreview: (from: string, to: string) => void
   rememberFilePosition: (key: string, position: FileReadingPosition) => void
   clearFilePreview: (sessionId: string) => void
   sessionNotifications: Record<string, SessionNotification>
@@ -40,6 +44,7 @@ type WorkspaceState = {
   expandSessionAncestors: (ids: string[]) => void
   collapsedProjectKeys: Record<string, boolean>
   drafts: Record<string, string>
+  draftRevisions: Record<string, number>
   extensionStatuses: Record<string, Record<string, string>>
   extensionWidgets: Record<string, Record<string, string[]>>
   hiddenProjectCwds: Record<string, true>
@@ -66,7 +71,7 @@ type WorkspaceState = {
   setDraft: (sessionId: string, draft: string) => void
   clearExtensionUi: (sessionId: string) => void
   clearRun: (sessionId: string) => void
-  replaceExtensionUi: (sessionId: string, projection: { statuses: Record<string, string>; widgets: Record<string, string[]> }) => void
+  replaceExtensionUi: (sessionId: string, projection: PiRuntimeExtensionUi) => void
   setExtensionStatus: (sessionId: string, key: string, status: string | undefined) => void
   setExtensionWidget: (sessionId: string, key: string, lines: string[] | undefined) => void
   setInspectorOpen: (open: boolean) => void
@@ -87,10 +92,37 @@ type WorkspaceState = {
 export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
   filePreviews: {},
   fileReadingPositions: {},
-  openFilePreview: (sessionId, path, line, searchRoot) => set((state) => ({ filePreviews: { ...state.filePreviews, [sessionId]: { path, line, searchRoot, open: true, navigation: (state.filePreviews[sessionId]?.navigation ?? 0) + 1 } } })),
-  setFilePreviewOpen: (sessionId, open) => set((state) => {
-    const preview = state.filePreviews[sessionId]
-    return preview ? { filePreviews: { ...state.filePreviews, [sessionId]: { ...preview, open } } } : state
+  openFilePreview: (sessionId, path, line, searchRoot, workspace) => set((state) => {
+    const panel = state.filePreviews[sessionId] ?? emptyFilePanel()
+    const key = fileTabKey({ path, searchRoot })
+    const previous = panel.tabs.find(file => fileTabKey(file) === key)
+    const file = { path, line, searchRoot, workspace, navigation: (previous?.navigation ?? 0) + 1 }
+    return { filePreviews: { ...state.filePreviews, [sessionId]: { ...panel, open: true, activeTab: key, tabs: previous ? panel.tabs.map(tab => fileTabKey(tab) === key ? file : tab) : [...panel.tabs, file] } } }
+  }),
+  setFilePreviewOpen: (sessionId, open) => set((state) => ({ filePreviews: { ...state.filePreviews, [sessionId]: { ...(state.filePreviews[sessionId] ?? emptyFilePanel()), open } } })),
+  selectFileTab: (scope, activeTab) => set(state => {
+    const panel = state.filePreviews[scope]
+    if (!panel || activeTab !== undefined && !panel.tabs.some(file => fileTabKey(file) === activeTab)) return state
+    return { filePreviews: { ...state.filePreviews, [scope]: { ...panel, activeTab } } }
+  }),
+  closeFileTab: (scope, key) => set(state => {
+    const panel = state.filePreviews[scope]
+    if (!panel) return state
+    return { filePreviews: { ...state.filePreviews, [scope]: { ...panel, tabs: panel.tabs.filter(file => fileTabKey(file) !== key), activeTab: panel.activeTab === key ? undefined : panel.activeTab } } }
+  }),
+  updateFileTree: (scope, update) => set(state => {
+    const panel = state.filePreviews[scope]
+    return panel ? { filePreviews: { ...state.filePreviews, [scope]: { ...panel, ...update } } } : state
+  }),
+  transferFilePreview: (from, to) => set(state => {
+    const panel = state.filePreviews[from]
+    if (!panel || state.filePreviews[to]) return state
+    const { [from]: _draft, ...panels } = state.filePreviews
+    const positions = Object.fromEntries(Object.entries(state.fileReadingPositions).map(([key, position]) => {
+      const [scope, searchRoot, path] = JSON.parse(key)
+      return [scope === from ? filePreviewKey(to, path, searchRoot ?? undefined) : key, position]
+    }))
+    return { filePreviews: { ...panels, [to]: panel }, fileReadingPositions: positions }
   }),
   rememberFilePosition: (key, position) => set((state) => ({ fileReadingPositions: { ...state.fileReadingPositions, [key]: position } })),
   clearFilePreview: (sessionId) => set((state) => ({
@@ -127,6 +159,7 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
   expandSessionAncestors: (ids) => set((state) => ids.every((id) => state.collapsedSessionIds[id] === false) ? state : ({ collapsedSessionIds: { ...state.collapsedSessionIds, ...Object.fromEntries(ids.map((id) => [id, false])) } })),
   collapsedProjectKeys: {},
   drafts: {},
+  draftRevisions: {},
   extensionStatuses: {},
   extensionWidgets: {},
   hiddenProjectCwds: {},
@@ -285,7 +318,7 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
     const status = pendingInputs.length === 0 && run.status === 'awaiting_agent' && run.turns.at(-1)?.completedAt ? 'complete' : run.status
     return { runs: { ...state.runs, [sessionId]: { ...run, pendingInputs, status } } }
   }),
-  setDraft: (sessionId, draft) => set((state) => ({ drafts: { ...state.drafts, [sessionId]: draft } })),
+  setDraft: (sessionId, draft) => set((state) => ({ drafts: { ...state.drafts, [sessionId]: draft }, draftRevisions: { ...state.draftRevisions, [sessionId]: (state.draftRevisions[sessionId] ?? 0) + 1 } })),
   clearExtensionUi: (sessionId) => set((state) => ({
     extensionStatuses: { ...state.extensionStatuses, [sessionId]: {} },
     extensionWidgets: { ...state.extensionWidgets, [sessionId]: {} },
@@ -295,8 +328,8 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
     return { runs }
   }),
   replaceExtensionUi: (sessionId, projection) => set((state) => ({
-    extensionStatuses: { ...state.extensionStatuses, [sessionId]: { ...projection.statuses } },
-    extensionWidgets: { ...state.extensionWidgets, [sessionId]: Object.fromEntries(Object.entries(projection.widgets).map(([key, lines]) => [key, [...lines]])) },
+    extensionStatuses: { ...state.extensionStatuses, [sessionId]: projection.freshness === 'known' ? { ...projection.statuses } : {} },
+    extensionWidgets: { ...state.extensionWidgets, [sessionId]: Object.fromEntries(Object.entries(projection.freshness === 'known' ? projection.widgets : {}).map(([key, lines]) => [key, [...lines]])) },
   })),
   setExtensionStatus: (sessionId, key, status) => set((state) => {
     if (!key) return state
@@ -359,7 +392,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist(createWorkspaceState,
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ navigationWidth: state.navigationWidth, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ filePreviews: state.filePreviews, fileReadingPositions: state.fileReadingPositions, navigationWidth: state.navigationWidth, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
+      merge: (persisted, current) => {
+        const saved = persisted && typeof persisted === 'object' ? persisted as Partial<WorkspaceState> : {}
+        return { ...current, ...saved, filePreviews: restoreFilePanels(saved.filePreviews), fileReadingPositions: restoreFilePositions(saved.fileReadingPositions) }
+      },
       storage: createJSONStorage(() => (typeof window === 'undefined' ? unavailableStorage : window.localStorage)),
     },
   ),
