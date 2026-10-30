@@ -142,8 +142,7 @@ export function SessionNavigation({
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b">
         <div className="flex h-14 items-center gap-2 px-5">
-          <span aria-hidden="true" className="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-normal text-primary-foreground">PN</span>
-          <h2 className="min-w-0 truncate text-sm font-normal tracking-tight">Pi Nest</h2>
+          <h2 className="min-w-0 truncate text-xl leading-7 font-semibold tracking-tight">Pi Nest</h2>
         </div>
         <label className="relative block px-3 pb-3" htmlFor="session-search">
           <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-3.5 size-3 text-muted-foreground" />
