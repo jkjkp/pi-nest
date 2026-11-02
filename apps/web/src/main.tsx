@@ -8,12 +8,14 @@ import { RouteErrorPage } from './route-error-page.js'
 import { sessionHistoryQueryKey } from './history.js'
 import { RuntimeWebSocketClient } from './runtime-websocket-client.js'
 import { createSessionRunController } from './session-run-controller.js'
+import { replaceSessionHistory } from './history-view.js'
 
 function bootstrap() {
   const queryClient = new QueryClient()
   const runtime = new RuntimeWebSocketClient()
   const sessionRunController = createSessionRunController({
-    invalidateHistory: (sessionId) => queryClient.invalidateQueries({ queryKey: sessionHistoryQueryKey(sessionId) }),
+    replaceHistory: (sessionId, change) => replaceSessionHistory(queryClient, sessionId, change),
+    invalidateHistory: async (sessionId) => { await Promise.all([queryClient.invalidateQueries({ queryKey: sessionHistoryQueryKey(sessionId) }), queryClient.invalidateQueries({ queryKey: ['sessions'] })]) },
     runtime,
   })
   sessionRunController.resume()

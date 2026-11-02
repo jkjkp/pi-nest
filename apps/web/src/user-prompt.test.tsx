@@ -78,6 +78,57 @@ it('toggles touch actions without hiding them when tapping copy', async () => {
   expect(bubble.dataset.touchRevealed).toBe('false')
 })
 
+it('offers a borderless pencil beside copy only on the last user bubble and edits its native entry', async () => {
+  const onEditLast = vi.fn()
+  const entries = ['older', 'latest'].map((id, index) => ({ id, parentId: index ? 'older' : null, type: 'message', timestamp: '2026-11-02T00:00:00Z', raw: { message: { role: 'user', content: id } } }))
+  const history = { revision: 'fixture', session: { id: 'source' }, hasEarlier: false, entries }
+  const render = (editDisabled = false) => act(() => root.render(<SessionTimeline error={false} isLoading={false} history={history} onRetry={() => {}} onEditLast={onEditLast} editDisabled={editDisabled} />))
+  await render()
+  const button = container.querySelector<HTMLButtonElement>('[aria-label="编辑最后一条用户消息"]')!
+  expect(container.querySelectorAll('[aria-label="编辑最后一条用户消息"]')).toHaveLength(1)
+  expect(button.closest('[data-turn-id]')?.getAttribute('data-turn-id')).toBe('latest')
+  expect(button.closest('.user-prompt-actions')).not.toBeNull()
+  expect(button.previousElementSibling?.getAttribute('aria-label')).toBe('复制消息')
+  expect(button.closest('.user-prompt')?.getAttribute('data-editable')).toBe('true')
+  expect(button.classList.contains('border-0')).toBe(true)
+  expect(button.querySelector('svg')).not.toBeNull()
+  expect(button.title).toBe('编辑消息')
+  await act(() => button.click())
+  expect(onEditLast).toHaveBeenCalledExactlyOnceWith('latest')
+  await render(true)
+  expect(button.disabled).toBe(true)
+  await act(() => button.click())
+  expect(onEditLast).toHaveBeenCalledOnce()
+})
+
+it('keeps the edit entry available for the last attachment-only user message', async () => {
+  const onEditLast = vi.fn()
+  const history = { revision: 'fixture', session: { id: 'source' }, hasEarlier: false, entries: [
+    { id: 'image-user', parentId: null, type: 'message', timestamp: '2026-11-02T00:00:00Z', raw: { message: { role: 'user', content: [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }] } } },
+  ] }
+  await act(() => root.render(<SessionTimeline error={false} isLoading={false} history={history} onRetry={() => {}} onEditLast={onEditLast} />))
+  expect(container.querySelector('.user-prompt pre')).toBeNull()
+  expect(copyButton()).toBeNull()
+  const button = container.querySelector<HTMLButtonElement>('[aria-label="编辑最后一条用户消息"]')!
+  await act(() => button.click())
+  expect(onEditLast).toHaveBeenCalledExactlyOnceWith('image-user')
+})
+
+it('replaces the source bubble in place and preserves the editor when a history change removes its source', async () => {
+  const history = { revision: 'fixture', session: { id: 'source' }, hasEarlier: false, entries: [
+    { id: 'user', parentId: null, type: 'message', timestamp: '2026-11-02T00:00:00Z', raw: { message: { role: 'user', content: 'original bubble' } } },
+    { id: 'answer', parentId: 'user', type: 'message', timestamp: '2026-11-02T00:00:01Z', raw: { type: 'message', message: { role: 'assistant', content: 'original answer', stopReason: 'stop' } } },
+  ] }
+  const messageEdit = { entryId: 'user', editor: <section aria-label="编辑用户消息"><textarea defaultValue="editing text" /></section> }
+  await act(() => root.render(<SessionTimeline error={false} isLoading={false} history={history} onRetry={() => {}} messageEdit={messageEdit} />))
+  const editor = container.querySelector('[aria-label="编辑用户消息"]')!
+  expect(editor.closest('[data-turn-id]')?.getAttribute('data-turn-id')).toBe('user')
+  expect(container.querySelector('.user-prompt')).toBeNull()
+  expect(container.textContent).toContain('original answer')
+  await act(() => root.render(<SessionTimeline error={false} isLoading history={{ ...history, entries: [] }} onRetry={() => {}} messageEdit={messageEdit} />))
+  expect(container.querySelector('textarea')?.value).toBe('editing text')
+})
+
 
 it('keeps the prompt toggle transparent in both states with a small directional chevron', async () => {
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(300)

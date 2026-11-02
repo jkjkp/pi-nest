@@ -6,6 +6,8 @@ import { emptyFilePanel, fileTabKey, filePreviewKey, restoreFilePanels, restoreF
 import type { NavigationOrder } from './navigation-order.js'
 import { activeRuntimeTurn, isRunActive, nativeUserMessage, runtimeEventOwner, runtimeTurnAcceptsEvent, type PendingInput, type SessionRunSummary } from './session-run-model.js'
 import type { PiRuntimeStatistics, PiRuntimeExtensionUi, PiRuntimeEvent, PiRuntimeState, RuntimeStatus } from '@pi-nest/contracts'
+import type { PiEditLastInput } from '@pi-nest/contracts'
+export type MessageEditDraft = { entryId: string; revision: string; text: string; status: 'editing' | 'submitting' | 'unknown'; error?: string; input?: PiEditLastInput }
 
 export { isRunActive, nativeUserMessage } from './session-run-model.js'
 export type { PromptStatus, PendingInput, SessionRunSummary } from './session-run-model.js'
@@ -44,6 +46,8 @@ type WorkspaceState = {
   expandSessionAncestors: (ids: string[]) => void
   collapsedProjectKeys: Record<string, boolean>
   drafts: Record<string, string>
+  messageEdits: Record<string, MessageEditDraft>
+  setMessageEdit: (sessionId: string, edit: MessageEditDraft | undefined) => void
   draftRevisions: Record<string, number>
   extensionStatuses: Record<string, Record<string, string>>
   extensionWidgets: Record<string, Record<string, string[]>>
@@ -159,6 +163,13 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
   expandSessionAncestors: (ids) => set((state) => ids.every((id) => state.collapsedSessionIds[id] === false) ? state : ({ collapsedSessionIds: { ...state.collapsedSessionIds, ...Object.fromEntries(ids.map((id) => [id, false])) } })),
   collapsedProjectKeys: {},
   drafts: {},
+  messageEdits: {},
+  setMessageEdit: (sessionId, edit) => set((state) => {
+    const messageEdits = { ...state.messageEdits }
+    if (edit) messageEdits[sessionId] = edit
+    else delete messageEdits[sessionId]
+    return { messageEdits }
+  }),
   draftRevisions: {},
   extensionStatuses: {},
   extensionWidgets: {},

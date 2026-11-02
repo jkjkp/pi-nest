@@ -13,11 +13,18 @@ import { streamingFixtures, prefixes } from './markdown-fixtures.js'
 import { runtimeFixture } from './runtime-fixture.js'
 import { workspaceSmoke } from './workspace-smoke.js'
 import { TimelineNavigationFixture } from './timeline-navigation-fixture.js'
+import { sessionEditFixture } from './session-edit-fixture.js'
 import './style.css'
 
 const root = createRoot(document.getElementById('content')!)
 const viewport = document.getElementById('viewport')!
 const report = document.getElementById('report')!
+if (new URLSearchParams(location.search).get('fixture') === 'edit') {
+  const fixture = sessionEditFixture()
+  viewport.style.cssText = 'position:fixed;inset:0;z-index:100;background:var(--background)'
+  root.render(fixture.element)
+  Object.assign(window, { sessionEditSmoke: fixture })
+}
 const frame = () => new Promise<number>((resolve) => requestAnimationFrame(resolve))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const percentile = (values: number[], p = 0.95) => [...values].sort((a, b) => a - b)[Math.max(0, Math.ceil(values.length * p) - 1)] ?? 0

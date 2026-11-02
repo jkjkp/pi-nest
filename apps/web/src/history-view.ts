@@ -1,7 +1,32 @@
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
+import type { PiHistoryChange } from '@pi-nest/contracts'
 import { fetchSessionHistory, fetchSessionTurnIndex } from './workspace-api.js'
 import { mergeSessionHistoryPages, sessionHistoryQueryKey, sessionTurnIndexQueryKey, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
 export type HistoryPages = InfiniteData<PiSessionHistoryResponse, { before?: string; revision?: string }>
+const historyReplacements = new WeakMap<QueryClient, Map<string, string>>()
+
+export async function replaceSessionHistory(client: QueryClient, sessionId: string, change: PiHistoryChange) {
+  let replacements = historyReplacements.get(client)
+  if (!replacements) { replacements = new Map(); historyReplacements.set(client, replacements) }
+  replacements.set(sessionId, change.id)
+  await Promise.all([
+    client.cancelQueries({ queryKey: sessionHistoryQueryKey(sessionId) }),
+    client.cancelQueries({ queryKey: ['session-history-page', sessionId] }),
+    client.cancelQueries({ queryKey: ['session-turn-index', sessionId] }),
+  ])
+  if (replacements.get(sessionId) !== change.id) return
+  client.removeQueries({ queryKey: ['session-history-page', sessionId] })
+  client.removeQueries({ queryKey: ['session-turn-index', sessionId] })
+  client.setQueryData<HistoryPages>(sessionHistoryQueryKey(sessionId), (saved) => {
+    if (!saved) return saved
+    let removed = false
+    return { pageParams: saved.pageParams, pages: saved.pages.map((page) => ({ ...page, revision: change.revision, entries: page.entries.filter((entry) => {
+      if (entry.id === change.entryId) removed = true
+      return !removed
+    }) })) }
+  })
+  await Promise.all([client.invalidateQueries({ queryKey: sessionHistoryQueryKey(sessionId) }), client.invalidateQueries({ queryKey: ['sessions'] })])
+}
 
 export async function readCachedTurnIndex(sessionId: string, revision: string, signal: AbortSignal, client: QueryClient) {
   signal.throwIfAborted()

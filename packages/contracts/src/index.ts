@@ -1,5 +1,8 @@
 export type AttachmentRef = { id: string; kind: 'image' | 'file'; name: string; mediaType: string; size: number; width?: number; height?: number }
 export type AttachmentInput = { message: string; attachmentIds?: string[]; submissionId?: string }
+export type PiEditLastInput = AttachmentInput & { entryId: string; revision: string; submissionId: string }
+export type PiEditStatus = { status: 'pending' | 'committed' | 'rolled_back' | 'superseded' | 'unknown'; submissionId: string; userEntryId?: string; runId?: string }
+export type PiHistoryChange = { id: string; revision: string; sequence: number; entryId: string }
 export type PiQueuedInput = AttachmentInput & { id: string; attachments?: AttachmentRef[]; error?: string; recoveryRequired?: boolean }
 
 export type PiSessionFilePreview = { path: string; content: string }
@@ -21,6 +24,7 @@ export type RuntimeFailureKind = 'process_error' | 'process_exit' | 'protocol_er
 export type RuntimeStatus = { completedRun?: PiRuntimeSessionSnapshot['completedRun']; thinkingLevel?: string; model?: { id: string; provider: string }; error?: string; failureKind?: RuntimeFailureKind; lifecycle: RuntimeLifecycle; revision: number; sessionId: string }
 export type PiRuntimeExtensionUi = { freshness: 'known' | 'restored' | 'unknown'; statuses: Record<string, string>; widgets: Record<string, string[]> }
 export type PiRuntimeSessionSnapshot = {
+  historyChange?: PiHistoryChange
   inputQueue?: { steering: string[]; followUp: string[]; inputs?: PiQueuedInput[]; steeringInputs?: PiQueuedInput[] }
   activeTurn?: { prompt?: string; runId: string; startedAt: string; waitingForExtension?: true }
   completedRun?: { runId: string; stopReason: string }
@@ -35,6 +39,8 @@ export type RuntimeCommandPayload = { sessionId: string } & (
   | { type: 'watch'; resume?: { after: number } }
   | { type: 'unwatch' | 'resume' | 'abort' | 'get_runtime_state' | 'get_session_stats' | 'get_available_models' | 'get_available_thinking_levels' | 'get_commands' }
   | ({ type: 'prompt' | 'steer' | 'follow_up' } & AttachmentInput)
+  | ({ type: 'edit_last' } & PiEditLastInput)
+  | { type: 'get_edit_status'; submissionId: string }
   | { type: 'extension_command'; message: string }
   | { type: 'steer_queued'; message: string; index: number; inputId?: string }
   | { type: 'resume_queued'; inputId: string }

@@ -48,3 +48,4 @@ export { capturePiSessionHistory, historyFromSnapshot, turnIndexFromSnapshot, re
 export type { PiSessionHistorySnapshot, PiSessionHistorySourceSignature } from './read-session-history.js'
 export { preparePiImage } from './attachment-images.js'
 export type { PiInputImage } from './attachment-images.js'
+export { editRecord, entryPath, piEditBoundary, piEditStatus, readPiEditEntries } from './session-edit.js'

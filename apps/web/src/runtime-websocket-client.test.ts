@@ -435,3 +435,28 @@ it('shares HTTP credentials and refreshes them on WebSocket reconnect after a se
     vi.unstubAllGlobals()
   }
 })
+
+it('starts replay at the history boundary while retaining every newer event from the edited run', async () => {
+  vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+  const socket = new FakeSocket()
+  const factory = vi.fn(() => socket as never)
+  const client = new RuntimeWebSocketClient({ fetchFn: vi.fn(async () => new Response(JSON.stringify({ runtimeId: 'runtime-edit', token: 'token', websocketPath: '/api/runtime' }))), socketFactory: factory })
+  const events: unknown[] = [], snapshots: unknown[] = []
+  client.onPiEvent((event) => events.push(event))
+  client.onSessionSnapshot((snapshot) => snapshots.push(snapshot))
+  try {
+    const watch = client.watch('session-edit')
+    await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce())
+    socket.open()
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const change = { id: 'position', entryId: 'old-user', revision: 'a'.repeat(64), sequence: 3 }
+    socket.receive({ type: 'session_snapshot', sessionId: 'session-edit', atSequence: 6, replayAfter: 0, historyChange: change, extensionUi: { freshness: 'unknown', statuses: {}, widgets: {} }, runtime: { lifecycle: 'active', revision: 1 } })
+    socket.receive({ type: 'ack', command: 'watch', id: socket.sent[0]!.id, sessionId: 'session-edit' })
+    await watch
+    for (let sequence = 1; sequence <= 6; sequence++) socket.receive({ type: 'pi_event', sessionId: 'session-edit', sequence, observedAt: 'now', event: { type: 'message_update', text: sequence <= 3 ? 'OLD' : 'NEW' } })
+    expect(events).toHaveLength(3)
+    expect(JSON.stringify(events)).not.toContain('OLD')
+    expect(snapshots[0]).toMatchObject({ historyChange: change })
+    expect(client.watchedSessions()[0]?.after).toBe(6)
+  } finally { vi.unstubAllGlobals() }
+})

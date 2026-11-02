@@ -144,3 +144,20 @@ describe('session file metadata', () => {
     expect(peak).toBe(2)
   })
 })
+
+it('uses the current edited root for the sidebar fallback while retaining the explicit name', async () => {
+  const file = sessionFile()
+  const entries = [HEADER,
+    { type: 'message', id: 'old', parentId: null, message: { role: 'user', content: 'Old question' } },
+    { type: 'session_info', id: 'name', parentId: 'old', name: 'Explicit title' },
+    { type: 'custom', id: 'selected', parentId: null, customType: 'pi-nest-edit', data: { previousLeafId: 'name' } },
+    { type: 'message', id: 'system', parentId: 'selected', message: { role: 'system', content: 'system' } },
+    { type: 'message', id: 'new', parentId: 'system', message: { role: 'user', content: 'New question' } },
+  ]
+  writeFileSync(file, entries.slice(0, 4).map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+  expect((await readPiSessionSummary(file))?.summary.firstMessage).toBe('Old question')
+  writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+  expect((await readPiSessionSummary(file))?.summary).toMatchObject({ id: 'session-1', firstMessage: 'New question', name: 'Explicit title' })
+  writeFileSync(file, [...entries, { type: 'custom', id: 'restored', parentId: 'name', customType: 'pi-nest-edit' }].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+  expect((await readPiSessionSummary(file))?.summary).toMatchObject({ firstMessage: 'Old question', name: 'Explicit title' })
+})

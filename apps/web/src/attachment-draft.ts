@@ -26,9 +26,9 @@ export function setDraftAttachments(sessionId: string, refs: AttachmentRef[]) {
   useAttachmentStore.getState().set(sessionId, refs.map((ref) => ({ id: ref.id, name: ref.name, size: ref.size, ref, status: 'ready' })))
 }
 
-export function useAttachmentDraft(sessionId: string, cwd?: string) {
+export function useAttachmentDraft(sessionId: string, cwd?: string, draftKey?: string) {
   const scope = useMemo<AttachmentScope | undefined>(() => sessionId ? { kind: 'session', sessionId } : cwd ? { kind: 'draft', draftId: draftId(cwd), cwd } : undefined, [sessionId, cwd])
-  const key = sessionId || (cwd ? `draft:${cwd}` : '')
+  const key = draftKey ?? (sessionId || (cwd ? `draft:${cwd}` : ''))
   const items = useAttachmentStore((s) => s.drafts[key] ?? empty)
   useEffect(() => {
     if (!scope) return

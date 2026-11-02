@@ -1,6 +1,7 @@
 import { useWorkspaceFilePreview } from './use-workspace-file-preview.js'
 import { WorkspaceLayout } from './workspace-layout.js'
 import { WorkspaceNavigation } from './workspace-navigation.js'
+import { MessageEditor } from './message-editor.js'
 import { WorkspaceComposer } from './workspace-composer.js'
 import { WorkspaceFilePreview, WorkspaceFilePreviewToggle } from './workspace-file-preview.js'
 import { attachmentDrop } from './attachment-draft.js'
@@ -41,6 +42,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     startDraft, openProject, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, requestTurnJump, openProjectFolder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
+  const ordinaryDraft = useWorkspaceStore((state) => state.drafts[selectedSessionId] ?? '')
   const [attachmentError, setAttachmentError] = useState<string>()
   const isHome = !selectedSessionId && !isDraft
   const displaySession = selectedSession ?? history?.session
@@ -81,6 +83,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   }
 
   function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up') {
+    if (session.messageEdit) return
     if ((!selectedSessionId && !isDraft) || (!prompt.trim() && !attachmentDraft.items.length)) return
     if (!attachmentDraft.items.length && commands.submit(prompt)) return
     if (mode !== 'steer') setFollowingLatest(true)
@@ -130,7 +133,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       <WorkspaceLayout title={sessionTitle} titleTooltip={displaySession ? sessionDisplayName(displaySession) : undefined}
         navigation={navigation} containerRef={workspaceGrid} previewOpen={preview.open}
         preview={<WorkspaceFilePreview preview={preview} containerRef={workspaceGrid} />}>
-        <section onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={(event) => { try { attachmentDrop(event, attachmentDraft.add) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '附件无法添加') } }} className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
+        <section onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={(event) => { if (session.messageEdit && session.messageEdit.status !== 'editing') { event.preventDefault(); return } try { attachmentDrop(event, attachmentDraft.add) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '附件无法添加') } }} className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
           <header className="flex min-h-10 shrink-0 items-center gap-3 border-b bg-background/95 py-0.5 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {(selectedSession || draftProject) && <Folder aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
@@ -152,6 +155,15 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   </div>
                 ) : selectedSessionId ? <RenderErrorBoundary key={selectedSessionId} scope="timeline" sessionId={selectedSessionId}><SessionTimeline
                   sessionId={selectedSessionId}
+                  editDisabled={session.editDisabled || Boolean(session.messageEdit)}
+                  onEditLast={(entryId) => { setAttachmentError(undefined); void session.beginMessageEdit(entryId).catch((cause) => setAttachmentError(cause instanceof Error ? cause.message : '无法编辑消息。')) }}
+                  messageEdit={session.messageEdit && { entryId: session.messageEdit.entryId, editor: <MessageEditor
+                    edit={session.messageEdit} attachments={attachmentDraft} error={attachmentError} onError={setAttachmentError}
+                    disabled={session.editDisabled || ['loading', 'switching'].includes(modelStatus) || ['loading', 'switching'].includes(thinkingStatus)}
+                    onChange={(text) => setDraft(selectedSessionId, text)}
+                    onCancel={() => { session.cancelMessageEdit(); setAttachmentError(undefined); requestAnimationFrame(() => promptTextareaRef.current?.focus()) }}
+                    onSubmit={() => { if (session.messageEdit?.status === 'editing') setFollowingLatest(true); void session.submitMessageEdit() }}
+                  /> }}
                   sessionCwd={displaySession?.cwd}
                   error={historyError}
                   hasEarlier={historyQuery.hasPreviousPage}
@@ -214,17 +226,18 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             </div>
           </div>
           {!isHome && <WorkspaceComposer
-            state={{ creatingDraft, attachmentDraft, selectedSessionId, selectedSession, isDraft, draftProject, prompt, currentRun, history,
+            state={{ creatingDraft, attachmentDraft, selectedSessionId, selectedSession, isDraft, draftProject, prompt: session.messageEdit ? ordinaryDraft : prompt, currentRun, history,
+              messageEdit: session.messageEdit,
               setDraft, setDraftPrompt, status, isActive, submittingInput, steerQueued, planStatus, planPolicy,
               extensionStatus, planTurnId, retryHistory, requestTurnJump: navigateToTurn }}
             commands={commands} sessionRuns={sessionRuns} textareaRef={promptTextareaRef} setComposer={setComposer}
-            onSubmit={submitPrompt} onAbort={() => { void abortPrompt() }} error={attachmentError} onError={setAttachmentError}
+            onSubmit={submitPrompt} onAbort={() => { void abortPrompt() }} error={session.messageEdit ? undefined : attachmentError} onError={setAttachmentError}
             settingsBusy={modelStatus === 'loading' || modelStatus === 'switching' || thinkingStatus === 'loading' || thinkingStatus === 'switching'}
             canQuery={!commands.busy && watchReady && ['idle', 'active'].includes(runtimeStates[selectedSessionId]?.lifecycle ?? '') && modelStatus !== 'loading' && modelStatus !== 'switching' && thinkingStatus !== 'loading' && thinkingStatus !== 'switching'}
             controls={<>
                   {selectedSession && <SessionStatistics key={`statistics:${selectedSessionId}`} open={commandPanels.sessionId === selectedSessionId && commandPanels.statistics} onOpenChange={(statistics) => setCommandPanels((panels) => ({ ...panels, sessionId: selectedSessionId, statistics }))} details={runtimeStatistics} onRetry={() => void sessionRuns.getSessionStatistics(selectedSessionId)} />}
 
-                  <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen} key={`model:${selectedSessionId || draftProject?.key}`} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={(!selectedSession && !isDraft) || creatingDraft} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />
+                  <ModelSelector open={modelSelectorOpen} onOpenChange={setModelSelectorOpen} key={`model:${selectedSessionId || draftProject?.key}`} label={modelLabel} title={currentModel?.provider && currentModel.id ? `${currentModel.provider}/${currentModel.id}` : modelLabel} disabled={(!selectedSession && !isDraft) || creatingDraft || Boolean(session.messageEdit && session.messageEdit.status !== 'editing')} models={models} currentModel={currentModel} status={modelStatus} error={modelError} isActive={isActive} onLoad={() => void openModels()} onRetry={() => void openModels(true)} onSelect={changeModel} />
                   <ThinkingSelector emptyMessage={isDraft && !currentModel ? '请先选择模型，再设置思考等级。' : undefined} key={`thinking:${selectedSessionId || draftProject?.key}`} open={thinkingOpen} onOpenChange={setThinkingOpen} current={currentThinkingLevel} levels={thinkingLevels} status={thinkingStatus} error={thinkingError} failure={thinkingFailure} disabled={(!selectedSession && !isDraft) || creatingDraft || (!isDraft && (modelStatus === 'loading' || modelStatus === 'switching'))} isActive={isActive} onLoad={() => void openThinking()} onRetry={() => void openThinking(true)} onSelect={changeThinkingLevel} />
             </>}
           />}
