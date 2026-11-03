@@ -5,7 +5,7 @@ import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { fitDiagramCamera, panDiagramCamera, zoomDiagramCamera, type DiagramCamera } from './diagram-camera.js'
 import type { GraphNode } from './session-graph-model.js'
 
-export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, onSelect, onToggle, onLocate, locateRequest, renderNodeMenu }: { renderNodeMenu: (node: GraphNode) => ReactNode; onToggle: (id: string) => void; onLocate: () => void; locateRequest: number; nodes: GraphNode[]; selectedSessionId: string; selectedNodeId?: string; onSelect: (node: GraphNode) => void }) {
+export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, onSelect, onToggle, onLocate, locateRequest, renderNodeMenu, toolbarActions }: { toolbarActions?: ReactNode; renderNodeMenu: (node: GraphNode) => ReactNode; onToggle: (id: string) => void; onLocate: () => void; locateRequest: number; nodes: GraphNode[]; selectedSessionId: string; selectedNodeId?: string; onSelect: (node: GraphNode) => void }) {
   const viewport = useRef<HTMLDivElement>(null)
   const [camera, setCamera] = useState<DiagramCamera>({ scale: 1, x: 0, y: 0, width: 800, height: 600, fit: false })
   const drag = useRef<{ x: number; y: number } | undefined>(undefined)
@@ -40,6 +40,7 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
       <Button size="sm" variant="ghost" aria-label="放大树状画布" onClick={() => setCamera(zoomDiagramCamera(measured(), Math.min(2, Math.max(0.25, camera.scale * 1.2))))}>+</Button>
       <Button size="sm" variant="ghost" onClick={() => { const next = measured(); setCamera(fitDiagramCamera({ width: Math.max(480, ...nodes.map((node) => node.x + 284)), height: Math.max(300, ...nodes.map((node) => node.y + 156)) }, next)) }}>适应画布</Button>
       <Button size="sm" variant="ghost" onClick={onLocate}>定位当前</Button>
+      {toolbarActions}
     </div>
     <div ref={(element) => { viewport.current = element }} tabIndex={0} aria-label="会话分支画布，方向键平移，点击节点查看会话" className="relative min-h-0 flex-1 touch-none overflow-clip bg-muted/20 outline-offset-[-2px]"
       onFocus={() => { const next = measured(); if (next.width !== camera.width || next.height !== camera.height) setCamera(next) }}
@@ -61,7 +62,7 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
               event.preventDefault()
               const rect = event.currentTarget.getBoundingClientRect()
               event.currentTarget.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2 }))
-            }} data-session-node={node.id} className="absolute h-[132px] w-[260px]" style={{ left: node.x, top: node.y }}>
+            }} data-session-node={node.id} className="absolute h-[132px] w-[260px] select-none" style={{ left: node.x, top: node.y }}>
           <button type="button" data-node-state={state} aria-current={state === 'current' ? 'true' : undefined} aria-pressed={state === 'preview'} title={node.label}
             className="session-graph-node flex size-full flex-col gap-1 rounded-lg border-2 bg-card p-3 text-left text-xs shadow-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground"
             onClick={() => onSelect(node)}>

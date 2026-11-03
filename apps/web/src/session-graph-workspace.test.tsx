@@ -288,3 +288,12 @@ it('preserves a newer preview when an earlier clone fails late', async () => {
   expect(container.querySelector('[role="alert"]')).toBeNull()
   expect(onSelect).not.toHaveBeenCalled()
 })
+it('omits the graph banner and refresh row while retaining narrow-screen navigation', async () => {
+  await mount()
+  expect(container.textContent).not.toContain('独立会话分支 · 每个节点一个会话')
+  expect(button('刷新树')).toBeUndefined()
+  await act(async () => button('查看对话').click())
+  expect(container.querySelector('[aria-label="当前会话对话"]')?.getAttribute('aria-hidden')).toBe('false')
+  await act(async () => button('返回画布').click())
+  expect(container.querySelector('[aria-label="当前会话对话"]')?.getAttribute('aria-hidden')).toBe('true')
+})
