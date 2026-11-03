@@ -10,6 +10,10 @@
     "./pi-events": {
       "types": "./dist/pi-events.d.ts",
       "import": "./dist/pi-events.js"
+    },
+    "./session-graph": {
+      "types": "./dist/session-graph.d.ts",
+      "import": "./dist/session-graph.js"
     }
   },
   "scripts": {
