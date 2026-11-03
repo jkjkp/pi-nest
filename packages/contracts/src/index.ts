@@ -70,7 +70,10 @@ export type PiRuntimeState = {
 export type PiRuntimeModel = { id: string; name?: string; provider: string }
 export type PiRuntimeCommand = { name: string; description?: string; source: 'extension' | 'prompt' | 'skill' }
 
+export type PiBranchRelation = { operationId: string; parentSessionId: string; sourceEntryId: string | null; inheritedLeafId: string | null; mode: 'edit' | 'continue' | 'clone'; state: 'pending' | 'ready' | 'attention'; issue?: 'conflict' | 'missing' | 'cycle' }
+export type PiBranchStorage = { available: boolean; error?: string }
 export type PiSessionSummary = {
+  branch?: PiBranchRelation
   parentSessionId?: string
   parentSessionMissing?: boolean
   createdAt?: string
@@ -81,7 +84,7 @@ export type PiSessionSummary = {
   updatedAt?: string
 }
 
-export type PiSessionsResponse = { sessions: PiSessionSummary[] }
+export type PiSessionsResponse = { sessions: PiSessionSummary[]; branchStorage?: PiBranchStorage }
 
 export type PiSessionHistoryEntry = {
   runId?: string
@@ -164,8 +167,8 @@ export type PiCatalogModel = PiRuntimeModel & { thinkingLevels: string[]; defini
 export type PiModelDiscoveryRequest = { provider: string; connection: { baseUrl: string; api: 'openai-completions' | 'openai-responses' | 'anthropic-messages'; apiKey?: string; headers?: Record<string, string> } }
 export type PiDiscoveredModel = { id: string; name?: string }
 
-export type PiSessionBranchRequest = { kind: 'clone' } | { kind: 'fork'; entryId: string; revision: string }
-export type PiSessionBranchResponse = { session: PiSessionSummary; draft: string; attachments?: AttachmentRef[] }
+export type PiSessionBranchRequest = { operationId?: string } & ({ kind: 'clone' } | { kind: 'fork'; mode?: 'edit' | 'continue'; entryId: string; revision: string })
+export type PiSessionBranchResponse = { session: PiSessionSummary; draft: string; attachments?: AttachmentRef[]; operationId?: string; draftRecoveryRequired?: boolean }
 
 export type PiFileChange = { version: 1; path: string; sequence: number } & (
   | { added: number; removed: number; changeType: 'created' | 'deleted' | 'modified' | 'unchanged' }
@@ -181,3 +184,8 @@ export type TextFileStat = { path: string; version: string; fileBytes: number }
 export type TextFilePage = TextFileStat & { kind: 'page'; cursor: TextFileCursor; text: string; startsMidLine: boolean; endsMidLine: boolean; endOffset: number; lastLine: number; nextCursor?: TextFileCursor; eof: boolean }
 export type TextFileRead = TextFilePage | (TextFileStat & { kind: 'seeking'; cursor: TextFileCursor })
 export type TextFilePageRequest = { cursor?: TextFileCursor; direction?: 'next' | 'previous'; targetLine?: number }
+
+export type PiBranchOperation = { operationId: string; state: 'pending' | 'ready' | 'failed' | 'attention'; result?: PiSessionBranchResponse; code?: string }
+export type PiSessionGraph = { sessions: PiSessionSummary[]; branchStorage: PiBranchStorage }
+export type PiGraphTurn = { id: string; index: number; promptPreview: string; startedAt: string; endEntryId: string; digest: string; prefixDigest: string; beforeCursor?: string; continueEntryId?: string }
+export type PiGraphPage = { revision: string; entries: PiGraphTurn[]; nextCursor?: string; total: number; inheritedCount?: number; inheritedDigest?: string }

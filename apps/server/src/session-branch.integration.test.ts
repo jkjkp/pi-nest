@@ -205,3 +205,35 @@ it('branches through an assistant reply via the existing endpoint without includ
   expect(readFileSync(sessionFile)).toEqual(before)
   expect(finish).toHaveBeenCalledOnce()
 })
+
+it('persists idempotent HTTP operations and disables new branches when storage is unavailable', async () => {
+  const { WorkspaceDatabase } = await import('./workspace-database.js')
+  const { SessionBranchStore } = await import('./session-branch-store.js')
+  const { randomUUID } = await import('node:crypto')
+  directory = mkdtempSync(join(tmpdir(), 'pi-idempotent-'))
+  const sessionFile = join(directory, 'source.jsonl')
+  const timestamp = new Date().toISOString()
+  writeFileSync(sessionFile, [
+    { type: 'session', version: 3, id: 'source', cwd: directory, timestamp },
+    { type: 'message', id: 'user', parentId: null, timestamp, message: { role: 'user', content: 'question', timestamp: Date.now() } },
+  ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+  const index = createSessionIndexFixture([{ id: 'source', cwd: directory, sessionFile, name: undefined, firstMessage: 'question', updatedAt: timestamp }]).index
+  const registry = { attachments: new AttachmentStore(join(directory, 'attachments')), beginMutation: vi.fn(async () => () => {}) }
+  const database = new WorkspaceDatabase(join(directory, 'workspace.sqlite'))
+  const store = new SessionBranchStore(database)
+  const app = new Hono().route('/api', createSessionRoutes(registry as unknown as PiRuntimeRegistry, undefined, undefined, index, store))
+  const request = { kind: 'clone', operationId: randomUUID() }
+  const send = (body: unknown) => app.request('/api/sessions/source/branch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  const first = await send(request)
+  expect(first.status).toBe(201)
+  const result = await first.json()
+  expect((await send(request)).status).toBe(200)
+  expect((await index.list())).toHaveLength(2)
+  expect(registry.beginMutation).toHaveBeenCalledOnce()
+  expect((await send({ ...request, kind: 'fork', entryId: 'user', revision: 'a'.repeat(64) })).status).toBe(409)
+  const list = await (await app.request('/api/sessions')).json()
+  expect(list.sessions.find((session: { id: string }) => session.id === result.session.id).branch.mode).toBe('clone')
+  database.close()
+  expect((await send({ kind: 'clone' })).status).toBe(503)
+  expect((await app.request('/api/sessions')).status).toBe(200)
+})

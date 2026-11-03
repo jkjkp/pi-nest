@@ -1,3 +1,5 @@
+import { graphTurnPage } from './session-graph.js'
+import type { BranchRecord } from './session-branch-store.js'
 import { capturePiSessionHistory, readPiSessionHistorySourceSignature, samePiSessionHistorySourceSignature, historyFromSnapshot, turnIndexFromSnapshot, type PiSessionHistorySourceSignature, type PiSessionHistorySnapshot, type PiSessionHistoryOptions, type PiSessionSummary } from '@pi-nest/pi-adapter'
 
 type Session = Pick<PiSessionSummary, 'id' | 'cwd' | 'sessionFile'>
@@ -11,6 +13,7 @@ export class SessionHistorySnapshots {
   private readonly pinned = new Map<string, string>()
   private readonly runs = new Map<string, { binding: string; before: Set<string> }>()
   private readonly identities = new Map<string, { runId: string; runIndex: number }>()
+  private graphProjections = new WeakMap<PiSessionHistorySnapshot, Map<string, import('@pi-nest/contracts').PiGraphPage>>()
   private bytes = 0
   constructor(private readonly maxBytes = 128 * 1024 * 1024, private readonly maxVersions = 128) {}
 
@@ -82,5 +85,14 @@ export class SessionHistorySnapshots {
     return { ...page, entries: page.entries.map((entry) => ({ ...entry, ...this.identities.get(`${this.binding(session)}:${entry.id}`) })) }
   }
   index(session: Session, revision?: string) { return turnIndexFromSnapshot(this.get(session, revision)) }
+  graph(session: Session, relation?: BranchRecord, revision?: string, offset = 0, limit = 100, displayPrompt?: (text: string) => string) {
+    const snapshot = this.get(session, revision)
+    let projections = this.graphProjections.get(snapshot)
+    if (!projections) { projections = new Map(); this.graphProjections.set(snapshot, projections) }
+    const key = relation?.inherited_leaf_id ?? ''
+    let graph = projections.get(key)
+    if (!graph) { graph = graphTurnPage(snapshot, relation, 0, Number.MAX_SAFE_INTEGER, displayPrompt); projections.set(key, graph) }
+    return { ...graph, entries: graph.entries.slice(offset, offset + limit), nextCursor: offset + limit < graph.total ? String(offset + limit) : undefined }
+  }
   clear() { this.latest.clear(); this.versions.clear(); this.pinned.clear(); this.runs.clear(); this.identities.clear(); this.bytes = 0 }
 }

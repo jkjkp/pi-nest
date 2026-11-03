@@ -1,5 +1,7 @@
+import { WorkspaceDatabase } from './workspace-database.js'
+import { SessionBranchStore } from './session-branch-store.js'
 import { AttachmentStore } from './attachment-store.js'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -76,8 +78,10 @@ function runtimeMock() {
   }
 }
 
+let branchDatabase: WorkspaceDatabase
+afterEach(() => branchDatabase?.close())
 let sessionIndex: ReturnType<typeof createSessionIndexFixture>
-beforeEach(() => { sessionIndex = createSessionIndexFixture([nativeSession]) })
+beforeEach(() => { branchDatabase = new WorkspaceDatabase(':memory:'); sessionIndex = createSessionIndexFixture([nativeSession]) })
 
 describe('Pi Nest API', () => {
   let runtime: ReturnType<typeof runtimeMock>
@@ -99,6 +103,7 @@ describe('Pi Nest API', () => {
     await expect(health.json()).resolves.toEqual({ status: 'ok' })
     const response = await createApp(runtimeMock() as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index).request('/api/sessions')
     await expect(response.json()).resolves.toEqual({
+      branchStorage: { available: false },
       sessions: [{ createdAt: '2026-09-19T00:00:00.000Z', cwd: '/working', firstMessage: 'Original question', id: 'session-1', name: 'Existing session', updatedAt: nativeSession.updatedAt }],
     })
   })
@@ -391,18 +396,23 @@ it('lists native parent relationships without exposing file paths', async () => 
 describe('branch creation', () => {
   it('creates a native branch under the source mutation lock and returns only safe fields', async () => {
     sessionIndex.setSessions([nativeSession])
-    adapter.branchPiSession.mockReturnValue({ session: { id: 'child', cwd: '/working', createdAt: 'now', sessionFile: '/private/child.jsonl' }, draft: 'selected text' })
+    adapter.branchPiSession.mockImplementation((options) => {
+      const lineage = { childSessionId: 'child', createdAt: 'now', sourceEntryId: 'user-1', inheritedLeafId: null, inheritedHash: 'hash', sourceRevision: 'a'.repeat(64), mode: 'edit' }
+      options.onPrepared(lineage)
+      return { session: { id: 'child', cwd: '/working', createdAt: 'now', sessionFile: '/private/child.jsonl' }, draft: 'selected text', lineage }
+    })
     const registry = runtimeMock()
     const finish = vi.fn()
     const source = Buffer.from('validated source')
     adapter.readPiSessionForkSource.mockReturnValue(source)
     registry.beginMutation.mockImplementationOnce(async (_sessionId, beforeUnload) => { beforeUnload?.(); return finish })
-    const response = await createApp(registry as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index).request('/api/sessions/session-1/branch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) }) })
+    const response = await createApp(registry as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index, new SessionBranchStore(branchDatabase)).request('/api/sessions/session-1/branch', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) }) })
     expect(response.status).toBe(201)
     const body = await response.json()
-    expect(body).toEqual({ session: { id: 'child', cwd: '/working', createdAt: 'now', updatedAt: 'now', parentSessionId: 'session-1' }, draft: 'selected text' })
+    expect(body).toEqual({ operationId: expect.stringMatching(/^[a-f0-9-]{36}$/), session: { id: 'child', cwd: '/working', createdAt: 'now', updatedAt: 'now', parentSessionId: 'session-1', branch: { operationId: body.operationId, parentSessionId: 'session-1', sourceEntryId: 'user-1', inheritedLeafId: null, mode: 'edit', state: 'ready' } }, draft: 'selected text' })
+    expect(JSON.stringify(body)).not.toContain('/private/')
     expect(adapter.readPiSessionForkSource).toHaveBeenCalledWith({ sessionFile: nativeSession.sessionFile, revision: 'a'.repeat(64) })
-    expect(adapter.branchPiSession).toHaveBeenCalledWith({ expectedSessionId: nativeSession.id, expectedCwd: nativeSession.cwd, sessionFile: nativeSession.sessionFile, kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64) }, source)
+    expect(adapter.branchPiSession).toHaveBeenCalledWith({ expectedSessionId: nativeSession.id, expectedCwd: nativeSession.cwd, sessionFile: nativeSession.sessionFile, kind: 'fork', entryId: 'user-1', revision: 'a'.repeat(64), operationId: body.operationId, onPrepared: expect.any(Function), onPublished: expect.any(Function) }, source)
     expect(finish).toHaveBeenCalledOnce()
     expect(sessionIndex.registerCalls).toEqual([expect.objectContaining({ cwd: '/working', id: 'child', sessionFile: '/private/child.jsonl' })])
   })
@@ -410,7 +420,7 @@ describe('branch creation', () => {
     sessionIndex.setSessions([nativeSession])
     adapter.branchPiSession.mockClear()
     const registry = runtimeMock()
-    const app = createApp(registry as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index)
+    const app = createApp(registry as unknown as PiRuntimeRegistry, undefined, undefined, sessionIndex.index, new SessionBranchStore(branchDatabase))
     const send = (body: unknown, id = 'session-1') => app.request(`/api/sessions/${id}/branch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
     expect((await send({ kind: 'fork', revision: 'a'.repeat(64) })).status).toBe(400)
     expect((await send({ kind: 'clone', revision: 'bad' })).status).toBe(400)

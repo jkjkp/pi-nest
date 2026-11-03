@@ -41,8 +41,8 @@ export type { PiRpcFailureKind } from './pi-rpc-connection.js'
 export { readPiConfiguration, updatePiConfiguration, diagnosePiMcp, PiConfigurationConflict, PiConfigurationInvalid } from './configuration.js'
 
 export { discoverPiModels } from './configuration.js'
-export { branchPiSession, readPiSessionForkSource, PiSessionBranchTargetError } from './branch-session.js'
-export type { PiSessionBranchOptions, PiSessionBranchResult } from './branch-session.js'
+export { branchPrefixHash, canContinuePiTurn, branchPiSession, readPiSessionForkSource, PiSessionBranchTargetError } from './branch-session.js'
+export type { PiPreparedBranch, PiSessionBranchOptions, PiSessionBranchResult } from './branch-session.js'
 
 export { capturePiSessionHistory, historyFromSnapshot, turnIndexFromSnapshot, readPiSessionHistorySourceSignature, samePiSessionHistorySourceSignature } from './read-session-history.js'
 export type { PiSessionHistorySnapshot, PiSessionHistorySourceSignature } from './read-session-history.js'

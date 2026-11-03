@@ -1,3 +1,5 @@
+import { createSessionGraphRoutes } from './session-graph-routes.js'
+import { SessionBranchStore } from './session-branch-store.js'
 import { createWorkspaceFileRoutes } from './workspace-files.js'
 import { createAttachmentRoutes } from './attachment-routes.js'
 import { createSessionFilePreviewRoutes } from './session-file-preview.js'
@@ -18,6 +20,7 @@ export function createApp(
   security = new RuntimeSecurity(),
   projects = new ProjectRegistry(),
   sessions: SessionIndex = new PiSessionIndex(),
+  branches = new SessionBranchStore(),
 ) {
   const app = new Hono()
     .get('/api/health', (context) => context.json({ status: 'ok' }))
@@ -27,7 +30,8 @@ export function createApp(
     .route('/api/workspace-files', createWorkspaceFileRoutes(security, projects, sessions))
     .route('/api/projects', createProjectRoutes(projects, security))
     .route('/api', createSessionFilePreviewRoutes(security, sessions))
-    .route('/api', createSessionRoutes(runtime, projects, security, sessions))
+    .route('/api', createSessionGraphRoutes(runtime, security, sessions, branches))
+    .route('/api', createSessionRoutes(runtime, projects, security, sessions, branches))
     .route('/api', createRuntimeRoutes(runtime, security, sessions))
   if (process.env.PI_NEST_WEB_RELEASE) serveWebRelease(app, process.env.PI_NEST_WEB_RELEASE)
   return app
