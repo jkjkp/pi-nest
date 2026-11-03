@@ -9,6 +9,7 @@ import { useWorkspaceStore } from './workspace-store.js'
 import { fetchSessionGraph, fetchSessionHistory, fetchSessionTurnIndex } from './workspace-api.js'
 const onRename = vi.fn(); const onClone = vi.fn(); const onDelete = vi.fn()
 const onSelect = vi.fn(); const onBranch = vi.fn(); const onCurrentNodeClick = vi.fn()
+const onRead = vi.fn((sessionId: string, runId: string) => useWorkspaceStore.getState().markSessionRead(sessionId, runId))
 const sessions = [{ id: 'source', name: 'Root', cwd: '/w' }, { id: 'other', name: 'Other', cwd: '/w', parentSessionId: 'source' }, { id: 'grandchild', name: 'Grandchild', cwd: '/w', parentSessionId: 'other' }]
 vi.mock('./workspace-api.js', () => ({
   fetchSessionGraph: vi.fn(), fetchSessionHistory: vi.fn(), fetchSessionTurnIndex: vi.fn(),
@@ -23,7 +24,7 @@ let root: Root; let container: HTMLDivElement; let client: QueryClient
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); onSelect.mockReset(); onBranch.mockReset(); onCurrentNodeClick.mockReset()
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); onSelect.mockReset(); onBranch.mockReset(); onCurrentNodeClick.mockReset(); onRead.mockClear()
   for (const action of [onRename, onClone, onDelete]) action.mockReset().mockResolvedValue(undefined)
   vi.mocked(fetchSessionGraph).mockReset().mockResolvedValue({ sessions, branchStorage: { available: true } })
   vi.mocked(fetchSessionHistory).mockReset().mockImplementation(async (id, before) => ({ session: { id }, revision: 'r', entries: [{ id: before ? 'old' : 'u', parentId: null, type: 'message', timestamp: '', raw: { message: { role: 'user', content: 'question' } } }], hasEarlier: !before, beforeCursor: before ? undefined : 'older' }))
@@ -38,7 +39,7 @@ function Fixture({ initial = 'source' }: { initial?: string }) {
   const [selection, setSelection] = useState<GraphSelection>()
   const [target, setTarget] = useState(initial)
   const [drafts, setDrafts] = useState<Record<string, string>>({ source: 'keep draft', other: 'other draft' })
-  return <SessionGraphWorkspace enabled sessionId={target} selection={selection} onPreview={setSelection} onCurrentNodeClick={() => { onCurrentNodeClick(); setSelection(undefined) }} onSelect={(id) => { onSelect(id); setTarget(id) }} onBranch={onBranch} onRename={onRename} onClone={onClone} onDelete={onDelete}>
+  return <SessionGraphWorkspace enabled currentReadReady={false} sessionId={target} selection={selection} onPreview={setSelection} onCurrentNodeClick={() => { onCurrentNodeClick(); setSelection(undefined) }} onSelect={(id) => { onSelect(id); setTarget(id) }} onBranch={onBranch} onRename={onRename} onClone={onClone} onDelete={onDelete} onRead={onRead}>
     <textarea aria-label="Existing draft" value={drafts[target] ?? ''} onChange={(event) => setDrafts({ ...drafts, [target]: event.target.value })} />
   </SessionGraphWorkspace>
 }
@@ -298,8 +299,8 @@ it('omits the graph banner and refresh row while retaining narrow-screen navigat
   expect(container.querySelector('[aria-label="当前会话对话"]')?.getAttribute('aria-hidden')).toBe('true')
 })
 
-async function renderTarget(sessionId: string) {
-  await act(async () => root.render(<QueryClientProvider client={client}><SessionGraphWorkspace enabled sessionId={sessionId} onPreview={() => {}} onCurrentNodeClick={onCurrentNodeClick} onSelect={onSelect} onBranch={onBranch} onRename={onRename} onClone={onClone} onDelete={onDelete}>
+async function renderTarget(sessionId: string, currentReadReady = false) {
+  await act(async () => root.render(<QueryClientProvider client={client}><SessionGraphWorkspace enabled currentReadReady={currentReadReady} sessionId={sessionId} onPreview={() => {}} onCurrentNodeClick={onCurrentNodeClick} onSelect={onSelect} onBranch={onBranch} onRename={onRename} onClone={onClone} onDelete={onDelete} onRead={onRead}>
     <textarea aria-label="Existing draft" defaultValue="keep draft" />
   </SessionGraphWorkspace></QueryClientProvider>))
 }
@@ -343,4 +344,95 @@ it('retains another branch fold when the current session changes inside the same
   expect(node('grandchild')).toBeNull()
   expect(container.querySelector('[aria-label="展开 Other 的子会话"]')?.getAttribute('aria-expanded')).toBe('false')
   expect(node('parallel').getAttribute('aria-current')).toBe('true')
+})
+
+it('clears the completed badge after only the read notification changes without changing the completed run', async () => {
+  useWorkspaceStore.setState({ runs: { other: { status: 'complete', turns: [], systemEvents: [] } }, sessionNotifications: { other: { completedRunId: 'done' } } })
+  await mount()
+  expect(node('other').textContent).toContain('✓ 已完成')
+  const runs = useWorkspaceStore.getState().runs
+  await act(async () => useWorkspaceStore.getState().markSessionRead('other', 'done')); await settle()
+  expect(node('other').textContent).not.toContain('已完成')
+  expect(useWorkspaceStore.getState().runs).toBe(runs)
+  expect(useWorkspaceStore.getState().runs.other.status).toBe('complete')
+})
+
+it('shows a persisted unread completion even when the runtime run has not been restored', async () => {
+  useWorkspaceStore.setState({ sessionNotifications: { other: { completedRunId: 'restored', readRunId: 'older' } } })
+  await mount()
+  expect(node('other').textContent).toContain('✓ 已完成')
+  await act(async () => useWorkspaceStore.getState().markSessionRead('other', 'restored')); await settle()
+  expect(node('other').textContent).not.toContain('已完成')
+})
+
+it.each([
+  ['running', '● 推理中'], ['error', '× 请求失败'], ['aborted', '— 已中止'],
+] as const)('shows %s ahead of an older unread completion', async (status, label) => {
+  useWorkspaceStore.setState({ runs: { other: { status, turns: [], systemEvents: [] } }, sessionNotifications: { other: { completedRunId: 'older' } } })
+  await mount()
+  expect(node('other').textContent).toContain(label)
+  expect(node('other').textContent).not.toContain('已完成')
+})
+
+it('marks a preview completion read only after its requested history is successfully displayed', async () => {
+  useWorkspaceStore.setState({ runs: { other: { status: 'complete', turns: [], systemEvents: [] } }, sessionNotifications: { other: { completedRunId: 'done' } } })
+  let finish!: (history: Awaited<ReturnType<typeof fetchSessionHistory>>) => void
+  vi.mocked(fetchSessionHistory).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+  await mount()
+  await act(async () => node('other').click()); await settle()
+  expect(onRead).not.toHaveBeenCalled()
+  expect(node('other').textContent).toContain('✓ 已完成')
+  await act(async () => finish({ session: { id: 'other' }, revision: 'r', entries: [{ id: 'answer', parentId: null, type: 'message', timestamp: '', raw: { message: { role: 'assistant', content: 'Read answer' } } }], hasEarlier: false })); await settle(); await settle()
+  expect(container.querySelector('[data-preview-session="other"]')?.getAttribute('data-entries')).toBe('1')
+  expect(onRead).toHaveBeenCalledExactlyOnceWith('other', 'done')
+  expect(useWorkspaceStore.getState().sessionNotifications.other.readRunId).toBe('done')
+  expect(node('other').textContent).not.toContain('已完成')
+  expect(useWorkspaceStore.getState().runs.other.status).toBe('complete')
+  expect(onSelect).not.toHaveBeenCalled()
+})
+
+it('keeps a failed preview unread', async () => {
+  useWorkspaceStore.setState({ runs: { other: { status: 'complete', turns: [], systemEvents: [] } }, sessionNotifications: { other: { completedRunId: 'done' } } })
+  vi.mocked(fetchSessionHistory).mockRejectedValueOnce(new Error('History unavailable'))
+  await mount(); await act(async () => node('other').click()); await settle(); await settle()
+  expect(fetchSessionHistory).toHaveBeenCalled()
+  expect(onRead).not.toHaveBeenCalled()
+  expect(useWorkspaceStore.getState().sessionNotifications.other.readRunId).toBeUndefined()
+  expect(node('other').textContent).toContain('✓ 已完成')
+})
+
+it('does not mark an unread completion read when opening node actions or its rename dialog', async () => {
+  useWorkspaceStore.setState({ runs: { other: { status: 'complete', turns: [], systemEvents: [] } }, sessionNotifications: { other: { completedRunId: 'done' } } })
+  await mount(); await context('other')
+  await act(async () => menuItem('重命名').click()); await settle()
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  expect(fetchSessionHistory).not.toHaveBeenCalled()
+  expect(onRead).not.toHaveBeenCalled()
+  expect(useWorkspaceStore.getState().sessionNotifications.other.readRunId).toBeUndefined()
+  expect(node('other').textContent).toContain('✓ 已完成')
+})
+
+it('keeps a ready current conversation unread while the narrow layout shows only the canvas', async () => {
+  useWorkspaceStore.setState({ runs: { source: { status: 'complete', turns: [], systemEvents: [] } }, sessionNotifications: { source: { completedRunId: 'done' } } })
+  await renderTarget('source', true); await settle(); await settle()
+  expect(onRead).not.toHaveBeenCalled()
+  expect(node('source').textContent).toContain('已完成')
+  await act(async () => button('查看对话').click()); await settle(); await settle()
+  expect(onRead).toHaveBeenCalledExactlyOnceWith('source', 'done')
+  expect(node('source').textContent).not.toContain('已完成')
+})
+
+it.each(['current', 'preview'] as const)('waits for the file sheet to close before acknowledging the %s reader', async (mode) => {
+  useWorkspaceStore.setState({ sessionNotifications: { source: { completedRunId: 'current-done' }, other: { completedRunId: 'preview-done' } } })
+  const selection = mode === 'preview' ? { sessionId: 'other' } : undefined
+  const render = (readBlocked: boolean) => act(async () => root.render(<QueryClientProvider client={client}><SessionGraphWorkspace
+    enabled sessionId="source" selection={selection} currentReadReady readBlocked={readBlocked} onRead={onRead}
+    onPreview={() => {}} onCurrentNodeClick={onCurrentNodeClick} onSelect={onSelect} onBranch={onBranch} onRename={onRename} onClone={onClone} onDelete={onDelete}>
+    <p>Current conversation</p>
+  </SessionGraphWorkspace></QueryClientProvider>))
+  await render(true); await settle(); await settle()
+  await act(async () => button('查看对话').click()); await settle(); await settle()
+  expect(onRead).not.toHaveBeenCalled()
+  await render(false); await settle(); await settle()
+  expect(onRead).toHaveBeenCalledExactlyOnceWith(mode === 'current' ? 'source' : 'other', `${mode}-done`)
 })

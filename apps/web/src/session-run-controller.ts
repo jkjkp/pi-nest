@@ -194,8 +194,8 @@ export function createSessionRunController({ invalidateHistory, replaceHistory, 
     const unconfirmedAttachments = store.runs[sessionId]?.turns.some((turn) => turn.attachments?.length && !turn.events.some((event) => nativeUserMessage(event)))
     if (unconfirmedAttachments) store.updateRun(sessionId, { attachmentWarning: 'Pi 已处理输入，但未观察到附件用户消息；请检查扩展是否接管。' })
     store.updateRun(sessionId, { status: stopReason === 'error' ? 'error' : stopReason === 'aborted' ? 'aborted' : 'complete', stopReason })
-    const visible = foregroundSessionId === sessionId && (typeof document === 'undefined' || document.visibilityState === 'visible')
-    if (runId) store.finishNotification(sessionId, runId, !visible, stopReason !== 'error' && stopReason !== 'aborted')
+    // The reading view acknowledges completion after the reply is visible.
+    if (runId) store.finishNotification(sessionId, runId, true, stopReason !== 'error' && stopReason !== 'aborted')
     void invalidateHistory(sessionId)
     if (runtime.watchedSessions().some((watch) => watch.sessionId === sessionId && watch.role === 'background')) void runtime.unwatch(sessionId)
   }

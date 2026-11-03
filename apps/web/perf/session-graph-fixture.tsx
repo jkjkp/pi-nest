@@ -111,3 +111,7 @@ report()
 if (new URLSearchParams(location.search).has('running')) {
   useWorkspaceStore.setState({ runs: { 'fixture-2': { status: 'running', turns: [], systemEvents: [] } } })
 }
+if (params.has('unread')) {
+  const id = params.get('unread') === 'current' ? selected : 'fixture-1'
+  useWorkspaceStore.setState({ sessionNotifications: { [id]: { completedRunId: 'fixture-completed' } } })
+}

@@ -7,15 +7,18 @@ import { useSessionHistory } from './use-session-history.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { activeRuntimeTurn, isRunActive } from './session-run-model.js'
 import { useTimelineViewport } from './use-timeline-viewport.js'
+import { useSessionRead } from './use-session-read.js'
 
 export type GraphSelection = { sessionId: string }
-export function SessionGraphPreview({ selection, cwd, branchDisabled, onBranch }: {
+export function SessionGraphPreview({ selection, cwd, branchDisabled, onBranch, visible, onRead }: {
   selection: GraphSelection; cwd?: string; branchDisabled: boolean; onBranch: (request: PiSessionBranchRequest) => Promise<void>
+  visible: boolean; onRead: (sessionId: string, runId: string) => void
 }) {
   const view = useSessionHistory(selection.sessionId, true)
   const run = useWorkspaceStore((state) => state.runs[selection.sessionId])
   const pendingRunId = useWorkspaceStore((state) => state.sessionNotifications[selection.sessionId]?.pendingRunId)
   const isRunning = isRunActive(run?.status ?? (pendingRunId ? 'running' : 'idle'))
+  useSessionRead(selection.sessionId, visible && !isRunning && view.history?.session.id === selection.sessionId && view.historyQuery.isSuccess && !view.historyQuery.isFetching && !view.historyError, onRead)
   const { setMessageScrollArea, setFollowingLatest, scrollViewport, beginTurnNavigation, scrollToFinalAnswer, followFinalAnswer, registerTimelineScroll } = useTimelineViewport({ selectedSessionId: selection.sessionId, history: view.history,
     activeTurn: activeRuntimeTurn(run?.turns ?? []), isActive: isRunning, pendingJump: view.pendingJump, onCancelTurnJump: view.cancelTurnJump })
   useLayoutEffect(() => {

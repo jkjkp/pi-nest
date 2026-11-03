@@ -14,11 +14,13 @@ import { graphAncestors, layoutGraph, type GraphNode } from './session-graph-mod
 import { SessionGraphCanvas } from './session-graph-canvas.js'
 import { SessionGraphPreview, type GraphSelection } from './session-graph-preview.js'
 import { useWorkspaceStore } from './workspace-store.js'
+import { useSessionRead } from './use-session-read.js'
 
-export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview, onCurrentNodeClick, onSelect, onBranch, onRename, onClone, onDelete, mutationSessionId, children }: {
+export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview, onCurrentNodeClick, onSelect, onBranch, onRename, onClone, onDelete, onRead, currentReadReady, readBlocked = false, mutationSessionId, children }: {
   mutationSessionId?: string; onRename: (id: string, name: string) => Promise<void>; onClone: (id: string) => Promise<void>; onDelete: (id: string) => Promise<void>
   enabled: boolean; sessionId: string; selection?: GraphSelection; onPreview: (selection?: GraphSelection) => void
   onCurrentNodeClick: () => void; onSelect: (sessionId: string) => void; onBranch: (sessionId: string, request: PiSessionBranchRequest) => Promise<void>; children: ReactNode
+  onRead: (sessionId: string, runId: string) => void; currentReadReady: boolean; readBlocked?: boolean
 }) {
   const root = useRef<HTMLDivElement>(null)
   const [wide, setWide] = useState(false)
@@ -33,7 +35,12 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
   const [error, setError] = useState<string>()
   const intent = useRef({ sessionId, selection })
   useLayoutEffect(() => { intent.current = { sessionId, selection } }, [sessionId, selection])
-  const statuses = useWorkspaceStore(useShallow((state) => Object.fromEntries(Object.keys({ ...state.sessionNotifications, ...state.runs }).map((id) => [id, state.runs[id]?.status ?? (state.sessionNotifications[id]?.pendingRunId ? 'running' : 'idle')]))))
+  const notifications = useWorkspaceStore((state) => state.sessionNotifications)
+  const statuses = useWorkspaceStore(useShallow((state) => Object.fromEntries(Object.keys({ ...state.sessionNotifications, ...state.runs }).map((id) => {
+    const status = state.runs[id]?.status ?? 'idle'
+    return [id, !isRunActive(status) && state.sessionNotifications[id]?.pendingRunId ? 'running' : status]
+  }))))
+  useSessionRead(sessionId, currentReadReady && !readBlocked && !selection && (!enabled || wide || showDetails), onRead)
   const pendingOperation = useWorkspaceStore((state) => selection ? state.branchOperations[selection.sessionId] : undefined)
   const queryClient = useQueryClient()
   const graph = useQuery({ queryKey: ['session-graph', sessionId], enabled: enabled && Boolean(sessionId), queryFn: ({ signal }) => fetchSessionGraph(sessionId, signal), retry: false,
@@ -47,8 +54,15 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
     setFolds((value) => graphAncestors(sessions, sessionId).some((id) => value[id]) ? { ...value, ...Object.fromEntries(graphAncestors(sessions, sessionId).map((id) => [id, false])) } : value)
   }, [sessionId, sessions])
   const nodes = useMemo(() => {
-    return layoutGraph(sessions ?? [], folds).map((node) => node.id === mutationSessionId ? { ...node, status: '更新中…' } : statuses[node.id] ? { ...node, status: sessionStatusLabel(statuses[node.id]) } : node)
-  }, [sessions, folds, statuses, mutationSessionId])
+    return layoutGraph(sessions ?? [], folds).map((node) => {
+      const notification = notifications[node.id]
+      const status = statuses[node.id]
+      const unread = Boolean(notification?.completedRunId && notification.completedRunId !== notification.readRunId)
+      const completed = status === 'complete' || (!status || status === 'idle') && Boolean(notification?.completedRunId)
+      const label = completed ? unread ? sessionStatusLabel('complete') : undefined : status ? sessionStatusLabel(status) : undefined
+      return { ...node, status: node.id === mutationSessionId ? '更新中…' : label }
+    })
+  }, [sessions, folds, statuses, notifications, mutationSessionId])
   useEffect(() => {
     if (!root.current) return
     const observer = new ResizeObserver(([entry]) => setWide(entry.contentRect.width >= 960))
@@ -142,7 +156,7 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
             <Button size="sm" variant="outline" onClick={() => switchTo(selection.sessionId)}>切换到此会话继续</Button>
           </div>
           {pendingOperation && !saving && mutationSessionId !== selection.sessionId && <p role="status" className="p-2 text-xs">此会话分支创建结果待确认；请切换到此会话后查询结果，勿重复创建。</p>}
-          <SessionGraphPreview key={selection.sessionId} selection={selection} cwd={source?.cwd} onBranch={branch} branchDisabled={saving || Boolean(pendingOperation) || !graph.data?.branchStorage.available} />
+          <SessionGraphPreview key={selection.sessionId} selection={selection} cwd={source?.cwd} onBranch={branch} branchDisabled={saving || Boolean(pendingOperation) || !graph.data?.branchStorage.available} visible={!readBlocked && enabled && (wide || showDetails)} onRead={onRead} />
         </>}
         <div aria-hidden={Boolean(selection)} inert={Boolean(selection)} className={`${selection ? 'invisible pointer-events-none absolute inset-0' : 'relative'} flex min-h-0 flex-1 flex-col`}>{children}</div>
       </section>

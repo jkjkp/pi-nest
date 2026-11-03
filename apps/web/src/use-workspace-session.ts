@@ -35,7 +35,6 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const runs = useWorkspaceStore((state) => state.runs)
   const runtimeDetails = useWorkspaceStore((state) => state.runtimeDetails)
   const runtimeStates = useWorkspaceStore((state) => state.runtimeStates)
-  const watchStates = useWorkspaceStore((state) => state.watchStates)
   const setDraft = useWorkspaceStore((state) => state.setDraft)
   const navigationOrder = useWorkspaceStore((state) => state.navigationOrder)
   const hideProject = useWorkspaceStore((state) => state.hideProject)
@@ -77,18 +76,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
   const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
   const { history, historyQuery, historyError, historyTurnCount, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, jumpError, cancelTurnJump, finishTurnJump, readTurnPrompt, requestTurnJump, loadEarlier, retryHistory } = useSessionHistory(selectedSessionId, Boolean(selectedSessionId))
-  const completedRunId = useWorkspaceStore((state) => state.sessionNotifications[selectedSessionId]?.completedRunId)
   const planTurnId = timelineItems(history?.entries, currentRun?.turns ?? [], currentRun?.systemEvents ?? []).findLast((item) => item.plan)?.id
-
-  useEffect(() => {
-    if (!selectedSessionId || watchStates[selectedSessionId] !== 'ready' || !completedRunId || !historyQuery.isSuccess || historyQuery.isFetching || historyQuery.isError) return
-    const markRead = () => {
-      if (document.visibilityState === 'visible') sessionRuns.markSessionRead(selectedSessionId, completedRunId)
-    }
-    markRead()
-    document.addEventListener('visibilitychange', markRead)
-    return () => document.removeEventListener('visibilitychange', markRead)
-  }, [selectedSessionId, watchStates, completedRunId, historyQuery.isSuccess, historyQuery.isFetching, historyQuery.isError, sessionRuns])
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId

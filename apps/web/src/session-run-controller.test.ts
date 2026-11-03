@@ -400,7 +400,7 @@ describe('session run controller', () => {
     expect(controller.start({ sessionId: 'session-a', prompt: 'next' })).toBe(true)
   })
 
-  it.each(['visible', 'hidden'])('marks foreground completion according to document visibility: %s', async (visibilityState) => {
+  it.each(['visible', 'hidden'])('leaves foreground completion unread until its reading view acknowledges it: %s', async (visibilityState) => {
     vi.stubGlobal('document', { visibilityState })
     const runtime = runtimeMock()
     const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
@@ -408,7 +408,7 @@ describe('session run controller', () => {
     controller.start({ sessionId: 'session-a', prompt: 'hello' })
     await tick()
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'agent_settled' } })
-    expect(workspace.getState().sessionNotifications['session-a']?.readRunId).toBe(visibilityState === 'visible' ? 'run-1' : undefined)
+    expect(workspace.getState().sessionNotifications['session-a']?.readRunId).toBeUndefined()
   })
 
   it('does not let an old read acknowledgement clear a newer reply', () => {
