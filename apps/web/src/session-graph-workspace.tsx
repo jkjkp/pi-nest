@@ -10,9 +10,9 @@ import { SessionGraphCanvas } from './session-graph-canvas.js'
 import { SessionGraphPreview, type GraphSelection } from './session-graph-preview.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
-export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview, onSelect, onBranch, children }: {
+export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview, onCurrentNodeClick, onSelect, onBranch, children }: {
   enabled: boolean; sessionId: string; selection?: GraphSelection; onPreview: (selection?: GraphSelection) => void
-  onSelect: (sessionId: string) => void; onBranch: (sessionId: string, request: PiSessionBranchRequest) => Promise<void>; children: ReactNode
+  onCurrentNodeClick: () => void; onSelect: (sessionId: string) => void; onBranch: (sessionId: string, request: PiSessionBranchRequest) => Promise<void>; children: ReactNode
 }) {
   const root = useRef<HTMLDivElement>(null)
   const [wide, setWide] = useState(false)
@@ -36,7 +36,12 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
     observer.observe(root.current)
     return () => observer.disconnect()
   }, [])
-  function choose(node: GraphNode) { setError(undefined); onPreview({ sessionId: node.id }); setShowDetails(true) }
+  function choose(node: GraphNode) {
+    setError(undefined)
+    if (node.id === sessionId) onCurrentNodeClick()
+    else onPreview({ sessionId: node.id })
+    setShowDetails(true)
+  }
   function revealCurrent() {
     setFolds((value) => ({ owner: sessionId, collapsed: { ...(value.owner === sessionId ? value.collapsed : {}), ...Object.fromEntries(graphAncestors(sessions ?? [], sessionId).map((id) => [id, false])) } }))
     setLocateRequest((value) => value + 1)

@@ -7,7 +7,7 @@ import { SessionGraphWorkspace } from './session-graph-workspace.js'
 import type { GraphSelection } from './session-graph-preview.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { fetchSessionGraph, fetchSessionHistory, fetchSessionTurnIndex } from './workspace-api.js'
-const onSelect = vi.fn(); const onBranch = vi.fn()
+const onSelect = vi.fn(); const onBranch = vi.fn(); const onCurrentNodeClick = vi.fn()
 const sessions = [{ id: 'source', name: 'Root', cwd: '/w' }, { id: 'other', name: 'Other', cwd: '/w', parentSessionId: 'source' }, { id: 'grandchild', name: 'Grandchild', cwd: '/w', parentSessionId: 'other' }]
 vi.mock('./workspace-api.js', () => ({
   fetchSessionGraph: vi.fn(), fetchSessionHistory: vi.fn(), fetchSessionTurnIndex: vi.fn(),
@@ -23,7 +23,7 @@ let root: Root; let container: HTMLDivElement; let client: QueryClient
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); onSelect.mockReset(); onBranch.mockReset()
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); onSelect.mockReset(); onBranch.mockReset(); onCurrentNodeClick.mockReset()
   vi.mocked(fetchSessionGraph).mockReset().mockResolvedValue({ sessions, branchStorage: { available: true } })
   vi.mocked(fetchSessionHistory).mockReset().mockImplementation(async (id, before) => ({ session: { id }, revision: 'r', entries: [{ id: before ? 'old' : 'u', parentId: null, type: 'message', timestamp: '', raw: { message: { role: 'user', content: 'question' } } }], hasEarlier: !before, beforeCursor: before ? undefined : 'older' }))
   vi.mocked(fetchSessionTurnIndex).mockReset().mockResolvedValue({ revision: 'r', entries: [] })
@@ -37,7 +37,7 @@ function Fixture({ initial = 'source' }: { initial?: string }) {
   const [selection, setSelection] = useState<GraphSelection>()
   const [target, setTarget] = useState(initial)
   const [drafts, setDrafts] = useState<Record<string, string>>({ source: 'keep draft', other: 'other draft' })
-  return <SessionGraphWorkspace enabled sessionId={target} selection={selection} onPreview={setSelection} onSelect={(id) => { onSelect(id); setTarget(id) }} onBranch={onBranch}>
+  return <SessionGraphWorkspace enabled sessionId={target} selection={selection} onPreview={setSelection} onCurrentNodeClick={() => { onCurrentNodeClick(); setSelection(undefined) }} onSelect={(id) => { onSelect(id); setTarget(id) }} onBranch={onBranch}>
     <textarea aria-label="Existing draft" value={drafts[target] ?? ''} onChange={(event) => setDrafts({ ...drafts, [target]: event.target.value })} />
   </SessionGraphWorkspace>
 }
@@ -83,9 +83,9 @@ it('does not clear a newer preview when an earlier branch operation finishes', a
   onBranch.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
   await mount(); await act(async () => node('other').click()); await settle()
   await act(async () => button('从此轮后新建分支').click())
-  await act(async () => node('source').click()); await settle()
+  await act(async () => node('grandchild').click()); await settle()
   await act(async () => finish()); await settle()
-  expect(container.querySelector('[data-preview-session]')?.getAttribute('data-preview-session')).toBe('source')
+  expect(container.querySelector('[data-preview-session]')?.getAttribute('data-preview-session')).toBe('grandchild')
 })
 it('folds descendants and locating the current session expands its path', async () => {
   await mount('grandchild')
@@ -135,4 +135,46 @@ it('keeps a lost acknowledgement visible on the preview source and forbids a sec
   expect(container.textContent).toContain('切换到此会话后查询结果')
   expect(button('从此轮后新建分支').disabled).toBe(true)
   expect(useWorkspaceStore.getState().branchOperations.other?.operationId).toBe('uncertain')
+})
+
+it.each([false, true])('keeps the current node in the normal conversation without changing the send target (running: %s)', async (running) => {
+  if (running) useWorkspaceStore.setState({ runs: { source: { status: 'running', turns: [], systemEvents: [] } } })
+  await mount()
+  const input = container.querySelector('textarea')
+  const notifications = useWorkspaceStore.getState().sessionNotifications
+  const runs = useWorkspaceStore.getState().runs
+  await act(async () => { node('source').click(); node('source').click() }); await settle()
+  expect(onCurrentNodeClick).toHaveBeenCalledTimes(2)
+  expect(onSelect).not.toHaveBeenCalled()
+  expect(container.querySelector('[aria-label="当前会话对话"]')).not.toBeNull()
+  expect(container.querySelector('[data-preview-session]')).toBeNull()
+  expect(container.textContent).not.toContain('正在预览')
+  expect(node('source').textContent).not.toContain('预览中')
+  expect(container.querySelector('textarea')).toBe(input)
+  expect(input?.parentElement?.inert).toBe(false)
+  expect(input?.value).toBe('keep draft')
+  expect(fetchSessionHistory).not.toHaveBeenCalled()
+  expect(useWorkspaceStore.getState().sessionNotifications).toBe(notifications)
+  expect(useWorkspaceStore.getState().runs).toBe(runs)
+})
+it('uses the current-node action instead of the reading-position return action when leaving another preview', async () => {
+  await mount(); const input = container.querySelector('textarea')
+  await act(async () => node('other').click()); await settle()
+  await act(async () => node('source').click()); await settle()
+  expect(onCurrentNodeClick).toHaveBeenCalledTimes(1)
+  expect(container.querySelector('[data-preview-session]')).toBeNull()
+  expect(input?.parentElement?.inert).toBe(false)
+  expect(onSelect).not.toHaveBeenCalled()
+  expect(vi.mocked(fetchSessionHistory).mock.calls.map(([id]) => id)).toEqual(['other'])
+})
+it('keeps the normal conversation after an earlier preview branch finishes late', async () => {
+  let finish!: () => void
+  onBranch.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
+  await mount(); await act(async () => node('other').click()); await settle()
+  await act(async () => button('从此轮后新建分支').click())
+  await act(async () => node('source').click()); await settle()
+  await act(async () => finish()); await settle()
+  expect(container.querySelector('[data-preview-session]')).toBeNull()
+  expect(container.querySelector('textarea')?.parentElement?.inert).toBe(false)
+  expect(onSelect).not.toHaveBeenCalled()
 })

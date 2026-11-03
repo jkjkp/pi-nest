@@ -51,10 +51,14 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const currentSessionRef = useRef(selectedSessionId)
   useLayoutEffect(() => { currentSessionRef.current = selectedSessionId }, [selectedSessionId])
   const [graphState, setGraphState] = useState<{ owner: string; selection?: GraphSelection }>()
-  const graphSelection = graphState?.owner === selectedSessionId ? graphState.selection : undefined
-  const graphIntentRef = useRef(graphSelection)
-  useLayoutEffect(() => { graphIntentRef.current = graphSelection }, [graphSelection])
-  function setGraphSelection(selection?: GraphSelection) { setGraphState({ owner: selectedSessionId, selection }) }
+  const graphSelection = graphState?.owner === selectedSessionId && graphState.selection?.sessionId !== selectedSessionId ? graphState.selection : undefined
+  const graphIntentRef = useRef(graphState)
+  useLayoutEffect(() => { graphIntentRef.current = graphState }, [graphState])
+  function setGraphSelection(selection?: GraphSelection) {
+    const next = { owner: selectedSessionId, selection: selection?.sessionId === selectedSessionId ? undefined : selection }
+    setGraphState(next)
+    return next
+  }
   const ordinaryDraft = useWorkspaceStore((state) => state.drafts[selectedSessionId] ?? '')
   const [attachmentError, setAttachmentError] = useState<string>()
   const isHome = !selectedSessionId && !isDraft
@@ -89,6 +93,23 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     statistics: () => setCommandPanels({ sessionId: selectedSessionId, statistics: true }),
     settings: () => { void navigate(`/settings?session=${encodeURIComponent(selectedSessionId)}`) },
   })
+
+  function showGraphPreview(selection?: GraphSelection) {
+    if (selection && selection.sessionId !== selectedSessionId && !graphSelection) { rememberReadingPosition(); rememberLayoutPosition() }
+    const intent = setGraphSelection(selection)
+    if (!intent.selection) requestAnimationFrame(() => {
+      if (currentSessionRef.current === intent.owner && graphIntentRef.current === intent) restoreLayoutPosition()
+    })
+  }
+
+  function showCurrentGraphSession() {
+    const intent = setGraphSelection(undefined)
+    requestAnimationFrame(() => {
+      if (currentSessionRef.current !== intent.owner || graphIntentRef.current !== intent || !scrollViewport?.isConnected) return
+      setFollowingLatest(true)
+      scrollViewport?.scrollTo({ top: scrollViewport.scrollHeight, behavior: 'instant' })
+    })
+  }
 
   function selectSession(sessionId: string) {
     if (!graphSelection) rememberReadingPosition()
@@ -164,7 +185,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           {!branchStorage.available && <p role="status" className="px-3 text-xs text-destructive">分支关系存储不可用，新建分支已禁用；普通对话可继续。</p>}
           {pendingBranch && <div className="flex items-center gap-2 px-3 text-xs" role="status">分支创建结果待确认。<Button size="sm" variant="ghost" onClick={() => { void session.checkBranch().then((result) => { if (result && currentSessionRef.current === selectedSessionId) { selectSession(result.session.id); if (result.draftRecoveryRequired) setAttachmentError('分支已创建，但来源消息不可读取，请自行恢复未发送草稿。') } }).catch((cause) => setAttachmentError(cause instanceof Error ? cause.message : '查询失败')) }}>查询分支结果</Button></div>}
           <SessionGraphWorkspace enabled={workspaceView === 'tree' && Boolean(selectedSessionId)} sessionId={selectedSessionId}
-            selection={graphSelection} onPreview={(selection) => { if (selection && !graphSelection) { rememberReadingPosition(); rememberLayoutPosition() } setGraphSelection(selection); if (!selection) requestAnimationFrame(restoreLayoutPosition) }} onSelect={selectSession}
+            selection={graphSelection} onPreview={showGraphPreview} onCurrentNodeClick={showCurrentGraphSession} onSelect={selectSession}
             onBranch={async (sourceId, request) => { const original = selectedSessionId; const previewIntent = graphIntentRef.current; const result = await session.createBranch(request, sourceId); if (useWorkspaceStore.getState().branchOperations[sourceId]) return; if (currentSessionRef.current === original && graphIntentRef.current === previewIntent) selectSession(result.session.id) }}>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="timeline-scroll h-full">
