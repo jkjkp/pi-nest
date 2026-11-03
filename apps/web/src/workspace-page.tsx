@@ -1,3 +1,5 @@
+import { SessionGraphWorkspace } from './session-graph-workspace.js'
+import type { GraphSelection } from './session-graph-preview.js'
 import { useWorkspaceFilePreview } from './use-workspace-file-preview.js'
 import { WorkspaceLayout } from './workspace-layout.js'
 import { WorkspaceNavigation } from './workspace-navigation.js'
@@ -13,7 +15,7 @@ import { RenderErrorBoundary } from './render-error-boundary.js'
 import { useWorkspaceCommands } from './use-workspace-commands.js'
 import { SessionRenameDialog } from './session-rename-dialog.js'
 import { SessionStatistics } from './session-statistics.js'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { ArrowDown, CircleX, Folder, LoaderCircle } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
@@ -42,6 +44,17 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     startDraft, openProject, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, requestTurnJump, openProjectFolder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
+  const workspaceView = useWorkspaceStore((state) => state.workspaceView)
+  const setWorkspaceView = useWorkspaceStore((state) => state.setWorkspaceView)
+  const branchStorage = useWorkspaceStore((state) => state.branchStorage)
+  const pendingBranch = useWorkspaceStore((state) => state.branchOperations[selectedSessionId])
+  const currentSessionRef = useRef(selectedSessionId)
+  useLayoutEffect(() => { currentSessionRef.current = selectedSessionId }, [selectedSessionId])
+  const [graphState, setGraphState] = useState<{ owner: string; selection?: GraphSelection }>()
+  const graphSelection = graphState?.owner === selectedSessionId ? graphState.selection : undefined
+  const graphIntentRef = useRef(graphSelection)
+  useLayoutEffect(() => { graphIntentRef.current = graphSelection }, [graphSelection])
+  function setGraphSelection(selection?: GraphSelection) { setGraphState({ owner: selectedSessionId, selection }) }
   const ordinaryDraft = useWorkspaceStore((state) => state.drafts[selectedSessionId] ?? '')
   const [attachmentError, setAttachmentError] = useState<string>()
   const isHome = !selectedSessionId && !isDraft
@@ -65,7 +78,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     beginTurnNavigation()
     return requestTurnJump(turnId, cursor, loaded)
   }, [beginTurnNavigation, requestTurnJump])
-  const preview = useWorkspaceFilePreview(selectedSessionId || (draftProject ? `project:${draftProject.cwd}` : 'home'), rememberLayoutPosition, restoreLayoutPosition, { cwd: displaySession?.cwd ?? draftProject?.cwd, scope: selectedSessionId ? { kind: 'session', id: selectedSessionId } : draftProject?.cwd ? { kind: 'project', cwd: draftProject.cwd } : undefined })
+  const preview = useWorkspaceFilePreview((workspaceView === 'tree' ? graphSelection?.sessionId : undefined) || selectedSessionId || (draftProject ? `project:${draftProject.cwd}` : 'home'), rememberLayoutPosition, restoreLayoutPosition, { cwd: displaySession?.cwd ?? draftProject?.cwd, scope: selectedSessionId ? { kind: 'session', id: workspaceView === 'tree' ? graphSelection?.sessionId ?? selectedSessionId : selectedSessionId } : draftProject?.cwd ? { kind: 'project', cwd: draftProject.cwd } : undefined })
   const promptTextareaRef = useRef<HTMLTextAreaElement>(null)
 
   const [commandPanels, setCommandPanels] = useState<{ sessionId: string; statistics: boolean; fork?: (entryId: string, revision: string) => Promise<void>; rename?: { session: NonNullable<typeof selectedSession> } }>({ sessionId: selectedSessionId, statistics: false })
@@ -78,7 +91,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   })
 
   function selectSession(sessionId: string) {
-    rememberReadingPosition()
+    if (!graphSelection) rememberReadingPosition()
+    setGraphSelection(undefined)
     session.selectSession(sessionId)
   }
 
@@ -98,7 +112,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       mutationSessionId={mutatingSessionId}
       onClone={async (sessionId) => {
         const result = await session.createBranch({ kind: 'clone' }, sessionId)
-        selectSession(result.session.id)
+        if (currentSessionRef.current === selectedSessionId) selectSession(result.session.id)
       }}
       onDelete={handleDelete}
       onAddProject={() => setCreatingProject(true)}
@@ -133,16 +147,25 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       <WorkspaceLayout title={sessionTitle} titleTooltip={displaySession ? sessionDisplayName(displaySession) : undefined}
         navigation={navigation} containerRef={workspaceGrid} previewOpen={preview.open}
         preview={<WorkspaceFilePreview preview={preview} containerRef={workspaceGrid} />}>
-        <section onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={(event) => { if (session.messageEdit && session.messageEdit.status !== 'editing') { event.preventDefault(); return } try { attachmentDrop(event, attachmentDraft.add) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '附件无法添加') } }} className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
+        <section onDragOver={(event) => { if (graphSelection) return; if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={(event) => { if (graphSelection) { event.preventDefault(); return } if (session.messageEdit && session.messageEdit.status !== 'editing') { event.preventDefault(); return } try { attachmentDrop(event, attachmentDraft.add) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '附件无法添加') } }} className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
           <header className="flex min-h-10 shrink-0 items-center gap-3 border-b bg-background/95 py-0.5 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {(selectedSession || draftProject) && <Folder aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
               <h1 className="min-w-0 truncate text-[13px] leading-5 font-normal" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
               {selectedSession && <span className="inline-flex size-4 shrink-0" role={runtimeLoading ? 'status' : undefined} aria-label={runtimeLoading ? '正在加载 Pi 运行时' : undefined}>{runtimeLoading && <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />}</span>}
             </div>
+            {selectedSessionId && <div role="group" aria-label="页面模式" className="flex shrink-0 gap-1">
+              <Button size="sm" variant={workspaceView === 'chat' ? 'secondary' : 'ghost'} aria-pressed={workspaceView === 'chat'} onClick={() => { rememberLayoutPosition(); setWorkspaceView('chat'); setGraphSelection(undefined); requestAnimationFrame(restoreLayoutPosition) }}>对话</Button>
+              <Button size="sm" variant={workspaceView === 'tree' ? 'secondary' : 'ghost'} aria-pressed={workspaceView === 'tree'} onClick={() => { rememberLayoutPosition(); setWorkspaceView('tree'); requestAnimationFrame(restoreLayoutPosition) }}>树状</Button>
+            </div>}
             <WorkspaceFilePreviewToggle open={preview.open} onToggle={preview.toggle} buttonRef={preview.toggleRef} />
             {selectedSessionId && <SessionInspector key={selectedSessionId} run={currentRun} session={displaySession} />}
           </header>
+          {!branchStorage.available && <p role="status" className="px-3 text-xs text-destructive">分支关系存储不可用，新建分支已禁用；普通对话可继续。</p>}
+          {pendingBranch && <div className="flex items-center gap-2 px-3 text-xs" role="status">分支创建结果待确认。<Button size="sm" variant="ghost" onClick={() => { void session.checkBranch().then((result) => { if (result && currentSessionRef.current === selectedSessionId) { selectSession(result.session.id); if (result.draftRecoveryRequired) setAttachmentError('分支已创建，但来源消息不可读取，请自行恢复未发送草稿。') } }).catch((cause) => setAttachmentError(cause instanceof Error ? cause.message : '查询失败')) }}>查询分支结果</Button></div>}
+          <SessionGraphWorkspace enabled={workspaceView === 'tree' && Boolean(selectedSessionId)} sessionId={selectedSessionId}
+            selection={graphSelection} onPreview={(selection) => { if (selection && !graphSelection) { rememberReadingPosition(); rememberLayoutPosition() } setGraphSelection(selection); if (!selection) requestAnimationFrame(restoreLayoutPosition) }} onSelect={selectSession}
+            onBranch={async (sourceId, request) => { const original = selectedSessionId; const previewIntent = graphIntentRef.current; const result = await session.createBranch(request, sourceId); if (useWorkspaceStore.getState().branchOperations[sourceId]) return; if (currentSessionRef.current === original && graphIntentRef.current === previewIntent) selectSession(result.session.id) }}>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
             <ScrollArea className="timeline-scroll h-full">
               <div className={isHome ? "w-full" : "w-full space-y-4 px-4 pt-6 pb-[calc(var(--composer-height)+3rem)] sm:px-6"}>
@@ -178,9 +201,13 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   onRequestTurnJump={navigateToTurn}
                   onReadTurnPrompt={readTurnPrompt}
                   branchDisabled={mutatingSessionId !== undefined}
+                  onBranchUser={async (entryId, revision) => {
+                    const result = await session.createBranch({ kind: 'fork', mode: 'edit', entryId, revision })
+                    if (currentSessionRef.current === selectedSessionId) selectSession(result.session.id)
+                  }}
                   onBranchAnswer={async (entryId, revision) => {
                     const result = await session.createBranch({ kind: 'fork', entryId, revision })
-                    selectSession(result.session.id)
+                    if (currentSessionRef.current === selectedSessionId) selectSession(result.session.id)
                   }}
                   onRetry={retryHistory}
                   onTurnJumpFinished={finishTurnJump}
@@ -241,6 +268,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   <ThinkingSelector emptyMessage={isDraft && !currentModel ? '请先选择模型，再设置思考等级。' : undefined} key={`thinking:${selectedSessionId || draftProject?.key}`} open={thinkingOpen} onOpenChange={setThinkingOpen} current={currentThinkingLevel} levels={thinkingLevels} status={thinkingStatus} error={thinkingError} failure={thinkingFailure} disabled={(!selectedSession && !isDraft) || creatingDraft || (!isDraft && (modelStatus === 'loading' || modelStatus === 'switching'))} isActive={isActive} onLoad={() => void openThinking()} onRetry={() => void openThinking(true)} onSelect={changeThinkingLevel} />
             </>}
           />}
+          </SessionGraphWorkspace>
         </section>
       </WorkspaceLayout>
     </OpenToolFile>

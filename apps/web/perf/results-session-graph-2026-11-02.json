@@ -1,0 +1,54 @@
+{
+  "scope": "开发构建中的隔离夹具，实际工作台组件和合成传输，不代表生产或真实模型性能",
+  "fixture": "session-graph.html?large",
+  "viewport": [
+    1440,
+    1000
+  ],
+  "dataset": {
+    "sessions": 100,
+    "turns": 10000,
+    "lineageDepth": 21
+  },
+  "initialRead": {
+    "requestedSessionIndexes": 21,
+    "peakConcurrentIndexes": 2,
+    "elapsedSinceFixtureInitializationMs": 451.2,
+    "longTasksMs": [
+      211
+    ],
+    "usedJSHeapSize": 77463904,
+    "renderedCanvasNodesAfterLocate": 15,
+    "canvasSize": [
+      525,
+      734
+    ]
+  },
+  "notes": [
+    "elapsed 不含模块下载及 Vite 依赖优化；样本仅一次，未作生产延迟门槛",
+    "heap 包含夹具预置的合成历史；没有网络请求全部分支正文",
+    "10000 轮完整布局另由纯模型自动测试验证，浏览器初次只展开当前分支与祖先",
+    "缩放低于 25% 时只显示会话概览，放大后显示轮次"
+  ],
+  "interaction": {
+    "previewDoesNotChangeSendTarget": true,
+    "draftPreserved": true,
+    "mainViewportBeforeAndAfter": {
+      "height": 923,
+      "scrollTop": 120
+    },
+    "readonlyUsesInert": true,
+    "narrowViewport": [
+      320,
+      800
+    ],
+    "documentScrollWidth": 320,
+    "arrowRightTransform": "translate(-80px, 0px) scale(1)",
+    "consoleErrors": 0,
+    "consoleWarnings": 0
+  },
+  "platformLimits": [
+    "未验证 Windows 原生绑定与文件发布",
+    "未验证 Safari 或手机硬件"
+  ]
+}

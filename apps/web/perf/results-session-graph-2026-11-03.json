@@ -1,0 +1,103 @@
+{
+  "date": "2026-11-03",
+  "environment": "macOS / Codex in-app browser, Vite development fixture, one sample",
+  "fixture": "http://127.0.0.1:5187/session-graph.html?large",
+  "sessions": 100,
+  "rounds": 10000,
+  "depth": 21,
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "initial": {
+    "skeletonRequests": 1,
+    "graphTurnRequests": 0,
+    "historyRequests": {
+      "fixture-20": 1
+    },
+    "turnIndexRequests": {
+      "fixture-20": 1
+    },
+    "firstNodeDomMs": 185.60000038146973,
+    "renderedNodesInViewport": 9,
+    "longTasksMs": [
+      147
+    ],
+    "usedJsHeapBytes": 138568537
+  },
+  "fit": {
+    "sessionNodes": 100,
+    "uniqueSessionIds": 100
+  },
+  "previewSample": {
+    "session": "fixture-99",
+    "historyRequestsAfterOpening": {
+      "fixture-20": 1,
+      "fixture-99": 1
+    },
+    "historyRequestsAfterExplicitEarlierPage": {
+      "fixture-20": 1,
+      "fixture-99": 2
+    },
+    "turnIndexRequests": {
+      "fixture-20": 1,
+      "fixture-99": 1
+    },
+    "graphTurnRequests": 0
+  },
+  "responsive": [
+    {
+      "width": 320,
+      "documentScrollWidth": 320,
+      "previewInputInert": true,
+      "originalDraftPreserved": true
+    },
+    {
+      "width": 768,
+      "documentScrollWidth": 768,
+      "split": false
+    },
+    {
+      "width": 1024,
+      "documentScrollWidth": 1024,
+      "split": false
+    },
+    {
+      "width": 1440,
+      "documentScrollWidth": 1440,
+      "split": true
+    }
+  ],
+  "interactionChecks": [
+    "Preview does not select a session or change the current draft; explicit continue restores the target draft",
+    "Synthetic branch creation adds exactly one child; fit reveals 4 session nodes instead of 3",
+    "Existing background run marker remains visible",
+    "Fold/unfold, locate current, zoom and keyboard pan retain metadata-only graph reads",
+    "Workspace file text paging works; opening file panel switches graph layout using actual remaining width",
+    "320px Enter-to-preview and return preserve the original composer; no horizontal overflow"
+  ],
+  "consoleErrorsAndWarnings": 0,
+  "limitations": [
+    "Synthetic API fixture and transport: no real user sessions, model calls or WebSocket connections",
+    "Timing is first node DOM availability, not browser paint/LCP; development sample is not a performance threshold",
+    "Heap includes fixture turn metadata and UI caches, and is not a retained-memory delta",
+    "Initial and preview readings come from separate runs of the same fixture",
+    "Windows, Linux desktop, Safari/WebKit and physical phone input were not tested"
+  ],
+  "levels": 22,
+  "cameraFocusRegression": {
+    "overflow": "clip",
+    "before": {
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "currentNodeX": 296,
+      "currentNodeY": 170
+    },
+    "afterKeyboardPreview": {
+      "scrollLeft": 0,
+      "scrollTop": 0,
+      "currentNodeX": 296,
+      "currentNodeY": 170
+    }
+  }
+}

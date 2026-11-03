@@ -249,7 +249,7 @@ it('adds a native branch to the session cache and restores the selected message 
   }
   renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=source']}><Probe /></MemoryRouter></QueryClientProvider>)
   await expect(probe.workspace!.createBranch({ kind: 'fork', entryId: 'u', revision: 'a'.repeat(64) })).resolves.toEqual(result)
-  expect(branchSession).toHaveBeenCalledWith('source', { kind: 'fork', entryId: 'u', revision: 'a'.repeat(64) })
+  expect(branchSession).toHaveBeenCalledWith('source', { kind: 'fork', entryId: 'u', revision: 'a'.repeat(64), operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) })
   expect(queryClient.getQueryData(['sessions'])).toEqual([result.session, { id: 'source', cwd: '/fixture', name: 'Original' }])
   expect(useWorkspaceStore.getState().drafts.child).toBe('完整问题\n继续编辑')
   expect(useWorkspaceStore.getState().drafts.source).toBe('/fork')
@@ -273,7 +273,7 @@ it('clones an idle background session while the selected session runs, blocks du
   vi.mocked(branchSession).mockImplementationOnce(() => new Promise((_, rejectPromise) => { reject = rejectPromise }))
   const pending = probe.workspace!.createBranch({ kind: 'clone' }, 'other')
   await expect(probe.workspace!.createBranch({ kind: 'clone' }, 'other')).rejects.toThrow('请等待')
-  expect(branchSession).toHaveBeenCalledExactlyOnceWith('other', { kind: 'clone' })
+  expect(branchSession).toHaveBeenCalledExactlyOnceWith('other', { kind: 'clone', operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) })
   reject(new Error('克隆失败'))
   await expect(pending).rejects.toThrow('克隆失败')
   const result = { session: { id: 'child', cwd: '/fixture', parentSessionId: 'other' }, draft: '' }
@@ -308,5 +308,29 @@ it('preserves edits made while an extension command is awaiting its receipt', as
   resolve()
   await Promise.resolve()
   expect(useWorkspaceStore.getState().drafts['session-1']).toBe('my next message')
+  queryClient.clear()
+})
+
+it('retains uncertain branch identity and protects an already edited child draft', async () => {
+  const queryClient = new QueryClient()
+  queryClient.setQueryData(['sessions'], [{ id: 'source', cwd: '/fixture' }])
+  useWorkspaceStore.setState({ branchOperations: {}, branchStorage: { available: true }, drafts: { source: 'source draft', child: 'new child draft' }, runs: {}, runtimeStates: {}, watchStates: {}, sessionNotifications: {} })
+  const probe: { workspace?: ReturnType<typeof useWorkspaceSession> } = {}
+  function Probe() {
+    // oxlint-disable-next-line react/immutability -- Capture the hook for the async recovery contract.
+    probe.workspace = useWorkspaceSession({} as SessionRunController)
+    return null
+  }
+  renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=source']}><Probe /></MemoryRouter></QueryClientProvider>)
+  vi.mocked(branchSession).mockReset().mockRejectedValueOnce(Object.assign(new Error('lost acknowledgement'), { uncertain: true }))
+  await expect(probe.workspace!.createBranch({ kind: 'clone' })).rejects.toThrow('lost acknowledgement')
+  const identity = useWorkspaceStore.getState().branchOperations.source.operationId
+  expect(identity).toMatch(/^[a-f0-9-]{36}$/)
+  await expect(probe.workspace!.createBranch({ kind: 'clone' })).rejects.toThrow('待确认')
+  expect(branchSession).toHaveBeenCalledOnce()
+  useWorkspaceStore.getState().setBranchOperation('source')
+  vi.mocked(branchSession).mockResolvedValueOnce({ session: { id: 'child', cwd: '/fixture' }, draft: 'old fork draft' })
+  await probe.workspace!.createBranch({ kind: 'clone' })
+  expect(useWorkspaceStore.getState().drafts.child).toBe('new child draft')
   queryClient.clear()
 })

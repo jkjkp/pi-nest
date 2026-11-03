@@ -24,6 +24,12 @@ type SessionNotification = { pendingRunId?: string; completedRunId?: string; rea
 
 // Keep runtime, queue and notification writes in SessionRunController so recovery shares the live event path.
 type WorkspaceState = {
+  workspaceView: 'chat' | 'tree'
+  setWorkspaceView: (view: 'chat' | 'tree') => void
+  branchStorage: { available: boolean }
+  setBranchStorage: (health: { available: boolean }) => void
+  branchOperations: Record<string, { operationId: string; request: import('@pi-nest/contracts').PiSessionBranchRequest }>
+  setBranchOperation: (sessionId: string, operation?: { operationId: string; request: import('@pi-nest/contracts').PiSessionBranchRequest }) => void
   filePreviews: Record<string, FilePreviewPanel>
   fileReadingPositions: Record<string, FileReadingPosition>
   openFilePreview: (sessionId: string, path: string, line?: number, searchRoot?: string, workspace?: boolean) => void
@@ -155,6 +161,16 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
   removeSessionNotification: (sessionId) => set((state) => {
     const { [sessionId]: _removed, ...sessionNotifications } = state.sessionNotifications
     return { sessionNotifications }
+  }),
+  workspaceView: 'chat',
+  setWorkspaceView: (workspaceView) => set({ workspaceView }),
+  branchStorage: { available: true },
+  setBranchStorage: (branchStorage) => set({ branchStorage }),
+  branchOperations: {},
+  setBranchOperation: (sessionId, operation) => set((state) => {
+    const next = { ...state.branchOperations }
+    if (operation) next[sessionId] = operation; else delete next[sessionId]
+    return { branchOperations: next }
   }),
   navigationView: 'list',
   setNavigationView: (navigationView) => set({ navigationView }),
@@ -403,7 +419,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist(createWorkspaceState,
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ filePreviews: state.filePreviews, fileReadingPositions: state.fileReadingPositions, navigationWidth: state.navigationWidth, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ workspaceView: state.workspaceView, branchOperations: state.branchOperations, filePreviews: state.filePreviews, fileReadingPositions: state.fileReadingPositions, navigationWidth: state.navigationWidth, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
       merge: (persisted, current) => {
         const saved = persisted && typeof persisted === 'object' ? persisted as Partial<WorkspaceState> : {}
         return { ...current, ...saved, filePreviews: restoreFilePanels(saved.filePreviews), fileReadingPositions: restoreFilePositions(saved.fileReadingPositions) }

@@ -129,7 +129,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   } = draft
   const prompt = isDraft ? draftPrompt : messageEdit?.text ?? drafts[selectedSessionId] ?? ''
 
-  const { mutatingSessionId, createBranch, handleRename, handleDelete } = useSessionActions({
+  const { mutatingSessionId, createBranch, checkBranch, handleRename, handleDelete } = useSessionActions({
     sessionRuns, selectedSessionId, selectedSessionIdRef, modelOperation, sessions, projects,
     refetchSessions: sessionsQuery.refetch, setSearchParams,
   })
@@ -353,7 +353,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     navigationOrder, setNavigationOrder, setProjectCollapsed, setDraft: setComposerText, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models: isDraft ? draftModels : models, thinkingLevels: isDraft ? draftLevels : thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus: isDraft ? draftSettingsStatus : thinkingStatus, thinkingError: isDraft ? draftSettingsError : thinkingError, thinkingFailure, currentThinkingLevel: isDraft ? draftThinking : runtimeDetails[selectedSessionId]?.thinkingLevel,
     sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, jumpError, cancelTurnJump, finishTurnJump,
-    selectSession, createBranch, startDraft, openProject, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    selectSession, createBranch, checkBranch, startDraft, openProject, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, requestTurnJump, openProjectFolder, changeModel, changeThinkingLevel,
     loadEarlier, retryHistory,
   }

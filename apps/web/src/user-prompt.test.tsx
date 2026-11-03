@@ -157,3 +157,23 @@ it('keeps the prompt toggle transparent in both states with a small directional 
   expect(toggle.textContent).toBe('显示更多')
   expect(container.querySelector('.bg-gradient-to-t')).not.toBeNull()
 })
+
+it('creates an independent edit branch on any native user message without invoking same-file editing', async () => {
+  const onBranchUser = vi.fn().mockRejectedValueOnce(new Error('关系存储不可用')).mockResolvedValue(undefined)
+  const onEditLast = vi.fn()
+  const entries = ['older', 'latest'].map((id, index) => ({ id, parentId: index ? 'older' : null, type: 'message', timestamp: '2026-11-03T00:00:00Z', raw: { message: { role: 'user', content: id } } }))
+  const history = { revision: 'branch-revision', session: { id: 'source' }, hasEarlier: false, entries }
+  const render = (branchDisabled = false) => act(() => root.render(<SessionTimeline error={false} isLoading={false} history={history} onRetry={() => {}} onEditLast={onEditLast} onBranchUser={onBranchUser} branchDisabled={branchDisabled} />))
+  await render()
+  const buttons = container.querySelectorAll<HTMLButtonElement>('[aria-label="修改此轮新建分支"]')
+  expect(buttons).toHaveLength(2)
+  await act(async () => buttons[0].click())
+  expect(onBranchUser).toHaveBeenCalledExactlyOnceWith('older', 'branch-revision')
+  expect(onEditLast).not.toHaveBeenCalled()
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe('关系存储不可用')
+  await act(async () => buttons[0].click())
+  expect(container.querySelector('[role="alert"]')).toBeNull()
+  await render(true)
+  expect(container.querySelector('[aria-label="修改此轮新建分支"]')).toBeNull()
+  expect(container.querySelectorAll('[aria-label="编辑最后一条用户消息"]')).toHaveLength(1)
+})
