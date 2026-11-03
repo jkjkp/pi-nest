@@ -2,15 +2,21 @@ import { useShallow } from 'zustand/react/shallow'
 import { sessionDisplayName, sessionStatusLabel } from './workspace.js'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import type { PiSessionBranchRequest } from '@pi-nest/contracts'
+import type { PiSessionBranchRequest, PiSessionSummary } from '@pi-nest/contracts'
 import { Button } from '@/components/ui/button'
+import { ArrowRight, Copy, Pencil, Trash2 } from 'lucide-react'
+import { ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from '@/components/ui/context-menu'
+import { SessionRenameDialog } from './session-rename-dialog.js'
+import { SessionDeleteDialog } from './session-delete-dialog.js'
+import { isRunActive } from './session-run-model.js'
 import { fetchSessionGraph } from './workspace-api.js'
 import { graphAncestors, layoutGraph, type GraphNode } from './session-graph-model.js'
 import { SessionGraphCanvas } from './session-graph-canvas.js'
 import { SessionGraphPreview, type GraphSelection } from './session-graph-preview.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
-export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview, onCurrentNodeClick, onSelect, onBranch, children }: {
+export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview, onCurrentNodeClick, onSelect, onBranch, onRename, onClone, onDelete, mutationSessionId, children }: {
+  mutationSessionId?: string; onRename: (id: string, name: string) => Promise<void>; onClone: (id: string) => Promise<void>; onDelete: (id: string) => Promise<void>
   enabled: boolean; sessionId: string; selection?: GraphSelection; onPreview: (selection?: GraphSelection) => void
   onCurrentNodeClick: () => void; onSelect: (sessionId: string) => void; onBranch: (sessionId: string, request: PiSessionBranchRequest) => Promise<void>; children: ReactNode
 }) {
@@ -20,6 +26,10 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
   const [locateRequest, setLocateRequest] = useState(0)
   const [showDetails, setShowDetails] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [dialog, setDialog] = useState<{ kind: 'rename' | 'delete'; session: PiSessionSummary }>()
+  const deletedSessionId = useRef<string | undefined>(undefined)
+  const deletingRun = useWorkspaceStore((state) => dialog?.kind === 'delete' ? state.runs[dialog.session.id] : undefined)
+  const branchOperations = useWorkspaceStore((state) => state.branchOperations)
   const [error, setError] = useState<string>()
   const intent = useRef({ sessionId, selection })
   useLayoutEffect(() => { intent.current = { sessionId, selection } }, [sessionId, selection])
@@ -36,6 +46,44 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
     observer.observe(root.current)
     return () => observer.disconnect()
   }, [])
+  useEffect(() => {
+    if (graph.isSuccess && !graph.isFetching && selection && !sessions?.some((session) => session.id === selection.sessionId)) onPreview(undefined)
+  }, [graph.isSuccess, graph.isFetching, sessions, selection, onPreview])
+  function switchTo(id: string) {
+    setError(undefined)
+    if (id === sessionId) onCurrentNodeClick()
+    else { onSelect(id); onPreview(undefined) }
+    setShowDetails(true)
+  }
+  function restoreNodeFocus(event: Event, id: string) {
+    event.preventDefault()
+    const target = deletedSessionId.current === id ? undefined : root.current?.querySelector<HTMLButtonElement>(`[data-session-node="${CSS.escape(id)}"] > button`)
+    const canvas = root.current?.querySelector<HTMLElement>('[aria-label="会话分支画布，方向键平移，点击节点查看会话"]')
+    const next = target ?? canvas
+    next?.focus()
+  }
+  async function clone(id: string) {
+    if (saving) return
+    const original = intent.current
+    setSaving(true); setError(undefined)
+    try {
+      await onClone(id)
+      if (intent.current === original) setShowDetails(true)
+    } catch (cause) {
+      if (intent.current === original) setError(cause instanceof Error ? cause.message : '克隆对话失败，请重试。')
+    } finally { setSaving(false) }
+  }
+  function nodeMenu(node: GraphNode) {
+    const target = sessions?.find((session) => session.id === node.id)
+    const busy = isRunActive(statuses[node.id]) || mutationSessionId !== undefined || saving
+    return <ContextMenuContent>
+      <ContextMenuItem onSelect={() => switchTo(node.id)}><ArrowRight aria-hidden="true" className="mr-2 size-3" />切换到此处</ContextMenuItem>
+      <ContextMenuItem disabled={!target || busy} onSelect={() => target && setDialog({ kind: 'rename', session: target })}><Pencil aria-hidden="true" className="mr-2 size-3" />重命名</ContextMenuItem>
+      <ContextMenuItem disabled={!target || busy || Boolean(branchOperations[node.id]) || !graph.data?.branchStorage.available} onSelect={() => void clone(node.id)}><Copy aria-hidden="true" className="mr-2 size-3" />克隆对话</ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={!target || busy} onSelect={() => target && setDialog({ kind: 'delete', session: target })}><Trash2 aria-hidden="true" className="mr-2 size-3" />删除</ContextMenuItem>
+    </ContextMenuContent>
+  }
   function choose(node: GraphNode) {
     setError(undefined)
     if (node.id === sessionId) onCurrentNodeClick()
@@ -61,6 +109,12 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
   const source = sessions?.find((session) => session.id === selection?.sessionId)
   const current = sessions?.find((session) => session.id === sessionId)
   return <div ref={root} className="flex min-h-0 flex-1 flex-col">
+    {dialog?.kind === 'rename' && <SessionRenameDialog key={dialog.session.id} session={dialog.session} onRename={onRename} onClose={() => setDialog(undefined)} onCloseAutoFocus={(event) => restoreNodeFocus(event, dialog.session.id)} />}
+    {dialog?.kind === 'delete' && <SessionDeleteDialog key={dialog.session.id} session={dialog.session} run={deletingRun} mutationSessionId={mutationSessionId} onDelete={async (id) => {
+      await onDelete(id)
+      deletedSessionId.current = id
+      if (intent.current.selection?.sessionId === id) onPreview(undefined)
+    }} onClose={() => setDialog(undefined)} onCloseAutoFocus={(event) => restoreNodeFocus(event, dialog.session.id)} />}
     {enabled && <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1 text-xs">
       <span className="mr-auto text-muted-foreground">独立会话分支 · 每个节点一个会话</span>
       {!wide && <Button size="sm" variant="ghost" onClick={() => setShowDetails((value) => !value)}>{showDetails ? '返回画布' : '查看对话'}</Button>}
@@ -71,7 +125,7 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
     <div className="relative grid min-h-0 flex-1" style={{ gridTemplateColumns: enabled && wide ? 'minmax(0,45fr) minmax(0,55fr)' : 'minmax(0,1fr)' }}>
       <section aria-label="树状画布区域" className={`${!enabled || !wide && showDetails ? 'hidden' : 'flex'} min-h-0 min-w-0 flex-col border-r`}>
         {graph.isPending && <p role="status" className="p-2 text-xs">正在读取关联会话…</p>}
-        <SessionGraphCanvas nodes={nodes} selectedSessionId={sessionId} selectedNodeId={selection?.sessionId} onSelect={choose}
+        <SessionGraphCanvas renderNodeMenu={nodeMenu} nodes={nodes} selectedSessionId={sessionId} selectedNodeId={selection?.sessionId} onSelect={choose}
           locateRequest={locateRequest} onLocate={revealCurrent} onToggle={(id) => setFolds((value) => {
             const collapsed = value.owner === sessionId ? value.collapsed : {}
             return { owner: sessionId, collapsed: { ...collapsed, [id]: !collapsed[id] } }
@@ -82,7 +136,7 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
           <div className="flex flex-wrap items-center gap-2 border-b p-2 text-xs">
             <span className="min-w-0 basis-full sm:basis-auto sm:flex-1"><span className="block break-all">正在预览 · {source ? sessionDisplayName(source) : selection.sessionId}</span><span className="block break-all text-muted-foreground">发送目标 · {current ? sessionDisplayName(current) : sessionId}</span></span>
             <Button size="sm" variant="ghost" onClick={() => onPreview(undefined)}>返回当前会话</Button>
-            <Button size="sm" variant="outline" onClick={() => { onSelect(selection.sessionId); onPreview(undefined) }}>切换到此会话继续</Button>
+            <Button size="sm" variant="outline" onClick={() => switchTo(selection.sessionId)}>切换到此会话继续</Button>
           </div>
           {pendingOperation && <p role="status" className="p-2 text-xs">此会话分支创建结果待确认；请切换到此会话后查询结果，勿重复创建。</p>}
           <SessionGraphPreview key={selection.sessionId} selection={selection} cwd={source?.cwd} onBranch={branch} branchDisabled={saving || Boolean(pendingOperation) || !graph.data?.branchStorage.available} />

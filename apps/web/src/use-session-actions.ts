@@ -75,6 +75,7 @@ export function useSessionActions({ sessionRuns, selectedSessionId, selectedSess
     setMutatingSessionId(sessionId)
     try {
       await renameSession(sessionId, name)
+      void queryClient.invalidateQueries({ queryKey: ['session-graph'] })
       await refetchSessions()
     } finally {
       setMutatingSessionId(undefined)
@@ -85,6 +86,7 @@ export function useSessionActions({ sessionRuns, selectedSessionId, selectedSess
     setMutatingSessionId(sessionId)
     try {
       await deleteSession(sessionId)
+      void queryClient.invalidateQueries({ queryKey: ['session-graph'] })
       sessionRuns.removeSessionNotification(sessionId)
       useWorkspaceStore.getState().clearFilePreview(sessionId)
       queryClient.removeQueries({ queryKey: ['session-file-preview', sessionId] })

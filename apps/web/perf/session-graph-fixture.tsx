@@ -63,6 +63,19 @@ window.fetch = async (input, init) => {
   if (url.pathname.endsWith('/bootstrap')) return json({ token: 'fixture', runtimeId: 'fixture', websocketPath: '/fixture-ws' })
   if (url.pathname === '/api/projects') return json({ projects: [] })
   if (url.pathname === '/api/sessions') return json({ sessions, branchStorage: { available: true } })
+  if (init?.method === 'PATCH' && url.pathname === `/api/sessions/${id}`) {
+    const index = sessions.findIndex((session) => session.id === id)
+    if (index < 0) return json({ error: 'Session not found' }, 404)
+    const { name } = JSON.parse(init.body as string)
+    sessions[index] = { ...sessions[index], name }; mutations++; report()
+    return json({ session: { id, name } })
+  }
+  if (init?.method === 'DELETE' && url.pathname === `/api/sessions/${id}`) {
+    const index = sessions.findIndex((session) => session.id === id)
+    if (index < 0) return json({ error: 'Session not found' }, 404)
+    sessions.splice(index, 1); mutations++; report()
+    return new Response(null, { status: 204 })
+  }
   if (url.pathname.endsWith('/graph')) { skeletonReads++; report(); return json({ sessions, branchStorage: { available: true } }) }
   if (url.pathname.endsWith('/graph-turns')) { graphTurnReads++; report(); return json({ error: '会话画布不得请求轮次图' }, 400) }
   if (url.pathname.endsWith('/turn-index')) { turnIndexReads[id] = (turnIndexReads[id] ?? 0) + 1; report(); return json({ revision, entries: pages[id].entries }) }

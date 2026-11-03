@@ -10,7 +10,7 @@ const nodes: GraphNode[] = ['current', 'preview', 'ordinary'].map((id, i) => ({
 }))
 function render(current = 'current', preview?: string) {
   const container = document.createElement('div')
-  container.innerHTML = renderToStaticMarkup(<SessionGraphCanvas nodes={nodes} selectedSessionId={current} selectedNodeId={preview} locateRequest={0} onSelect={() => {}} onToggle={() => {}} onLocate={() => {}} />)
+  container.innerHTML = renderToStaticMarkup(<SessionGraphCanvas renderNodeMenu={() => null} nodes={nodes} selectedSessionId={current} selectedNodeId={preview} locateRequest={0} onSelect={() => {}} onToggle={() => {}} onLocate={() => {}} />)
   return (id: string) => container.querySelector<HTMLButtonElement>(`[data-session-node="${id}"] > button[title]`)!
 }
 it('distinguishes the send target, read-only preview and ordinary nodes while retaining run statuses', () => {

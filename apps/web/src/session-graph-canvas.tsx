@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { fitDiagramCamera, panDiagramCamera, zoomDiagramCamera, type DiagramCamera } from './diagram-camera.js'
 import type { GraphNode } from './session-graph-model.js'
 
-export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, onSelect, onToggle, onLocate, locateRequest }: { onToggle: (id: string) => void; onLocate: () => void; locateRequest: number; nodes: GraphNode[]; selectedSessionId: string; selectedNodeId?: string; onSelect: (node: GraphNode) => void }) {
+export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, onSelect, onToggle, onLocate, locateRequest, renderNodeMenu }: { renderNodeMenu: (node: GraphNode) => ReactNode; onToggle: (id: string) => void; onLocate: () => void; locateRequest: number; nodes: GraphNode[]; selectedSessionId: string; selectedNodeId?: string; onSelect: (node: GraphNode) => void }) {
   const viewport = useRef<HTMLDivElement>(null)
   const [camera, setCamera] = useState<DiagramCamera>({ scale: 1, x: 0, y: 0, width: 800, height: 600, fit: false })
   const drag = useRef<{ x: number; y: number } | undefined>(undefined)
@@ -43,7 +44,7 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
     <div ref={(element) => { viewport.current = element }} tabIndex={0} aria-label="会话分支画布，方向键平移，点击节点查看会话" className="relative min-h-0 flex-1 touch-none overflow-clip bg-muted/20 outline-offset-[-2px]"
       onFocus={() => { const next = measured(); if (next.width !== camera.width || next.height !== camera.height) setCamera(next) }}
       onKeyDown={(event) => { if (event.target !== event.currentTarget) return; const move = ({ ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80] } as Record<string, number[]>)[event.key]; if (move) { event.preventDefault(); setCamera(panDiagramCamera(measured(), move[0], move[1])) } }}
-      onPointerDown={(event) => { if (event.button !== 0 || (event.target as Element).closest('button')) return; drag.current = { x: event.clientX, y: event.clientY }; event.currentTarget.setPointerCapture(event.pointerId) }}
+      onPointerDown={(event) => { if (event.button !== 0 || !event.currentTarget.contains(event.target as Node) || (event.target as Element).closest('button')) return; drag.current = { x: event.clientX, y: event.clientY }; event.currentTarget.setPointerCapture(event.pointerId) }}
       onPointerMove={(event) => { if (!drag.current) return; const delta = { x: event.clientX - drag.current.x, y: event.clientY - drag.current.y }; drag.current = { x: event.clientX, y: event.clientY }; setCamera((current) => panDiagramCamera({ ...current, width: viewport.current?.clientWidth || current.width, height: viewport.current?.clientHeight || current.height }, delta.x, delta.y)) }}
       onPointerUp={() => { drag.current = undefined }} onPointerCancel={() => { drag.current = undefined }}>
       <svg aria-hidden="true" className="pointer-events-none absolute inset-0 size-full text-muted-foreground/50">
@@ -54,7 +55,13 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
       <div className="absolute origin-top-left" style={{ transform: `translate(${camera.x}px,${camera.y}px) scale(${camera.scale})` }}>
         {visible.map((node) => {
           const state = node.id === selectedSessionId ? 'current' : node.id === selectedNodeId ? 'preview' : 'idle'
-          return <div key={node.id} data-session-node={node.id} className="absolute h-[132px] w-[260px]" style={{ left: node.x, top: node.y }}>
+          return <ContextMenu key={node.id}><ContextMenuTrigger asChild><div onContextMenu={(event) => { event.stopPropagation(); event.currentTarget.querySelector('button')?.focus() }}
+            onKeyDown={(event) => {
+              if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+              event.preventDefault()
+              const rect = event.currentTarget.getBoundingClientRect()
+              event.currentTarget.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2 }))
+            }} data-session-node={node.id} className="absolute h-[132px] w-[260px]" style={{ left: node.x, top: node.y }}>
           <button type="button" data-node-state={state} aria-current={state === 'current' ? 'true' : undefined} aria-pressed={state === 'preview'} title={node.label}
             className="session-graph-node flex size-full flex-col gap-1 rounded-lg border-2 bg-card p-3 text-left text-xs shadow-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground"
             onClick={() => onSelect(node)}>
@@ -70,7 +77,7 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
             {(node.notice || node.connectionLabel) && <span className={`mt-auto w-full truncate ${node.notice ? 'text-destructive' : 'text-muted-foreground'}`} title={[node.notice, node.connectionLabel, node.sourceEntryId && `来源节点 ${node.sourceEntryId}`].filter(Boolean).join(' · ')}>{node.notice || node.connectionLabel}</span>}
           </button>
           {node.hasChildren && <Button size="icon-sm" variant="ghost" className="absolute right-1 top-1" aria-label={`${node.collapsed ? '展开' : '折叠'} ${node.label} 的子会话`} aria-expanded={!node.collapsed} onClick={() => onToggle(node.id)}>{node.collapsed ? '+' : '−'}</Button>}
-        </div>})}
+        </div></ContextMenuTrigger>{renderNodeMenu(node)}</ContextMenu>})}
       </div>
     </div>
   </div>

@@ -7,6 +7,7 @@ import { SessionGraphWorkspace } from './session-graph-workspace.js'
 import type { GraphSelection } from './session-graph-preview.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { fetchSessionGraph, fetchSessionHistory, fetchSessionTurnIndex } from './workspace-api.js'
+const onRename = vi.fn(); const onClone = vi.fn(); const onDelete = vi.fn()
 const onSelect = vi.fn(); const onBranch = vi.fn(); const onCurrentNodeClick = vi.fn()
 const sessions = [{ id: 'source', name: 'Root', cwd: '/w' }, { id: 'other', name: 'Other', cwd: '/w', parentSessionId: 'source' }, { id: 'grandchild', name: 'Grandchild', cwd: '/w', parentSessionId: 'other' }]
 vi.mock('./workspace-api.js', () => ({
@@ -23,6 +24,7 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } }); onSelect.mockReset(); onBranch.mockReset(); onCurrentNodeClick.mockReset()
+  for (const action of [onRename, onClone, onDelete]) action.mockReset().mockResolvedValue(undefined)
   vi.mocked(fetchSessionGraph).mockReset().mockResolvedValue({ sessions, branchStorage: { available: true } })
   vi.mocked(fetchSessionHistory).mockReset().mockImplementation(async (id, before) => ({ session: { id }, revision: 'r', entries: [{ id: before ? 'old' : 'u', parentId: null, type: 'message', timestamp: '', raw: { message: { role: 'user', content: 'question' } } }], hasEarlier: !before, beforeCursor: before ? undefined : 'older' }))
   vi.mocked(fetchSessionTurnIndex).mockReset().mockResolvedValue({ revision: 'r', entries: [] })
@@ -36,7 +38,7 @@ function Fixture({ initial = 'source' }: { initial?: string }) {
   const [selection, setSelection] = useState<GraphSelection>()
   const [target, setTarget] = useState(initial)
   const [drafts, setDrafts] = useState<Record<string, string>>({ source: 'keep draft', other: 'other draft' })
-  return <SessionGraphWorkspace enabled sessionId={target} selection={selection} onPreview={setSelection} onCurrentNodeClick={() => { onCurrentNodeClick(); setSelection(undefined) }} onSelect={(id) => { onSelect(id); setTarget(id) }} onBranch={onBranch}>
+  return <SessionGraphWorkspace enabled sessionId={target} selection={selection} onPreview={setSelection} onCurrentNodeClick={() => { onCurrentNodeClick(); setSelection(undefined) }} onSelect={(id) => { onSelect(id); setTarget(id) }} onBranch={onBranch} onRename={onRename} onClone={onClone} onDelete={onDelete}>
     <textarea aria-label="Existing draft" value={drafts[target] ?? ''} onChange={(event) => setDrafts({ ...drafts, [target]: event.target.value })} />
   </SessionGraphWorkspace>
 }
@@ -174,5 +176,115 @@ it('keeps the normal conversation after an earlier preview branch finishes late'
   await act(async () => finish()); await settle()
   expect(container.querySelector('[data-preview-session]')).toBeNull()
   expect(container.querySelector('textarea')?.parentElement?.inert).toBe(false)
+  expect(onSelect).not.toHaveBeenCalled()
+})
+
+const menuItem = (name: string) => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent === name)!
+async function context(id: string) {
+  const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: 200, clientY: 100 })
+  await act(async () => node(id).dispatchEvent(event))
+  return event
+}
+it('opens four actions on the right-clicked node without previewing, switching or reading history', async () => {
+  await mount()
+  expect((await context('other')).defaultPrevented).toBe(true)
+  expect([...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)).toEqual(['切换到此处', '重命名', '克隆对话', '删除'])
+  expect(onSelect).not.toHaveBeenCalled(); expect(fetchSessionHistory).not.toHaveBeenCalled()
+  expect(container.querySelector('textarea')?.value).toBe('keep draft')
+  await act(async () => menuItem('切换到此处').click()); await settle()
+  expect(onSelect).toHaveBeenCalledExactlyOnceWith('other')
+  expect(container.querySelector('textarea')?.value).toBe('other draft')
+  expect(container.querySelector('[aria-label="当前会话对话"]')?.getAttribute('aria-hidden')).toBe('false')
+})
+it('renames the context target through the existing dialog and returns focus to its node', async () => {
+  await mount(); await context('other')
+  await act(async () => menuItem('重命名').click()); await settle()
+  const input = document.querySelector<HTMLInputElement>('[role="dialog"] input')!
+  expect(input.value).toBe('Other')
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'New name')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => document.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))); await settle()
+  expect(onRename).toHaveBeenCalledExactlyOnceWith('other', 'New name')
+  expect(document.activeElement).toBe(node('other'))
+  expect(onSelect).not.toHaveBeenCalled()
+})
+it('clones the context target and shows a failure without changing the current conversation', async () => {
+  onClone.mockRejectedValueOnce(new Error('克隆失败，请重试'))
+  await mount(); await context('other')
+  await act(async () => menuItem('克隆对话').click()); await settle()
+  expect(onClone).toHaveBeenCalledExactlyOnceWith('other')
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('克隆失败')
+  expect(onSelect).not.toHaveBeenCalled()
+})
+it('confirms deletion of the context target and closes its preview while retaining the child', async () => {
+  onDelete.mockImplementation(async (id) => {
+    vi.mocked(fetchSessionGraph).mockResolvedValue({ sessions: sessions.filter((session) => session.id !== id), branchStorage: { available: true } })
+    await client.invalidateQueries({ queryKey: ['session-graph'] })
+  })
+  await mount(); await act(async () => node('other').click()); await settle()
+  await context('other'); await act(async () => menuItem('删除').click())
+  expect(onDelete).not.toHaveBeenCalled()
+  expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('Other')
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find((button) => button.textContent === '删除会话')!.click()); await settle()
+  expect(onDelete).toHaveBeenCalledExactlyOnceWith('other')
+  expect(container.querySelector('[data-preview-session]')).toBeNull()
+  expect(container.querySelector('[data-session-node="other"]')).toBeNull()
+  expect(node('grandchild')).toBeTruthy()
+  expect(onSelect).not.toHaveBeenCalled()
+})
+it('disables mutations for a running context target, while switching remains available', async () => {
+  useWorkspaceStore.setState({ sessionNotifications: { other: { pendingRunId: 'running' } } })
+  await mount(); await context('other')
+  for (const name of ['重命名', '克隆对话', '删除']) expect(menuItem(name).hasAttribute('data-disabled')).toBe(true)
+  expect(menuItem('切换到此处').hasAttribute('data-disabled')).toBe(false)
+})
+it.each(['storage', 'uncertain'] as const)('disables cloning with %s unavailable without disabling rename or delete', async (reason) => {
+  if (reason === 'storage') vi.mocked(fetchSessionGraph).mockResolvedValue({ sessions, branchStorage: { available: false } })
+  else useWorkspaceStore.getState().setBranchOperation('other', { operationId: 'uncertain', request: { kind: 'clone' } })
+  await mount(); await context('other')
+  expect(menuItem('克隆对话').hasAttribute('data-disabled')).toBe(true)
+  expect(menuItem('重命名').hasAttribute('data-disabled')).toBe(false)
+  expect(menuItem('删除').hasAttribute('data-disabled')).toBe(false)
+})
+it('does not capture menu pointer events as canvas panning through the portal', async () => {
+  await mount(); await context('other')
+  const viewport = container.querySelector<HTMLElement>('[aria-label="会话分支画布，方向键平移，点击节点查看会话"]')!
+  const capture = vi.fn()
+  Object.defineProperty(viewport, 'setPointerCapture', { value: capture })
+  await act(async () => menuItem('重命名').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 1 })))
+  expect(capture).not.toHaveBeenCalled()
+  await act(async () => menuItem('重命名').click())
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+})
+it('opens node actions from Shift+F10 without activating the node', async () => {
+  await mount()
+  await act(async () => node('other').dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true })))
+  expect(menuItem('切换到此处')).toBeTruthy()
+  expect(onSelect).not.toHaveBeenCalled(); expect(fetchSessionHistory).not.toHaveBeenCalled()
+})
+it('closes a deleted preview even if refreshing the graph fails', async () => {
+  onDelete.mockImplementation(async () => {
+    vi.mocked(fetchSessionGraph).mockRejectedValueOnce(new Error('Read failed'))
+    await client.invalidateQueries({ queryKey: ['session-graph'] })
+  })
+  await mount(); await act(async () => node('other').click()); await settle()
+  await context('other'); await act(async () => menuItem('删除').click())
+  await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find((button) => button.textContent === '删除会话')!.click()); await settle()
+  expect(onDelete).toHaveBeenCalledExactlyOnceWith('other')
+  expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+  expect(container.querySelector('[data-preview-session]')).toBeNull()
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('关联会话读取失败')
+})
+it('preserves a newer preview when an earlier clone fails late', async () => {
+  let fail!: (error: Error) => void
+  onClone.mockImplementation(() => new Promise<void>((_resolve, reject) => { fail = reject }))
+  await mount(); await context('other')
+  await act(async () => menuItem('克隆对话').click())
+  await act(async () => node('grandchild').click()); await settle()
+  await act(async () => fail(new Error('Old clone failed')))
+  expect(container.querySelector('[data-preview-session]')?.getAttribute('data-preview-session')).toBe('grandchild')
+  expect(container.querySelector('[role="alert"]')).toBeNull()
   expect(onSelect).not.toHaveBeenCalled()
 })
