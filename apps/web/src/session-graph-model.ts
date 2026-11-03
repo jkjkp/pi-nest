@@ -7,6 +7,13 @@ export type GraphNode = {
   connectionLabel?: string; sourceEntryId?: string; notice?: string; hasChildren: boolean; collapsed: boolean
 }
 
+export function clampGraphSplitRatio(ratio: number, width: number) {
+  if (!Number.isFinite(width) || width <= 0) return 0.45
+  const minimum = Math.min(320, width / 2)
+  const maximum = Math.max(minimum, width - 360)
+  return Math.max(minimum, Math.min(maximum, (Number.isFinite(ratio) ? ratio : 0.45) * width)) / width
+}
+
 export function graphAncestors(sessions: PiSessionSummary[], id: string) {
   const tree = buildSessionTree(sessions)
   const path: string[] = []

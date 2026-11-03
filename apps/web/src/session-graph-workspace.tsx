@@ -10,11 +10,12 @@ import { SessionRenameDialog } from './session-rename-dialog.js'
 import { SessionDeleteDialog } from './session-delete-dialog.js'
 import { isRunActive } from './session-run-model.js'
 import { fetchSessionGraph } from './workspace-api.js'
-import { graphAncestors, layoutGraph, type GraphNode } from './session-graph-model.js'
+import { clampGraphSplitRatio, graphAncestors, layoutGraph, type GraphNode } from './session-graph-model.js'
 import { SessionGraphCanvas } from './session-graph-canvas.js'
 import { SessionGraphPreview, type GraphSelection } from './session-graph-preview.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { useSessionRead } from './use-session-read.js'
+import { SessionGraphSplitter } from './session-graph-splitter.js'
 
 export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview, onCurrentNodeClick, onSelect, onBranch, onRename, onClone, onDelete, onRead, currentReadReady, readBlocked = false, mutationSessionId, children }: {
   mutationSessionId?: string; onRename: (id: string, name: string) => Promise<void>; onClone: (id: string) => Promise<void>; onDelete: (id: string) => Promise<void>
@@ -23,7 +24,13 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
   onRead: (sessionId: string, runId: string) => void; currentReadReady: boolean; readBlocked?: boolean
 }) {
   const root = useRef<HTMLDivElement>(null)
-  const [wide, setWide] = useState(false)
+  const [width, setWidth] = useState(0)
+  const wide = width >= 960
+  const savedRatio = useWorkspaceStore((state) => state.graphSplitRatio)
+  const setSavedRatio = useWorkspaceStore((state) => state.setGraphSplitRatio)
+  const [dragRatio, setDragRatio] = useState<number>()
+  const ratio = clampGraphSplitRatio(dragRatio ?? savedRatio, width)
+  if (dragRatio !== undefined && (!enabled || !wide)) setDragRatio(undefined)
   const [folds, setFolds] = useState<Record<string, boolean>>({})
   const [locateRequest, setLocateRequest] = useState(0)
   const [showDetails, setShowDetails] = useState(false)
@@ -65,7 +72,7 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
   }, [sessions, folds, statuses, notifications, mutationSessionId])
   useEffect(() => {
     if (!root.current) return
-    const observer = new ResizeObserver(([entry]) => setWide(entry.contentRect.width >= 960))
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width))
     observer.observe(root.current)
     return () => observer.disconnect()
   }, [])
@@ -140,12 +147,13 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
     }} onClose={() => setDialog(undefined)} onCloseAutoFocus={(event) => restoreNodeFocus(event, dialog.session.id)} />}
     {enabled && (error || graph.isError) && <div role="alert" className="flex items-center gap-2 px-3 py-1 text-xs text-destructive"><span>{error || '关联会话读取失败，请重试。'}</span>{graph.isError && <Button size="sm" variant="ghost" onClick={() => void graph.refetch()}>重试</Button>}</div>}
     {enabled && graph.data?.branchStorage.available === false && <p role="alert" className="px-3 text-xs text-destructive">关系存储不可用；普通对话可用，新建分支已禁用。</p>}
-    <div className="relative grid min-h-0 flex-1" style={{ gridTemplateColumns: enabled && wide ? 'minmax(0,45fr) minmax(0,55fr)' : 'minmax(0,1fr)' }}>
-      <section aria-label="树状画布区域" className={`${!enabled || !wide && showDetails ? 'hidden' : 'flex'} min-h-0 min-w-0 flex-col border-r`}>
+    <div data-resizing={dragRatio !== undefined} className="relative grid min-h-0 flex-1" style={{ gridTemplateColumns: enabled && wide ? `minmax(0,${ratio}fr) minmax(0,${1 - ratio}fr)` : 'minmax(0,1fr)' }}>
+      <section id="session-graph-panel" aria-label="树状画布区域" className={`${!enabled || !wide && showDetails ? 'hidden' : 'flex'} relative min-h-0 min-w-0 flex-col border-r`}>
         {graph.isPending && <p role="status" className="p-2 text-xs">正在读取关联会话…</p>}
         <SessionGraphCanvas renderNodeMenu={nodeMenu} nodes={nodes} selectedSessionId={sessionId} selectedNodeId={selection?.sessionId} onSelect={choose}
           toolbarActions={enabled && !wide && <Button size="sm" variant="ghost" onClick={() => setShowDetails(true)}>查看对话</Button>}
           locateRequest={locateRequest} onLocate={revealCurrent} onToggle={(id) => setFolds((value) => ({ ...value, [id]: !value[id] }))} />
+        {enabled && wide && <SessionGraphSplitter containerRef={root} width={width} ratio={ratio} onChange={setDragRatio} onCommit={(next) => { setSavedRatio(next); setDragRatio(undefined) }} />}
       </section>
       <section aria-label={selection ? '节点只读预览' : '当前会话对话'} aria-hidden={enabled && !wide && !showDetails} inert={enabled && !wide && !showDetails} className={`${enabled && !wide && !showDetails ? 'invisible pointer-events-none absolute inset-0' : 'relative'} flex min-h-0 min-w-0 flex-col`}>
         {enabled && !wide && showDetails && <div className="border-b p-2"><Button size="sm" variant="ghost" onClick={() => setShowDetails(false)}>返回画布</Button></div>}
