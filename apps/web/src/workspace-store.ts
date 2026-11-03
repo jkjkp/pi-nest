@@ -61,6 +61,7 @@ type WorkspaceState = {
   inspectorOpen: boolean
   inspectorWidth: number
   navigationOpen: boolean
+  navigationCollapsed: boolean
   navigationWidth: number
   runtimeStates: Record<string, Omit<RuntimeStatus, 'sessionId'>>
   runtimeStatistics: Record<string, RuntimeStatisticsState>
@@ -88,6 +89,7 @@ type WorkspaceState = {
   setInspectorWidth: (width: number) => void
   hideProject: (cwd: string) => void
   setNavigationOpen: (open: boolean) => void
+  setNavigationCollapsed: (collapsed: boolean) => void
   setNavigationWidth: (width: number) => void
   setNavigationOrder: (order: NavigationOrder) => void
   setProjectCollapsed: (projectKey: string, collapsed: boolean) => void
@@ -193,6 +195,7 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
   inspectorOpen: false,
   inspectorWidth: 300,
   navigationOpen: false,
+  navigationCollapsed: false,
   navigationWidth: 272,
   runtimeStates: {},
   runtimeStatistics: {},
@@ -377,6 +380,7 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
   hideProject: (cwd) => set((state) => ({ hiddenProjectCwds: { ...state.hiddenProjectCwds, [cwd]: true } })),
   setNavigationWidth: (width) => set({ navigationWidth: clampSidebarWidth(width, Infinity, 'navigation') }),
   setNavigationOpen: (navigationOpen) => set({ navigationOpen }),
+  setNavigationCollapsed: (navigationCollapsed) => set({ navigationCollapsed }),
   setNavigationOrder: (navigationOrder) => set({ navigationOrder }),
   setProjectCollapsed: (projectKey, collapsed) =>
     set((state) => ({ collapsedProjectKeys: { ...state.collapsedProjectKeys, [projectKey]: collapsed } })),
@@ -419,7 +423,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist(createWorkspaceState,
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ workspaceView: state.workspaceView, branchOperations: state.branchOperations, filePreviews: state.filePreviews, fileReadingPositions: state.fileReadingPositions, navigationWidth: state.navigationWidth, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ workspaceView: state.workspaceView, branchOperations: state.branchOperations, filePreviews: state.filePreviews, fileReadingPositions: state.fileReadingPositions, navigationWidth: state.navigationWidth, navigationCollapsed: state.navigationCollapsed, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
       merge: (persisted, current) => {
         const saved = persisted && typeof persisted === 'object' ? persisted as Partial<WorkspaceState> : {}
         return { ...current, ...saved, filePreviews: restoreFilePanels(saved.filePreviews), fileReadingPositions: restoreFilePositions(saved.fileReadingPositions) }

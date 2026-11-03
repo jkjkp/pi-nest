@@ -34,7 +34,7 @@ beforeEach(() => {
   before.mockClear(); after.mockClear(); listeners.clear()
   media = { matches: true, addEventListener: vi.fn((_type, listener) => listeners.add(listener)), removeEventListener: vi.fn((_type, listener) => listeners.delete(listener)) }
   vi.spyOn(window, 'matchMedia').mockImplementation(() => media as unknown as MediaQueryList)
-  useWorkspaceStore.setState({ filePreviews: {}, inspectorWidth: 420, navigationOpen: false })
+  useWorkspaceStore.setState({ filePreviews: {}, inspectorWidth: 420, navigationOpen: false, navigationCollapsed: false, navigationWidth: 272 })
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
 })
 afterEach(async () => { await act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
@@ -84,3 +84,13 @@ it('moves between desktop and modal presentation without duplicating content or 
    expect(document.querySelector('[aria-label="项目文件树"]')).not.toBeNull()
    expect(useWorkspaceStore.getState().filePreviews.a).toMatchObject({ open: true, tabs: [] })
  })
+
+it('releases the hidden navigation width when calculating the file preview resize range', async () => {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width: 1440 } as DOMRect))
+  await render(); await click('查看文件')
+  const handle = () => container.querySelector('[aria-label="调整文件预览宽度"]')!
+  expect(handle().getAttribute('aria-valuemax')).toBe('584')
+  await act(() => useWorkspaceStore.setState({ navigationCollapsed: true }))
+  expect(handle().getAttribute('aria-valuemax')).toBe('720')
+  expect(useWorkspaceStore.getState().navigationWidth).toBe(272)
+})

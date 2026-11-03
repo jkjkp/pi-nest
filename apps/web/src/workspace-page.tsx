@@ -3,6 +3,7 @@ import type { GraphSelection } from './session-graph-preview.js'
 import { useWorkspaceFilePreview } from './use-workspace-file-preview.js'
 import { WorkspaceLayout } from './workspace-layout.js'
 import { WorkspaceNavigation } from './workspace-navigation.js'
+import { NavigationToggle } from './navigation-toggle.js'
 import { MessageEditor } from './message-editor.js'
 import { WorkspaceComposer } from './workspace-composer.js'
 import { WorkspaceFilePreview, WorkspaceFilePreviewToggle } from './workspace-file-preview.js'
@@ -45,6 +46,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     readTurnPrompt, requestTurnJump, openProjectFolder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
   const workspaceView = useWorkspaceStore((state) => state.workspaceView)
+  const navigationCollapsed = useWorkspaceStore((state) => state.navigationCollapsed)
+  const setNavigationCollapsed = useWorkspaceStore((state) => state.setNavigationCollapsed)
   const setWorkspaceView = useWorkspaceStore((state) => state.setWorkspaceView)
   const branchStorage = useWorkspaceStore((state) => state.branchStorage)
   const pendingBranch = useWorkspaceStore((state) => state.branchOperations[selectedSessionId])
@@ -174,6 +177,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
         <section onDragOver={(event) => { if (graphSelection) return; if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={(event) => { if (graphSelection) { event.preventDefault(); return } if (session.messageEdit && session.messageEdit.status !== 'editing') { event.preventDefault(); return } try { attachmentDrop(event, attachmentDraft.add) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '附件无法添加') } }} className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
           <header className="flex min-h-10 shrink-0 items-center gap-3 border-b bg-background/95 py-0.5 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
+              {navigationCollapsed && <span data-navigation-restore className="hidden md:inline-flex"><NavigationToggle controls="workspace-navigation" expanded={false} onToggle={() => setNavigationCollapsed(false)} /></span>}
               {(selectedSession || draftProject) && <Folder aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
               <h1 className="min-w-0 truncate text-[13px] leading-5 font-normal" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
               {selectedSession && <span className="inline-flex size-4 shrink-0" role={runtimeLoading ? 'status' : undefined} aria-label={runtimeLoading ? '正在加载 Pi 运行时' : undefined}>{runtimeLoading && <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />}</span>}

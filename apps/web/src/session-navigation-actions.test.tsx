@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { expect, it, vi } from 'vitest'
 import { SessionNavigation } from './session-navigation.js'
+import { useWorkspaceStore } from './workspace-store.js'
 
 it.each([undefined, '没有访问项目文件夹的权限。'])('opens the selected project folder and displays actionable failures (%s)', async (failure) => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -30,6 +31,36 @@ it.each([undefined, '没有访问项目文件夹的权限。'])('opens the selec
   } finally {
     await act(async () => { root.unmount(); await new Promise((done) => setTimeout(done, 0)) })
     container.remove()
+    vi.unstubAllGlobals()
+  }
+})
+
+it.each(['desktop', 'mobile'] as const)('offers a borderless sidebar header action on %s', async (mode) => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  useWorkspaceStore.setState({ navigationCollapsed: false, navigationOpen: true })
+  const container = document.createElement('div'); document.body.append(container)
+  const root = createRoot(container)
+  try {
+    await act(() => root.render(<SessionNavigation
+      collapsedProjectKeys={{}} error={null} isLoading={false} mutationSessionId={undefined}
+      onClone={vi.fn(async () => {})} onDelete={vi.fn(async () => {})} onSelect={vi.fn()} onRename={vi.fn(async () => {})}
+      onProjectOrderChange={vi.fn()} onNewConversation={vi.fn()} onAddProject={vi.fn()}
+      onRemoveProject={vi.fn()} onRevealProject={vi.fn(async () => {})} onSessionOrderChange={vi.fn()}
+      onToggleProject={vi.fn()} projects={[]} selectedSessionId="" runs={{}}
+    />))
+    const target = mode === 'desktop' ? 'workspace-navigation' : 'workspace-navigation-mobile'
+    const button = container.querySelector<HTMLButtonElement>(`button[aria-controls="${target}"]`)!
+    expect(button).not.toBeNull()
+    expect(button.getAttribute('aria-label')).toBe('收起侧边栏')
+    expect(button.classList.contains('border-0')).toBe(true)
+    expect(button.closest('h2')?.textContent).toBeUndefined()
+    expect(button.parentElement?.parentElement?.textContent).toContain('Pi Nest')
+    await act(() => button.click())
+    expect(useWorkspaceStore.getState().navigationCollapsed).toBe(mode === 'desktop')
+    expect(useWorkspaceStore.getState().navigationOpen).toBe(mode === 'desktop')
+  } finally {
+    await act(() => root.unmount()); container.remove()
+    useWorkspaceStore.setState({ navigationCollapsed: false, navigationOpen: false })
     vi.unstubAllGlobals()
   }
 })

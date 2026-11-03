@@ -25,6 +25,7 @@ import { SessionNavigationRow } from './session-navigation-row.js'
 import { SessionTreeNavigation } from './session-tree-navigation.js'
 import { buildSessionTree, reorderSessionSiblings } from './session-tree.js'
 import { NavigationTitle } from './navigation-title.js'
+import { NavigationToggle } from './navigation-toggle.js'
 import { type SessionRunSummary } from './session-run-model.js'
 import { filterProjectsByQuery, type PiSessionSummary, type ProjectSessionGroup } from './workspace.js'
 
@@ -79,6 +80,10 @@ export function SessionNavigation({
   const [actionError, setActionError] = useState<string>()
   const navigationView = useWorkspaceStore((state) => state.navigationView)
   const setNavigationView = useWorkspaceStore((state) => state.setNavigationView)
+  const navigationCollapsed = useWorkspaceStore((state) => state.navigationCollapsed)
+  const setNavigationCollapsed = useWorkspaceStore((state) => state.setNavigationCollapsed)
+  const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
+  const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
   const [searchValue, setSearchValue] = useState('')
   const visibleProjects = useMemo(() => {
     const filtered = filterProjectsByQuery(projects, searchValue)
@@ -124,7 +129,11 @@ export function SessionNavigation({
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b">
         <div className="flex h-14 items-center gap-2 px-5">
-          <h2 className="min-w-0 truncate text-xl leading-7 font-semibold tracking-tight">Pi Nest</h2>
+          <h2 className="min-w-0 flex-1 truncate text-xl leading-7 font-semibold tracking-tight">Pi Nest</h2>
+          <div className="ml-auto flex shrink-0">
+            <NavigationToggle controls="workspace-navigation" expanded={!navigationCollapsed} onToggle={() => setNavigationCollapsed(!navigationCollapsed)} className="hidden md:inline-flex" />
+            <NavigationToggle controls="workspace-navigation-mobile" expanded={navigationOpen} onToggle={() => setNavigationOpen(!navigationOpen)} className="md:hidden" />
+          </div>
         </div>
         <label className="relative block px-3 pb-3" htmlFor="session-search">
           <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-3.5 size-3 text-muted-foreground" />
