@@ -18,7 +18,7 @@ import type { useWorkspaceCommands } from './use-workspace-commands.js'
 type ComposerState = Pick<ReturnType<typeof useWorkspaceSession>,
   'creatingDraft' | 'attachmentDraft' | 'selectedSessionId' | 'selectedSession' | 'isDraft' | 'draftProject' | 'prompt' |
   'currentRun' | 'history' | 'setDraft' | 'setDraftPrompt' | 'status' | 'isActive' | 'submittingInput' |
-  'steerQueued' | 'planStatus' | 'planPolicy' | 'extensionStatus' | 'planTurnId' | 'retryHistory' | 'requestTurnJump'>
+  'steerQueued' | 'planStatus' | 'planPolicy' | 'extensionStatus' | 'planTurnId' | 'retryHistory' | 'requestTurnJump'> & Partial<Pick<ReturnType<typeof useWorkspaceSession>, 'messageEdit'>>
 
 export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, setComposer, onSubmit, onAbort, controls, canQuery, settingsBusy, error, onError }: {
   state: ComposerState
@@ -38,6 +38,8 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
     setDraft, setDraftPrompt, status, isActive, submittingInput, steerQueued, planStatus, planPolicy,
     extensionStatus, planTurnId, retryHistory, requestTurnJump } = state
   const promptTextareaRef = useComposerTextarea(prompt)
+  const edit = state.messageEdit
+  const editBusy = Boolean(edit)
   useImperativeHandle(textareaRef, () => promptTextareaRef.current!)
   const promptHistory = useComposerHistory(
     selectedSessionId || (isDraft ? `draft:${draftProject?.key}` : ''),
@@ -69,7 +71,7 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
             if (isDraft) setDraftPrompt(input.message)
             else setDraft(selectedSessionId, input.message)
           }} disabled={submittingInput || status !== 'running'} />
-          <ComposerAttachments draft={attachmentDraft} />
+          {!edit && <ComposerAttachments draft={attachmentDraft} />}
           {error && <p role="alert" className="pointer-events-auto mb-2 text-xs text-destructive">{error}<Button variant="ghost" size="sm" onClick={() => onError(undefined)}>关闭</Button></p>}
           <CommandNotice notice={commands.notice} />
           {commands.compacted && <p role="status" data-slot="context-compacted" className="pointer-events-auto mb-3 flex items-center gap-2 px-4 text-sm text-muted-foreground"><ListCollapse aria-hidden="true" className="size-4" />上下文已压缩</p>}
@@ -77,13 +79,14 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
         <ExtensionStatusNotice sessionId={selectedSessionId} />
         <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
         <CommandComposer
+          commandsEnabled={!edit}
           onExecuteCommand={(value) => { if (attachmentDraft.items.length) onError('带附件时暂不支持命令，请先移除附件。'); else commands.submit(value) }}
           key={selectedSessionId || `draft:${draftProject?.key}`}
           sessionId={isDraft ? '' : selectedSessionId}
           sessionRuns={sessionRuns}
           canQuery={canQuery}
           className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
-          disabled={(!selectedSession && !isDraft) || creatingDraft}
+          disabled={(!selectedSession && !isDraft) || creatingDraft || editBusy}
           id="prompt"
           onPaste={(event) => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); try { attachmentDraft.add(files) } catch (cause) { onError(cause instanceof Error ? cause.message : '粘贴失败') } } }}
           maxLength={20_000}
@@ -94,8 +97,9 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
             else if (selectedSessionId) setDraft(selectedSessionId, value)
           }}
           onKeyDown={(event) => {
+            if (edit) return
             if (commands.busy && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); return }
-            if (promptHistory.onKeyDown(event)) return
+            if (!edit && promptHistory.onKeyDown(event)) return
             if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.nativeEvent.isComposing) return
 
             event.preventDefault()
@@ -108,15 +112,15 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
           value={prompt}
         />
         <div className="composer-toolbar flex min-h-9 shrink-0 flex-nowrap items-center gap-2">
-          <AttachmentPicker draft={attachmentDraft} onError={onError} />
+          <fieldset disabled={editBusy} className="min-w-0"><AttachmentPicker draft={attachmentDraft} onError={onError} /></fieldset>
           {planStatus && <DropdownMenu><DropdownMenuTrigger asChild><Button aria-label="查看 Plan 模式详情" data-composer-tooltip={planStatus} className="composer-plan text-xs text-muted-foreground" size="sm" type="button" variant="ghost"><ListChecks aria-hidden="true" className="composer-control-icon hidden" /><span className="composer-control-label truncate">{planStatus}</span></Button></DropdownMenuTrigger><DropdownMenuContent align="start" side="top" className="max-w-xs"><p className="px-2 py-1.5 text-sm font-normal">{planStatus}</p><p className="px-2 pb-2 text-xs text-muted-foreground">{planPolicy ?? '当前阶段未提供工具列表。'}</p></DropdownMenuContent></DropdownMenu>}
           {extensionStatus && <Button aria-label={`扩展状态：${extensionStatus}`} data-composer-tooltip={extensionStatus} className="composer-extension text-xs text-muted-foreground" size="sm" type="button" variant="ghost"><Puzzle aria-hidden="true" className="composer-control-icon hidden" /><span className="composer-control-label min-w-0 truncate">{extensionStatus}</span></Button>}
           <div className="composer-actions ml-auto flex min-w-0 items-center gap-2">
             {controls}
             {isActive && status !== 'aborting' && <Button aria-label="停止生成" className="rounded-full" onClick={() => void onAbort()} size="icon-lg" type="button" variant="destructive"><Square aria-hidden="true" /></Button>}
             {status === 'aborting' && <span role="status" aria-label="正在停止" data-composer-tooltip="正在停止…" className="composer-aborting inline-flex h-9 shrink-0 items-center text-sm text-muted-foreground"><LoaderCircle aria-hidden="true" className="composer-control-icon hidden animate-spin" /><span className="composer-control-label">正在停止…</span></span>}
-            {status === 'running' && (prompt.trim().length > 0 || attachmentDraft.items.length > 0) && <Button className="composer-queue rounded-full" disabled={submittingInput || commands.busy || attachmentDraft.busy} onClick={() => onSubmit()} aria-label={submittingInput ? '提交中' : parseComposerCommand(prompt) ? '执行命令' : '排队'} data-composer-tooltip={submittingInput ? '正在提交' : parseComposerCommand(prompt) ? '执行输入的命令' : '当前任务完成后执行'} type="button">{submittingInput ? <LoaderCircle aria-hidden="true" className="composer-control-icon hidden animate-spin" /> : parseComposerCommand(prompt) ? <Terminal aria-hidden="true" className="composer-control-icon hidden" /> : <ListPlus aria-hidden="true" className="composer-control-icon hidden" />}<span className="composer-control-label">{submittingInput ? '提交中…' : parseComposerCommand(prompt) ? '执行命令' : '排队'}</span></Button>}
-            {!isActive && (
+            {!edit && status === 'running' && (prompt.trim().length > 0 || attachmentDraft.items.length > 0) && <Button className="composer-queue rounded-full" disabled={submittingInput || commands.busy || attachmentDraft.busy} onClick={() => onSubmit()} aria-label={submittingInput ? '提交中' : parseComposerCommand(prompt) ? '执行命令' : '排队'} data-composer-tooltip={submittingInput ? '正在提交' : parseComposerCommand(prompt) ? '执行输入的命令' : '当前任务完成后执行'} type="button">{submittingInput ? <LoaderCircle aria-hidden="true" className="composer-control-icon hidden animate-spin" /> : parseComposerCommand(prompt) ? <Terminal aria-hidden="true" className="composer-control-icon hidden" /> : <ListPlus aria-hidden="true" className="composer-control-icon hidden" />}<span className="composer-control-label">{submittingInput ? '提交中…' : parseComposerCommand(prompt) ? '执行命令' : '排队'}</span></Button>}
+            {!edit && !isActive && (
               <Button aria-label="发送提示词" className="rounded-full" disabled={commands.busy || (!selectedSession && !isDraft) || creatingDraft || settingsBusy || attachmentDraft.busy || (prompt.trim().length === 0 && attachmentDraft.items.length === 0)} onClick={() => onSubmit()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
             )}
           </div>

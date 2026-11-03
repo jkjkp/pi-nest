@@ -22,7 +22,7 @@ export function WorkspaceFilePreviewToggle({ open, onToggle, buttonRef }: {
 export function WorkspaceFilePreview({ preview, containerRef }: { preview: Preview; containerRef: RefObject<HTMLDivElement | null> }) {
   const width = useWorkspaceStore((state) => state.inspectorWidth)
   const setWidth = useWorkspaceStore((state) => state.setInspectorWidth)
-  const navigationWidth = useWorkspaceStore((state) => state.navigationWidth)
+  const navigationWidth = useWorkspaceStore((state) => state.navigationCollapsed ? 0 : state.navigationWidth)
   const { sessionId, panel, scope, selection, open, wide } = preview
   const select = useWorkspaceStore(state => state.selectFileTab)
   const closeTab = useWorkspaceStore(state => state.closeFileTab)

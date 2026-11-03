@@ -1,13 +1,13 @@
 import { piAssistantStopReason } from '@pi-nest/contracts/pi-events'
-import type { PiRuntimeCommand, AttachmentRef } from '@pi-nest/contracts'
+import type { PiRuntimeCommand, AttachmentRef, PiEditLastInput, PiEditStatus, PiHistoryChange } from '@pi-nest/contracts'
 import { unstable_batchedUpdates } from 'react-dom'
 import { stripAnsiText } from './ansi-text.js'
-import { isRuntimeConnectionError, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
+import { isRuntimeConnectionError, readExtensionUi, readHistoryChange, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
 import { activeRuntimeTurn, nativeUserMessage, reconcilePendingInputs, type PromptStatus, type RuntimeTurn } from './session-run-model.js'
 import { useWorkspaceStore, type RuntimeStatisticsState } from './workspace-store.js'
 
 export type SessionRunState = Pick<ReturnType<typeof useWorkspaceStore.getState>,
-  | 'runs' | 'sessionNotifications' | 'runtimeDetails' | 'runtimeStates' | 'runtimeStatistics'
+  | 'runs' | 'messageEdits' | 'sessionNotifications' | 'runtimeDetails' | 'runtimeStates' | 'runtimeStatistics'
   | 'appendPendingInput' | 'appendRunEvent' | 'clearRun' | 'completeLatestRunTurn' | 'consumePendingInput'
   | 'markRunExecutionStarted' | 'promotePendingInput' | 'removePendingInput' | 'setRun' | 'updateRun'
   | 'finishNotification' | 'markSessionRead' | 'removeSessionNotification' | 'trackPendingRun'
@@ -17,6 +17,7 @@ export type SessionRunState = Pick<ReturnType<typeof useWorkspaceStore.getState>
 export type SessionRunStateAccess = { getState: () => SessionRunState }
 
 type SessionRunControllerOptions = {
+  replaceHistory?: (sessionId: string, change: PiHistoryChange) => void | Promise<void>
   invalidateHistory: (sessionId: string) => void | Promise<void>
   runtime: RuntimeWebSocketClient
   state?: SessionRunStateAccess
@@ -27,6 +28,8 @@ type StartSessionRunOptions = { attachments?: AttachmentRef[]; submissionId?: st
 type ActiveRun = { awaitingRunId: boolean; runId: string | undefined; stopReason: string | undefined }
 
 export type SessionRunController = {
+  editLast: (sessionId: string, input: PiEditLastInput) => Promise<PiEditStatus>
+  getEditStatus: (sessionId: string, submissionId: string) => Promise<PiEditStatus>
   adopt: (options: StartSessionRunOptions) => void
   compact: (sessionId: string, customInstructions?: string) => Promise<boolean>
   cancelCompact: (sessionId: string) => Promise<void>
@@ -69,7 +72,22 @@ function isExtensionDialog(event: PiRuntimeEvent) {
   return request.type === 'extension_ui_request' && ['select', 'confirm', 'input', 'editor'].includes(request.method as string)
 }
 
-export function createSessionRunController({ invalidateHistory, runtime, state: stateStore = useWorkspaceStore }: SessionRunControllerOptions): SessionRunController {
+export function createSessionRunController({ invalidateHistory, replaceHistory, runtime, state: stateStore = useWorkspaceStore }: SessionRunControllerOptions): SessionRunController {
+  const pendingEdits = new Set<string>()
+  const historyIds = new Map<string, string>()
+  function applyHistoryChange(sessionId: string, change: PiHistoryChange) {
+    if (historyIds.get(sessionId) === change.id) return
+    historyIds.set(sessionId, change.id)
+    clearAwaitingAgentCheck(sessionId)
+    activeRuns.delete(sessionId)
+    cancelNotification(sessionId)
+    const store = stateStore.getState()
+    store.clearRun(sessionId)
+    store.removeSessionNotification(sessionId)
+    store.clearExtensionUi(sessionId)
+    invalidateStatistics(sessionId)
+    void (replaceHistory ? replaceHistory(sessionId, change) : invalidateHistory(sessionId))
+  }
   const compactions = new Map<string, { cancelled: boolean; started: boolean }>()
   const activeRuns = new Map<string, ActiveRun>()
   const awaitingAgentTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -176,8 +194,8 @@ export function createSessionRunController({ invalidateHistory, runtime, state: 
     const unconfirmedAttachments = store.runs[sessionId]?.turns.some((turn) => turn.attachments?.length && !turn.events.some((event) => nativeUserMessage(event)))
     if (unconfirmedAttachments) store.updateRun(sessionId, { attachmentWarning: 'Pi 已处理输入，但未观察到附件用户消息；请检查扩展是否接管。' })
     store.updateRun(sessionId, { status: stopReason === 'error' ? 'error' : stopReason === 'aborted' ? 'aborted' : 'complete', stopReason })
-    const visible = foregroundSessionId === sessionId && (typeof document === 'undefined' || document.visibilityState === 'visible')
-    if (runId) store.finishNotification(sessionId, runId, !visible, stopReason !== 'error' && stopReason !== 'aborted')
+    // The reading view acknowledges completion after the reply is visible.
+    if (runId) store.finishNotification(sessionId, runId, true, stopReason !== 'error' && stopReason !== 'aborted')
     void invalidateHistory(sessionId)
     if (runtime.watchedSessions().some((watch) => watch.sessionId === sessionId && watch.role === 'background')) void runtime.unwatch(sessionId)
   }
@@ -212,6 +230,15 @@ export function createSessionRunController({ invalidateHistory, runtime, state: 
   const handlePiEvent = (event: PiRuntimeEvent) => {
     const store = stateStore.getState()
     const raw = event.event
+    if (raw.type === 'history_changed') {
+      const change = readHistoryChange(raw.change)
+      if (change && change.sequence === event.sequence) {
+        applyHistoryChange(event.sessionId, change)
+        const projection = readExtensionUi(raw.extensionUi)
+        if (projection) stateStore.getState().replaceExtensionUi(event.sessionId, projection)
+      }
+      return
+    }
     if (raw.type === 'queue_update' && Array.isArray(raw.steering) && raw.steering.every((message) => typeof message === 'string') && Array.isArray(raw.followUp) && raw.followUp.every((message) => typeof message === 'string')) {
       queueSyncedSessions.add(event.sessionId)
       store.updateRun(event.sessionId, { pendingInputs: reconcilePendingInputs(store.runs[event.sessionId]?.pendingInputs ?? [], { steering: raw.steering, followUp: raw.followUp, ...(Array.isArray(raw.inputs) ? { inputs: raw.inputs as import('@pi-nest/contracts').PiQueuedInput[] } : {}), ...(Array.isArray(raw.steeringInputs) ? { steeringInputs: raw.steeringInputs as import('@pi-nest/contracts').PiQueuedInput[] } : {}) }, String(event.sequence)) })
@@ -222,7 +249,7 @@ export function createSessionRunController({ invalidateHistory, runtime, state: 
     }
     if (raw.type === 'extension_ui_request') {
       if (runtime.shouldApplyExtensionUi(event)) {
-        if (raw.method === 'set_editor_text' && typeof raw.text === 'string') store.setDraft(event.sessionId, stripAnsiText(raw.text))
+        if (raw.method === 'set_editor_text' && typeof raw.text === 'string' && !store.messageEdits[event.sessionId]) store.setDraft(event.sessionId, stripAnsiText(raw.text))
         if (raw.method === 'setStatus' && typeof raw.statusKey === 'string' && raw.statusKey) store.setExtensionStatus(event.sessionId, raw.statusKey, typeof raw.statusText === 'string' ? raw.statusText : undefined)
         if (raw.method === 'setWidget' && typeof raw.widgetKey === 'string' && raw.widgetKey) store.setExtensionWidget(event.sessionId, raw.widgetKey, Array.isArray(raw.widgetLines) && raw.widgetLines.every((line) => typeof line === 'string') ? raw.widgetLines : undefined)
       }
@@ -318,8 +345,9 @@ export function createSessionRunController({ invalidateHistory, runtime, state: 
 
   runtime.onSessionSnapshot((snapshot) => {
     flushStreamEvents()
+    if ((stateStore.getState().runtimeStates[snapshot.sessionId]?.revision ?? -1) > snapshot.runtime.revision) return
+    if (snapshot.historyChange) applyHistoryChange(snapshot.sessionId, snapshot.historyChange)
     const store = stateStore.getState()
-    if ((store.runtimeStates[snapshot.sessionId]?.revision ?? -1) > snapshot.runtime.revision) return
     store.replaceExtensionUi(snapshot.sessionId, snapshot.extensionUi)
     store.setRuntimeState(snapshot.sessionId, snapshot.runtime)
     applyModelStatus({ ...snapshot.runtime, sessionId: snapshot.sessionId })
@@ -503,7 +531,7 @@ export function createSessionRunController({ invalidateHistory, runtime, state: 
         stateStore.getState().setWatchState(sessionId, 'watching')
         if (previous && previous !== sessionId) {
           const lifecycle = stateStore.getState().runtimeStates[previous]?.lifecycle
-          if (lifecycle === 'active' || lifecycle === 'loading' || activeRuns.has(previous) || stateStore.getState().sessionNotifications[previous]?.pendingRunId) await runtime.watch(previous, 'background')
+          if (lifecycle === 'active' || lifecycle === 'loading' || activeRuns.has(previous) || pendingEdits.has(previous) || stateStore.getState().sessionNotifications[previous]?.pendingRunId) await runtime.watch(previous, 'background')
           else await runtime.unwatch(previous)
         }
         await runtime.watch(sessionId, 'foreground')
@@ -515,7 +543,7 @@ export function createSessionRunController({ invalidateHistory, runtime, state: 
       foregroundSessionId = undefined
       if (!sessionId) return
       const lifecycle = stateStore.getState().runtimeStates[sessionId]?.lifecycle
-      if (lifecycle === 'active' || lifecycle === 'loading' || activeRuns.has(sessionId) || stateStore.getState().sessionNotifications[sessionId]?.pendingRunId) {
+      if (lifecycle === 'active' || lifecycle === 'loading' || activeRuns.has(sessionId) || pendingEdits.has(sessionId) || stateStore.getState().sessionNotifications[sessionId]?.pendingRunId) {
         void runtime.watch(sessionId, 'background')
       } else {
         void runtime.unwatch(sessionId)
@@ -531,6 +559,21 @@ export function createSessionRunController({ invalidateHistory, runtime, state: 
       }
     },
     resumeRuntime,
+    editLast: async (sessionId, input) => {
+      if (pendingEdits.has(sessionId)) throw new Error('请等待当前编辑提交完成。')
+      pendingEdits.add(sessionId)
+      try {
+        await runtime.watch(sessionId, sessionId === foregroundSessionId ? 'foreground' : 'background')
+        await resumeRuntime(sessionId)
+        return await runtime.editLast(sessionId, input)
+      } finally { pendingEdits.delete(sessionId) }
+    },
+    getEditStatus: async (sessionId, submissionId) => {
+      await runtime.watch(sessionId, sessionId === foregroundSessionId ? 'foreground' : 'background')
+      const lifecycle = stateStore.getState().runtimeStates[sessionId]?.lifecycle
+      if (lifecycle !== 'active' && lifecycle !== 'loading') await resumeRuntime(sessionId)
+      return runtime.getEditStatus(sessionId, submissionId)
+    },
     setModel: async (sessionId, provider, modelId) => { await resumeRuntime(sessionId); await runtime.setModel(sessionId, provider, modelId); await getRuntimeState(sessionId) },
     setThinkingLevel: async (sessionId, level) => { await resumeRuntime(sessionId); await runtime.setThinkingLevel(sessionId, level); await getRuntimeState(sessionId) },
     start: (options) => {

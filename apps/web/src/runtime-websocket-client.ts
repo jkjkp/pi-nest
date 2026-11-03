@@ -1,5 +1,6 @@
 import type { PiRuntimeCommand, PiRuntimeStatistics, PiRuntimeEvent, RuntimeError, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel, RuntimeMessage, RuntimeCommandPayload } from '@pi-nest/contracts'
 import { createRuntimeBootstrap, runtimeBootstrap } from './runtime-bootstrap.js'
+import type { PiEditLastInput, PiEditStatus, PiHistoryChange, PiRuntimeExtensionUi } from '@pi-nest/contracts'
 export type { PiRuntimeEvent, RuntimeError, RuntimeLifecycle, RuntimeFailureKind, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel } from '@pi-nest/contracts'
 
 type RuntimeSocket = Pick<WebSocket, 'close' | 'readyState' | 'send'> & { addEventListener: WebSocket['addEventListener'] }
@@ -32,6 +33,26 @@ function runtimeUrl(path: string, token: string) {
 
 function errorMessage(value: unknown) {
   return value instanceof Error ? value.message : 'Pi runtime connection failed'
+}
+
+export function readHistoryChange(value: unknown): PiHistoryChange | undefined {
+  if (!value || typeof value !== 'object') return
+  const item = value as Record<string, unknown>
+  if (typeof item.id === 'string' && item.id && typeof item.entryId === 'string' && item.entryId && typeof item.revision === 'string' && /^[a-f0-9]{64}$/.test(item.revision) && Number.isInteger(item.sequence) && Number(item.sequence) >= 0) return { id: item.id, entryId: item.entryId, revision: item.revision, sequence: Number(item.sequence) }
+}
+
+export function readExtensionUi(value: unknown): PiRuntimeExtensionUi | undefined {
+  if (!value || typeof value !== 'object') return
+  const item = value as Partial<PiRuntimeExtensionUi>
+  if (!['known', 'restored', 'unknown'].includes(item.freshness ?? '') || !item.statuses || typeof item.statuses !== 'object' || !Object.values(item.statuses).every((text) => typeof text === 'string') || !item.widgets || typeof item.widgets !== 'object' || !Object.values(item.widgets).every((lines) => Array.isArray(lines) && lines.every((line) => typeof line === 'string'))) return
+  return { freshness: item.freshness!, statuses: { ...item.statuses }, widgets: Object.fromEntries(Object.entries(item.widgets).map(([key, lines]) => [key, [...lines]])) }
+}
+
+function editStatus(value: unknown, submissionId: string): PiEditStatus {
+  const result = value as Partial<PiEditStatus> | undefined
+  if (!result || result.submissionId !== submissionId || !['pending', 'committed', 'rolled_back', 'superseded', 'unknown'].includes(result.status ?? '') ||
+    (['committed', 'superseded'].includes(result.status ?? '') && (typeof result.userEntryId !== 'string' || !result.userEntryId))) throw new RuntimeConnectionError('编辑回执无效，请确认发送状态。')
+  return { status: result.status!, submissionId, ...(typeof result.userEntryId === 'string' ? { userEntryId: result.userEntryId } : {}), ...(typeof result.runId === 'string' ? { runId: result.runId } : {}) }
 }
 
 function isProjectionEvent(event: Record<string, unknown>) {
@@ -157,6 +178,8 @@ export class RuntimeWebSocketClient {
   resumeRuntime(sessionId: string) { return this.command({ type: 'resume', sessionId }) }
 
   prompt(sessionId: string, message: string, input?: { attachmentIds: string[]; submissionId: string }) { return this.command<RuntimePromptAck>({ type: 'prompt', sessionId, message, ...input }) }
+  async editLast(sessionId: string, input: PiEditLastInput) { return editStatus(await this.command<unknown>({ type: 'edit_last', sessionId, ...input }), input.submissionId) }
+  async getEditStatus(sessionId: string, submissionId: string) { return editStatus(await this.command<unknown>({ type: 'get_edit_status', sessionId, submissionId }), submissionId) }
   executeExtensionCommand(sessionId: string, message: string) { return this.command<{ disposition: 'handled' | 'started' | 'queued' }>({ type: 'extension_command', sessionId, message }) }
   abort(sessionId: string) { return this.command({ type: 'abort', sessionId }) }
   steer(sessionId: string, message: string, input?: { attachmentIds: string[]; submissionId: string }) { return this.command({ type: 'steer', sessionId, message, ...input }) }
@@ -247,7 +270,7 @@ export class RuntimeWebSocketClient {
     const pending = message.id ? this.pending.get(message.id) : undefined
     if (message.id) this.pending.delete(message.id)
     pending?.reject(Object.assign(new Error(message.message), { code: message.code }))
-    if (pending?.command !== 'get_session_stats' && pending?.command !== 'steer' && pending?.command !== 'follow_up' && pending?.command !== 'steer_queued') this.notify(message)
+    if (pending?.command !== 'get_session_stats' && pending?.command !== 'steer' && pending?.command !== 'follow_up' && pending?.command !== 'steer_queued' && pending?.command !== 'edit_last' && pending?.command !== 'get_edit_status') this.notify(message)
   }
 
   private handleEvent(message: { type: 'pi_event' } & PiRuntimeEvent) {
@@ -267,11 +290,13 @@ export class RuntimeWebSocketClient {
 
   private handleSnapshot(message: { type: 'session_snapshot' } & SessionSnapshot) {
     if (!Number.isInteger(message.atSequence) || message.atSequence < 0) return
+    const historyChange = readHistoryChange(message.historyChange)
     const watch = this.watched.get(message.sessionId)
     if (watch) {
       watch.after = Number.isInteger(message.replayAfter) && message.replayAfter! >= 0 && message.replayAfter! <= message.atSequence
         ? message.replayAfter!
         : message.atSequence
+      if (historyChange && historyChange.sequence <= message.atSequence) watch.after = Math.max(watch.after, historyChange.sequence)
       this.saveWatches()
     }
     const activeTurn = message.activeTurn && typeof message.activeTurn.runId === 'string' && typeof message.activeTurn.startedAt === 'string' && (message.activeTurn.prompt === undefined || typeof message.activeTurn.prompt === 'string')
@@ -282,6 +307,7 @@ export class RuntimeWebSocketClient {
     this.projectionFloors.set(message.sessionId, message.atSequence)
     this.uiFreshness.set(message.sessionId, message.extensionUi.freshness)
     const snapshot: SessionSnapshot = {
+      ...(historyChange && historyChange.sequence <= message.atSequence ? { historyChange } : {}),
       ...(message.inputQueue && Array.isArray(message.inputQueue.steering) && message.inputQueue.steering.every((value) => typeof value === 'string') && Array.isArray(message.inputQueue.followUp) && message.inputQueue.followUp.every((value) => typeof value === 'string') ? { inputQueue: { steering: [...message.inputQueue.steering], followUp: [...message.inputQueue.followUp], ...(Array.isArray(message.inputQueue.inputs) ? { inputs: message.inputQueue.inputs } : {}), ...(Array.isArray(message.inputQueue.steeringInputs) ? { steeringInputs: message.inputQueue.steeringInputs } : {}) } } : {}),
       ...(activeTurn ? { activeTurn } : {}),
       ...(completedRun ? { completedRun } : {}),

@@ -1,14 +1,15 @@
 import { isPiMessage, piAssistantStopReason } from '@pi-nest/contracts/pi-events'
 import { AttachmentStore, AttachmentError, type PreparedInput } from './attachment-store.js'
-import type { AttachmentInput, PiPromptDisposition, PiQueuedInput, PiSessionInitialSettings } from '@pi-nest/contracts'
+import type { AttachmentInput, PiEditLastInput, PiEditStatus, PiHistoryChange, PiPromptDisposition, PiQueuedInput, PiSessionInitialSettings } from '@pi-nest/contracts'
 import type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntimeStatus, PiRuntimeExtensionUi, PiRuntimeSessionSnapshot } from '@pi-nest/contracts'
 export type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntimeStatus, PiRuntimeExtensionUi, PiRuntimeSessionSnapshot } from '@pi-nest/contracts'
 
-import { PiRpcCommandError } from '@pi-nest/pi-adapter'
+import { PiRpcCommandError, editRecord, entryPath, piEditBoundary, piEditStatus, readPiEditEntries } from '@pi-nest/pi-adapter'
+import { existsSync, readFileSync } from 'node:fs'
 
 import { SessionHistorySnapshots } from './session-history-snapshots.js'
 import { SessionInputQueue, type QueuedInputView } from './session-input-queue.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,8 +26,9 @@ type StreamEntry = { stream: SessionEventStream }
 type StreamListener = (event: PiRuntimeEvent) => void
 type StreamErrorListener = (error: PiRuntimeStreamError) => void
 type UnloadReason = 'capacityEvicted' | 'deleted' | 'failed' | 'idleExpired' | 'mutation' | 'settingsReload' | 'shutdown'
-type ActiveTurn = { agentStarted?: true; firstSequence?: number; native?: true; prompt?: string; runId: string; startedAt: string; stopReason?: string; waitingForExtension?: true }
+type ActiveTurn = { editPreparing?: boolean; cancelEdit?: true; agentStarted?: true; firstSequence?: number; native?: true; prompt?: string; runId: string; startedAt: string; stopReason?: string; waitingForExtension?: true }
 type RuntimeState = {
+  historyChange?: PiHistoryChange
   queue: SessionInputQueue
   promotingInput?: boolean
   activeTurn?: ActiveTurn
@@ -46,6 +48,9 @@ type RuntimeStatusListener = (status: PiRuntimeStatus) => void
 
 export class PiRuntimeBusyError extends Error {
   constructor() { super('Pi session is busy') }
+}
+export class PiSessionEditError extends Error {
+  constructor(readonly code: string, message: string) { super(message) }
 }
 
 export class PiRuntimeCapacityError extends Error {
@@ -321,7 +326,7 @@ export class PiRuntimeRegistry {
         if (!alreadyIdle) this.transition(session.id, 'loading')
         return entry.host.start()
       })
-      .then(() => { this.transition(session.id, 'idle'); this.touch(session.id) })
+      .then(async () => { await this.publishHistoryChange(session); this.transition(session.id, 'idle'); this.touch(session.id) })
       .catch(async (cause) => {
         if (cause instanceof PiRuntimeCapacityError) throw cause
         this.fail(session.id, cause)
@@ -341,14 +346,57 @@ export class PiRuntimeRegistry {
     return prompt.settled
   }
 
+  getEditStatus(session: PiRuntimeSession, submissionId: string): PiEditStatus {
+    return piEditStatus(readPiEditEntries(session.sessionFile), submissionId)
+  }
+
+  async editLast(session: PiRuntimeSession, input: PiEditLastInput, prepared?: PreparedInput): Promise<PiEditStatus> {
+    const entries = readPiEditEntries(session.sessionFile)
+    const record = entries.find((entry) => editRecord(entry)?.submissionId === input.submissionId)
+    if (record) {
+      if (editRecord(record)!.requestHash !== this.editHash(input)) throw new PiSessionEditError('SUBMISSION_CONFLICT', '同一提交标识不能用于不同的编辑内容。')
+      if (piEditStatus(entries, input.submissionId).status === 'pending' && !this.locks.has(session.id)) await this.resume(session)
+      return this.getEditStatus(session, input.submissionId)
+    }
+    if (input.attachmentIds?.length && !prepared) throw new AttachmentError('附件尚未准备完成，请重试。', 400)
+    const queue = this.stateFor(session.id).queue.snapshot()
+    if (queue.steering.length || queue.followUp.length || queue.inputs?.length || queue.steeringInputs?.length || this.extensionState.hasDialogs(session.id)) throw new PiRuntimeBusyError()
+    const prompt = this.beginPrompt(session, input.message || '请查看附件。', prepared ? { input, prepared } : undefined, undefined, input)
+    if (!prompt) throw new PiRuntimeBusyError()
+    void prompt.settled.catch(() => undefined)
+    await prompt.accepted
+    return this.getEditStatus(session, input.submissionId)
+  }
+
+  private editHash(input: PiEditLastInput) {
+    return createHash('sha256').update(JSON.stringify([input.entryId, input.revision, input.message, input.attachmentIds ?? []])).digest('hex')
+  }
+
+  private async publishHistoryChange(session: PiRuntimeSession) {
+    if (!existsSync(session.sessionFile)) return
+    const entries = readPiEditEntries(session.sessionFile)
+    const id = piEditBoundary(entries)
+    const state = this.stateFor(session.id)
+    if (!id || state.historyChange?.id === id) return
+    const boundary = entries.find((entry) => entry.id === id)!
+    const change = { id, entryId: editRecord(boundary)!.targetEntryId, revision: createHash('sha256').update(readFileSync(session.sessionFile)).digest('hex'), sequence: 0 }
+    this.history.unpin(session)
+    state.completedRun = undefined
+    await this.streamFor(session.id).stream.publish({ sessionId: session.id, observedAt: new Date().toISOString(), event: { type: 'history_changed', change } }, (event) => {
+      change.sequence = event.sequence
+      event.event.extensionUi = this.getExtensionUiSnapshot(session.id)
+      state.historyChange = { ...change }
+    })
+  }
+
   /** Starts a prompt while exposing the RPC-admission boundary to callers that create a session. Attachment input must arrive already prepared so validation never hides inside prompt execution. */
-  beginPrompt(session: PiRuntimeSession, message: string, attachments?: { input: AttachmentInput; prepared: PreparedInput }, initialSettings?: PiSessionInitialSettings): PiRuntimePrompt | undefined {
+  beginPrompt(session: PiRuntimeSession, message: string, attachments?: { input: AttachmentInput; prepared: PreparedInput }, initialSettings?: PiSessionInitialSettings, edit?: PiEditLastInput): PiRuntimePrompt | undefined {
     if (this.settingsUpdating || this.locks.has(session.id) || this.extensionCommands.has(session.id)) return undefined
     this.cancelUnload(session.id)
     this.locks.set(session.id, 'prompt')
     const state = this.stateFor(session.id)
     const runId = randomUUID()
-    const activeTurn: ActiveTurn = { prompt: message, runId, startedAt: new Date().toISOString() }
+    const activeTurn: ActiveTurn = { ...(edit ? { editPreparing: true } : {}), prompt: message, runId, startedAt: new Date().toISOString() }
     state.activeTurn = activeTurn
 
     let resolveAccepted: (disposition: PiPromptDisposition) => void = () => undefined
@@ -366,6 +414,31 @@ export class PiRuntimeRegistry {
         this.transition(session.id, 'loading')
         this.transition(session.id, 'active')
         this.touch(session.id)
+        if (edit) {
+          await entry.host.start()
+          if (activeTurn.cancelEdit) throw new PiSessionEditError('EDIT_CANCELLED', '编辑已停止，原会话已保留。')
+          await this.publishHistoryChange(session)
+          const bytes = readFileSync(session.sessionFile)
+          if (createHash('sha256').update(bytes).digest('hex') !== edit.revision) throw new PiSessionEditError('HISTORY_REVISION_CHANGED', '会话历史已变化，请刷新后重新编辑。')
+          const last = entryPath(readPiEditEntries(session.sessionFile)).findLast((item) => item.type === 'message' && item.message.role === 'user')
+          if (last?.id !== edit.entryId) throw new PiSessionEditError('INVALID_EDIT_TARGET', '只能编辑当前分支最后一条用户消息。')
+          const commands = (await entry.host.command({ type: 'get_commands' })).data as { commands?: { name: string; source: string }[] }
+          const commandName = message.trimStart().match(/^\/([^\s/]+)/)?.[1]
+          if (commandName && commands.commands?.some((item) => item.name === commandName && item.source === 'extension')) throw new PiSessionEditError('INVALID_COMMAND', '编辑重发不能执行插件控制命令。')
+          if (attachments) {
+            this.attachments.check(session.id, attachments.input)
+            const state = (await entry.host.command({ type: 'get_state' })).data as { model?: { input?: string[] } }
+            if (attachments.prepared.images?.length && state.model?.input && !state.model.input.includes('image')) throw new AttachmentError('当前模型不支持图片输入。', 400)
+          }
+          await this.extensionState.clearProjection(session.id)
+          const selected = (await entry.host.command({ type: 'pi_nest_edit', action: 'prepare', entryId: edit.entryId, revision: edit.revision, submissionId: edit.submissionId, requestHash: this.editHash(edit), runId })).data as { phase?: string }
+          if (selected.phase !== 'selected') {
+            await entry.host.command({ type: 'pi_nest_edit', action: 'recover' })
+            await this.publishHistoryChange(session)
+            throw new PiSessionEditError('EDIT_CANCELLED', '编辑被扩展取消，原会话已保留。')
+          }
+          await this.publishHistoryChange(session)
+        }
         if (initialSettings) {
           await entry.host.start()
           if (initialSettings.model) await entry.host.command({ type: 'set_model', provider: initialSettings.model.provider, modelId: initialSettings.model.id })
@@ -379,16 +452,39 @@ export class PiRuntimeRegistry {
         this.history.pin(session, runId)
         if (attachments) this.attachments.check(session.id, attachments.input)
         const payload: PreparedInput = attachments?.prepared ?? { message }
+        if (edit && activeTurn.cancelEdit) {
+          await entry.host.command({ type: 'pi_nest_edit', action: 'recover' })
+          await this.publishHistoryChange(session)
+          throw new PiSessionEditError('EDIT_CANCELLED', '编辑已停止，原会话已恢复。')
+        }
+        activeTurn.editPreparing = false
         const prompt = entry.host.beginPrompt(payload.message, payload.images)
-        void prompt.accepted.then((disposition) => {
+        let nativeSettled = false
+        void prompt.settled.then(() => { nativeSettled = true }, () => { nativeSettled = true })
+        const confirmation = prompt.accepted.then(async (disposition) => {
+          if (edit) {
+            const deadline = Date.now() + 30_000
+            while (this.getEditStatus(session, edit.submissionId).status === 'pending') {
+              if (nativeSettled) {
+                await entry.host.command({ type: 'pi_nest_edit', action: 'recover' })
+                await this.publishHistoryChange(session)
+                throw new PiSessionEditError('EDIT_CANCELLED', '输入未形成新消息，已恢复原会话。')
+              }
+              if (Date.now() >= deadline) throw new PiSessionEditError('EDIT_RECOVERY_REQUIRED', '正在确认发送状态，请勿重复发送。')
+              await new Promise((done) => setTimeout(done, 25))
+            }
+            resolveAccepted(disposition)
+            return
+          }
           if (disposition === 'handled' && !activeTurn.agentStarted && state.activeTurn === activeTurn) {
             this.history.unpin(session)
             state.activeTurn = undefined
             this.locks.set(session.id, 'mutation')
             handledWithoutAgent = true
           } else resolveAccepted(disposition)
-        }, rejectAccepted)
-        return prompt.settled
+        })
+        void confirmation.catch(rejectAccepted)
+        return prompt.settled.then(async (result) => { await confirmation; return result })
       })
       .then((result) => {
         if (handledWithoutAgent) {
@@ -402,7 +498,7 @@ export class PiRuntimeRegistry {
       })
       .catch(async (cause) => {
         if (cause instanceof PiRuntimeCapacityError) throw cause
-        if (cause instanceof AttachmentError) {
+        if (cause instanceof AttachmentError || cause instanceof PiSessionEditError) {
           // A rejected input is not a runtime failure: keep the session, its runtime and its projections intact.
           rejected = true
           this.transition(session.id, 'idle')
@@ -434,6 +530,11 @@ export class PiRuntimeRegistry {
   async abort(sessionId: string) {
     if (!this.isPromptActive(sessionId) && !this.compacting.has(sessionId)) return false
     const activeTurn = this.stateFor(sessionId).activeTurn
+    if (activeTurn?.editPreparing) {
+      activeTurn.cancelEdit = true
+      await this.entries.get(sessionId)?.host.abort()
+      return true
+    }
     const previous = activeTurn?.stopReason
     if (activeTurn) activeTurn.stopReason = 'aborted'
     try {
@@ -655,6 +756,7 @@ export class PiRuntimeRegistry {
   private snapshot(sessionId: string, atSequence: number, replayAfter: number | undefined): PiRuntimeSessionSnapshot {
     const state = this.stateFor(sessionId)
     return {
+      ...(state.historyChange ? { historyChange: state.historyChange } : {}),
       ...(state.activeTurn ? { activeTurn: { prompt: state.activeTurn.prompt, runId: state.activeTurn.runId, startedAt: state.activeTurn.startedAt, ...(state.activeTurn.waitingForExtension ? { waitingForExtension: true } : {}) } } : {}),
       ...(state.completedRun ? { completedRun: { ...state.completedRun } } : {}),
       atSequence,

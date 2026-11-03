@@ -15,6 +15,7 @@ import { ChevronRight, Ellipsis, Folder, FolderOpen, List, ListTree, Plus, Searc
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { SessionRenameDialog } from './session-rename-dialog.js'
+import { SessionDeleteDialog } from './session-delete-dialog.js'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -24,8 +25,9 @@ import { SessionNavigationRow } from './session-navigation-row.js'
 import { SessionTreeNavigation } from './session-tree-navigation.js'
 import { buildSessionTree, reorderSessionSiblings } from './session-tree.js'
 import { NavigationTitle } from './navigation-title.js'
-import { isRunActive, type SessionRunSummary } from './session-run-model.js'
-import { filterProjectsByQuery, type PiSessionSummary, type ProjectSessionGroup, sessionDisplayName } from './workspace.js'
+import { NavigationToggle } from './navigation-toggle.js'
+import { type SessionRunSummary } from './session-run-model.js'
+import { filterProjectsByQuery, type PiSessionSummary, type ProjectSessionGroup } from './workspace.js'
 
 export function SessionNavigation({
   collapsedProjectKeys,
@@ -73,17 +75,15 @@ export function SessionNavigation({
   )
   const [renaming, setRenaming] = useState<PiSessionSummary>()
   const [deleting, setDeleting] = useState<PiSessionSummary>()
-  const [deletePending, setDeletePending] = useState(false)
-  const deleteInFlight = useRef(false)
-  const deleteButton = useRef<HTMLButtonElement>(null)
   const deleteTrigger = useRef<HTMLElement | null>(null)
-  const deletingNotification = useWorkspaceStore((state) => deleting ? state.sessionNotifications[deleting.id] : undefined)
-  const deleteBusy = deletePending || Boolean(deleting && mutationSessionId === deleting.id)
-  const deleteBlocked = deleteBusy || isRunActive(runs[deleting?.id ?? '']?.status ?? (deletingNotification?.pendingRunId ? 'running' : 'idle'))
   const [removingProject, setRemovingProject] = useState<ProjectSessionGroup>()
   const [actionError, setActionError] = useState<string>()
   const navigationView = useWorkspaceStore((state) => state.navigationView)
   const setNavigationView = useWorkspaceStore((state) => state.setNavigationView)
+  const navigationCollapsed = useWorkspaceStore((state) => state.navigationCollapsed)
+  const setNavigationCollapsed = useWorkspaceStore((state) => state.setNavigationCollapsed)
+  const navigationOpen = useWorkspaceStore((state) => state.navigationOpen)
+  const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
   const [searchValue, setSearchValue] = useState('')
   const visibleProjects = useMemo(() => {
     const filtered = filterProjectsByQuery(projects, searchValue)
@@ -96,19 +96,6 @@ export function SessionNavigation({
   function requestRename(session: PiSessionSummary) {
     setActionError(undefined)
     setRenaming(session)
-  }
-
-  async function confirmDelete() {
-    if (!deleting || deleteBlocked || deleteInFlight.current) return
-    deleteInFlight.current = true
-    setDeletePending(true)
-    setActionError(undefined)
-    try {
-      await onDelete(deleting.id)
-      setDeleting(undefined)
-    } catch {
-      setActionError('删除失败，请刷新后重试。')
-    } finally { deleteInFlight.current = false; setDeletePending(false) }
   }
 
   function reorder(event: DragEndEvent) {
@@ -142,7 +129,11 @@ export function SessionNavigation({
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b">
         <div className="flex h-14 items-center gap-2 px-5">
-          <h2 className="min-w-0 truncate text-xl leading-7 font-semibold tracking-tight">Pi Nest</h2>
+          <h2 className="min-w-0 flex-1 truncate text-xl leading-7 font-semibold tracking-tight">Pi Nest</h2>
+          <div className="ml-auto flex shrink-0">
+            <NavigationToggle controls="workspace-navigation" expanded={!navigationCollapsed} onToggle={() => setNavigationCollapsed(!navigationCollapsed)} className="hidden md:inline-flex" />
+            <NavigationToggle controls="workspace-navigation-mobile" expanded={navigationOpen} onToggle={() => setNavigationOpen(!navigationOpen)} className="md:hidden" />
+          </div>
         </div>
         <label className="relative block px-3 pb-3" htmlFor="session-search">
           <Search aria-hidden="true" className="pointer-events-none absolute left-5 top-3.5 size-3 text-muted-foreground" />
@@ -226,21 +217,7 @@ export function SessionNavigation({
         </div>
       </ScrollArea>
       {renaming && <SessionRenameDialog key={renaming.id} session={renaming} onClose={() => setRenaming(undefined)} onRename={onRename} />}
-      <AlertDialog onOpenChange={(open) => { if (!open && !deleteInFlight.current) setDeleting(undefined) }} open={Boolean(deleting)}>
-        <AlertDialogContent onOpenAutoFocus={(event) => { event.preventDefault(); deleteButton.current?.focus() }} onCloseAutoFocus={(event) => { event.preventDefault(); deleteTrigger.current?.focus() }}>
-          <AlertDialogTitle>删除原生 Pi 会话？</AlertDialogTitle>
-          <AlertDialogDescription>
-            将删除“{deleting ? sessionDisplayName(deleting) : ''}”。优先移入系统废纸篓；若废纸篓不可用，会永久删除原生会话文件且无法恢复。
-          </AlertDialogDescription>
-          {actionError && <p className="mt-3 text-sm text-destructive" role="alert">{actionError}</p>}
-          <div className="mt-5 flex justify-end gap-2">
-            <AlertDialogCancel asChild><Button disabled={deleteBusy} type="button" variant="secondary">取消</Button></AlertDialogCancel>
-            <Button ref={deleteButton} disabled={deleteBlocked} onClick={() => void confirmDelete()} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); if (!event.repeat && !event.nativeEvent.isComposing) void confirmDelete() } }} type="button" variant="destructive">
-              {deletePending ? '删除中…' : '删除会话'}
-            </Button>
-          </div>
-        </AlertDialogContent>
-      </AlertDialog>
+      {deleting && <SessionDeleteDialog key={deleting.id} session={deleting} run={runs[deleting.id]} mutationSessionId={mutationSessionId} onDelete={onDelete} onClose={() => setDeleting(undefined)} onCloseAutoFocus={(event) => { event.preventDefault(); deleteTrigger.current?.focus() }} />}
       <AlertDialog onOpenChange={(open) => !open && setRemovingProject(undefined)} open={Boolean(removingProject)}>
         <AlertDialogContent>
           <AlertDialogTitle>从 Pi Nest 移除项目？</AlertDialogTitle>

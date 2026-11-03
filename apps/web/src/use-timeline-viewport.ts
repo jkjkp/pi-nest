@@ -73,7 +73,8 @@ export function useTimelineViewport({ selectedSessionId, history, activeTurn, la
       navigationInProgress.current = false
     }
     restoringPosition.current = undefined
-    if (!value) initialPositioning.current = false
+    // Resuming follow must also absorb late virtual-list measurement scrolls.
+    initialPositioning.current = value
     if (followLatestRef.current === value) return
     followLatestRef.current = value
     setFollowLatest(value)

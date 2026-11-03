@@ -472,3 +472,27 @@ it('reads command metadata while streaming without acquiring the idle mutation l
   expect(registry.commandWhenIdle).not.toHaveBeenCalled()
   expect(client.sent).toContainEqual(expect.objectContaining({ id: 'list', type: 'ack', data: { commands: [{ name: 'ponytail', source: 'extension' }] } }))
 })
+
+it('requires a watched, versioned edit intent and keeps status lookup separate from submission', async () => {
+  const submissionId = '00000000-0000-4000-8000-000000000001'
+  const registry = { ...runtime(), editLast: vi.fn().mockResolvedValue({ status: 'committed', submissionId, userEntryId: 'new-user', runId: 'edit-run' }), getEditStatus: vi.fn().mockReturnValue({ status: 'committed', submissionId, userEntryId: 'new-user', runId: 'edit-run' }) }
+  const broker = createBroker(registry)
+  const client = socket()
+  broker.open(client)
+  const input = { id: 'edit', type: 'edit_last', sessionId: 'session-1', entryId: 'last-user', revision: 'a'.repeat(64), message: 'new question', submissionId }
+  await broker.message(client, JSON.stringify(input))
+  expect(client.sent.at(-1)).toMatchObject({ code: 'SESSION_NOT_WATCHED' })
+  await broker.message(client, JSON.stringify({ id: 'w', type: 'watch', sessionId: 'session-1' }))
+  for (const invalid of [{ ...input, revision: 'old' }, { ...input, submissionId: undefined }, { ...input, message: '' }]) {
+    await broker.message(client, JSON.stringify(invalid))
+    expect(client.sent.at(-1)).toMatchObject({ code: 'INVALID_COMMAND' })
+  }
+  expect(registry.editLast).not.toHaveBeenCalled()
+  await broker.message(client, JSON.stringify(input))
+  expect(client.sent.at(-1)).toMatchObject({ type: 'ack', command: 'edit_last', data: { status: 'committed', userEntryId: 'new-user' } })
+  expect(registry.editLast).toHaveBeenCalledWith(nativeBinding, input, undefined)
+  await broker.message(client, JSON.stringify({ id: 'status', type: 'get_edit_status', sessionId: 'session-1', submissionId }))
+  expect(client.sent.at(-1)).toMatchObject({ type: 'ack', command: 'get_edit_status', data: { status: 'committed' } })
+  expect(registry.editLast).toHaveBeenCalledOnce()
+  expect(registry.beginPrompt).not.toHaveBeenCalled()
+})

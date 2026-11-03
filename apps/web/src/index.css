@@ -164,6 +164,16 @@ body {
   color: var(--foreground);
 }
 
+.session-graph-node[data-node-state="current"] {
+  border-color: var(--ring);
+  background: var(--accent);
+}
+
+.session-graph-node[data-node-state="preview"] {
+  border-color: color-mix(in srgb, var(--warning) 75%, var(--foreground));
+  border-style: dashed;
+}
+
 .conversation-stage {
   width: 100%;
   max-width: 60rem;

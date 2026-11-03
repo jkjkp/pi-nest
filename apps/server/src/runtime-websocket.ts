@@ -5,12 +5,14 @@ import { PiRpcCommandError } from '@pi-nest/pi-adapter'
 import { z } from 'zod'
 
 import type { PiRuntimeEvent, PiRuntimeSession } from './pi-runtime-host.js'
-import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry, type PiRuntimeSessionSnapshot, type PiRuntimeStatus } from './pi-runtime-registry.js'
+import { PiSessionEditError, PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry, type PiRuntimeSessionSnapshot, type PiRuntimeStatus } from './pi-runtime-registry.js'
 import { PiRuntimeResumeError } from './session-event-stream.js'
 import type { SessionIndex } from './session-index.js'
 
 const attachmentsShape = { attachmentIds: z.array(z.string().regex(/^(?:[a-f0-9-]{36}|[a-f0-9]{64})$/)).min(1).max(8).optional(), submissionId: z.string().uuid().optional() }
 const commandSchema = z.discriminatedUnion('type', [
+  z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('edit_last'), message: z.string().trim().max(20_000), ...attachmentsShape, submissionId: z.string().uuid(), entryId: z.string().min(1).max(512), revision: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
+  z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_edit_status'), submissionId: z.string().uuid() }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('extension_command'), message: z.string().trim().min(1).max(20_000) }).strict(),
   z.object({ id: z.string().min(1).max(128), sessionId: z.string().min(1), type: z.literal('get_commands') }).strict(),
   z.object({ id: z.string().min(1).max(128), resume: z.object({ after: z.number().int().nonnegative() }).strict().optional(), sessionId: z.string().min(1), type: z.literal('watch') }).strict(),
@@ -81,6 +83,22 @@ export class RuntimeWebSocketBroker {
     if ('message' in command.data && command.data.type !== 'steer_queued' && !command.data.message.trim() && !('attachmentIds' in command.data && command.data.attachmentIds?.length)) return this.error(socket, command.data.id, 'INVALID_COMMAND', '输入不能为空', command.data.sessionId)
     const watched = state.sessions.get(command.data.sessionId)
     if (!watched) return this.error(socket, command.data.id, 'SESSION_NOT_WATCHED', 'Pi session is not watched', command.data.sessionId)
+
+    if (command.data.type === 'get_edit_status') {
+      try { return this.ack(socket, command.data.id, command.data.type, command.data.sessionId, this.runtime.getEditStatus(watched.session, command.data.submissionId)) }
+      catch { return this.error(socket, command.data.id, 'EDIT_RECOVERY_REQUIRED', '无法确认编辑状态，请刷新会话后重试。', command.data.sessionId) }
+    }
+    if (command.data.type === 'edit_last') {
+      try {
+        const input = command.data
+        const known = this.runtime.getEditStatus(watched.session, input.submissionId)
+        const prepared = known.status === 'unknown' && input.attachmentIds?.length ? await this.runtime.attachments.prepare(input.sessionId, input) : undefined
+        const result = await this.runtime.editLast(watched.session, input, prepared)
+        return this.ack(socket, input.id, input.type, input.sessionId, result)
+      } catch (cause) {
+        return this.error(socket, command.data.id, cause instanceof PiSessionEditError ? cause.code : cause instanceof PiRuntimeBusyError ? 'SESSION_BUSY' : cause instanceof AttachmentError ? cause.code : 'EDIT_RECOVERY_REQUIRED', cause instanceof Error ? cause.message : '编辑失败，请同步会话状态。', command.data.sessionId)
+      }
+    }
 
     if (command.data.type === 'resume') {
       try {

@@ -6,6 +6,8 @@ import { emptyFilePanel, fileTabKey, filePreviewKey, restoreFilePanels, restoreF
 import type { NavigationOrder } from './navigation-order.js'
 import { activeRuntimeTurn, isRunActive, nativeUserMessage, runtimeEventOwner, runtimeTurnAcceptsEvent, type PendingInput, type SessionRunSummary } from './session-run-model.js'
 import type { PiRuntimeStatistics, PiRuntimeExtensionUi, PiRuntimeEvent, PiRuntimeState, RuntimeStatus } from '@pi-nest/contracts'
+import type { PiEditLastInput } from '@pi-nest/contracts'
+export type MessageEditDraft = { entryId: string; revision: string; text: string; status: 'editing' | 'submitting' | 'unknown'; error?: string; input?: PiEditLastInput }
 
 export { isRunActive, nativeUserMessage } from './session-run-model.js'
 export type { PromptStatus, PendingInput, SessionRunSummary } from './session-run-model.js'
@@ -22,6 +24,12 @@ type SessionNotification = { pendingRunId?: string; completedRunId?: string; rea
 
 // Keep runtime, queue and notification writes in SessionRunController so recovery shares the live event path.
 type WorkspaceState = {
+  workspaceView: 'chat' | 'tree'
+  setWorkspaceView: (view: 'chat' | 'tree') => void
+  branchStorage: { available: boolean }
+  setBranchStorage: (health: { available: boolean }) => void
+  branchOperations: Record<string, { operationId: string; request: import('@pi-nest/contracts').PiSessionBranchRequest }>
+  setBranchOperation: (sessionId: string, operation?: { operationId: string; request: import('@pi-nest/contracts').PiSessionBranchRequest }) => void
   filePreviews: Record<string, FilePreviewPanel>
   fileReadingPositions: Record<string, FileReadingPosition>
   openFilePreview: (sessionId: string, path: string, line?: number, searchRoot?: string, workspace?: boolean) => void
@@ -44,6 +52,8 @@ type WorkspaceState = {
   expandSessionAncestors: (ids: string[]) => void
   collapsedProjectKeys: Record<string, boolean>
   drafts: Record<string, string>
+  messageEdits: Record<string, MessageEditDraft>
+  setMessageEdit: (sessionId: string, edit: MessageEditDraft | undefined) => void
   draftRevisions: Record<string, number>
   extensionStatuses: Record<string, Record<string, string>>
   extensionWidgets: Record<string, Record<string, string[]>>
@@ -51,6 +61,7 @@ type WorkspaceState = {
   inspectorOpen: boolean
   inspectorWidth: number
   navigationOpen: boolean
+  navigationCollapsed: boolean
   navigationWidth: number
   runtimeStates: Record<string, Omit<RuntimeStatus, 'sessionId'>>
   runtimeStatistics: Record<string, RuntimeStatisticsState>
@@ -78,6 +89,7 @@ type WorkspaceState = {
   setInspectorWidth: (width: number) => void
   hideProject: (cwd: string) => void
   setNavigationOpen: (open: boolean) => void
+  setNavigationCollapsed: (collapsed: boolean) => void
   setNavigationWidth: (width: number) => void
   setNavigationOrder: (order: NavigationOrder) => void
   setProjectCollapsed: (projectKey: string, collapsed: boolean) => void
@@ -152,6 +164,16 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
     const { [sessionId]: _removed, ...sessionNotifications } = state.sessionNotifications
     return { sessionNotifications }
   }),
+  workspaceView: 'chat',
+  setWorkspaceView: (workspaceView) => set({ workspaceView }),
+  branchStorage: { available: true },
+  setBranchStorage: (branchStorage) => set({ branchStorage }),
+  branchOperations: {},
+  setBranchOperation: (sessionId, operation) => set((state) => {
+    const next = { ...state.branchOperations }
+    if (operation) next[sessionId] = operation; else delete next[sessionId]
+    return { branchOperations: next }
+  }),
   navigationView: 'list',
   setNavigationView: (navigationView) => set({ navigationView }),
   collapsedSessionIds: {},
@@ -159,6 +181,13 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
   expandSessionAncestors: (ids) => set((state) => ids.every((id) => state.collapsedSessionIds[id] === false) ? state : ({ collapsedSessionIds: { ...state.collapsedSessionIds, ...Object.fromEntries(ids.map((id) => [id, false])) } })),
   collapsedProjectKeys: {},
   drafts: {},
+  messageEdits: {},
+  setMessageEdit: (sessionId, edit) => set((state) => {
+    const messageEdits = { ...state.messageEdits }
+    if (edit) messageEdits[sessionId] = edit
+    else delete messageEdits[sessionId]
+    return { messageEdits }
+  }),
   draftRevisions: {},
   extensionStatuses: {},
   extensionWidgets: {},
@@ -166,6 +195,7 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
   inspectorOpen: false,
   inspectorWidth: 300,
   navigationOpen: false,
+  navigationCollapsed: false,
   navigationWidth: 272,
   runtimeStates: {},
   runtimeStatistics: {},
@@ -350,6 +380,7 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
   hideProject: (cwd) => set((state) => ({ hiddenProjectCwds: { ...state.hiddenProjectCwds, [cwd]: true } })),
   setNavigationWidth: (width) => set({ navigationWidth: clampSidebarWidth(width, Infinity, 'navigation') }),
   setNavigationOpen: (navigationOpen) => set({ navigationOpen }),
+  setNavigationCollapsed: (navigationCollapsed) => set({ navigationCollapsed }),
   setNavigationOrder: (navigationOrder) => set({ navigationOrder }),
   setProjectCollapsed: (projectKey, collapsed) =>
     set((state) => ({ collapsedProjectKeys: { ...state.collapsedProjectKeys, [projectKey]: collapsed } })),
@@ -392,7 +423,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist(createWorkspaceState,
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ filePreviews: state.filePreviews, fileReadingPositions: state.fileReadingPositions, navigationWidth: state.navigationWidth, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ workspaceView: state.workspaceView, branchOperations: state.branchOperations, filePreviews: state.filePreviews, fileReadingPositions: state.fileReadingPositions, navigationWidth: state.navigationWidth, navigationCollapsed: state.navigationCollapsed, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
       merge: (persisted, current) => {
         const saved = persisted && typeof persisted === 'object' ? persisted as Partial<WorkspaceState> : {}
         return { ...current, ...saved, filePreviews: restoreFilePanels(saved.filePreviews), fileReadingPositions: restoreFilePositions(saved.fileReadingPositions) }

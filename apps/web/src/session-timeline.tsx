@@ -1,9 +1,9 @@
 import { AnswerActions } from './answer-actions.js'
-import { Check, ChevronDown, Copy } from 'lucide-react'
+import { Check, ChevronDown, Copy, Pencil } from 'lucide-react'
 import { MessageAttachments } from './attachment-ui.js'
 import { ModelCallErrorNotice } from './model-call-error-notice.js'
 import { RenderErrorBoundary } from './render-error-boundary.js'
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual'
 
 import { Button } from '@/components/ui/button'
@@ -22,7 +22,7 @@ import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 import type { PendingInput, PromptStatus } from './session-run-model.js'
 
-export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onRetrySteering, onRequestTurnJump, onReadTurnPrompt, onLoadEarlier, onTurnJumpFinished, onRetry, onRetryNavigation, onBranchAnswer, branchDisabled = false, navigationNotice, overlayRoot, pendingInputs = [], pendingJump, jumpError, runMessage, runStatus, sessionId, sessionCwd, scrollViewport, registerTimelineScroll, systemEvents = [], turnIndex, turns = [] }: {
+export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onRetrySteering, onRequestTurnJump, onReadTurnPrompt, onLoadEarlier, onTurnJumpFinished, onRetry, onRetryNavigation, onBranchAnswer, branchAnswerLabel, onEditLast, messageEdit, editDisabled = false, branchDisabled = false, navigationNotice, overlayRoot, pendingInputs = [], pendingJump, jumpError, runMessage, runStatus, sessionId, sessionCwd, scrollViewport, registerTimelineScroll, systemEvents = [], turnIndex, turns = [] }: {
   error: boolean
   hasEarlier?: boolean
   history: PiSessionHistoryResponse | undefined
@@ -37,6 +37,10 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   onLoadEarlier?: () => void
   onTurnJumpFinished?: (id: number, error?: string) => void
   onRetry: () => void
+  onEditLast?: (entryId: string) => void
+  messageEdit?: { entryId: string; editor: ReactNode }
+  editDisabled?: boolean
+  branchAnswerLabel?: string
   onBranchAnswer?: (entryId: string, revision: string) => Promise<void>
   branchDisabled?: boolean
   onRetryNavigation?: () => void
@@ -59,6 +63,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   const stopJump = useRef<(() => void) | undefined>(undefined)
   const [canLoadEarlier, setCanLoadEarlier] = useState(false)
   const items = useMemo(() => timelineItems(history?.entries, turns, systemEvents), [history?.entries, systemEvents, turns])
+  const lastUserId = history?.entries.findLast((entry) => entry.type === 'message' && (entry.raw.message as { role?: string })?.role === 'user')?.id
   const currentItems = useRef(items)
   useLayoutEffect(() => { currentItems.current = items }, [items])
   const activeExecutionItem = items.findLast((item) => !item.steering || item.steering.status === 'applied')
@@ -208,11 +213,11 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     return onReadTurnPrompt(entry.id, historyPageCursorForTurn(railEntries, entry.id))
   }, [items, onReadTurnPrompt, railEntries])
 
-  if (isLoading && items.length === 0) return null
-  if (error && items.length === 0) return <HistoryError onRetry={onRetry} />
+  if (isLoading && items.length === 0 && !messageEdit) return <section role="status" aria-busy="true" className="conversation-stage min-h-40 py-8"><p className="conversation-stage-content text-sm text-muted-foreground">正在读取会话…</p></section>
+  if (error && items.length === 0 && !messageEdit) return <HistoryError onRetry={onRetry} />
 
   const pendingImplementation = pendingInputs.filter((input) => input.mode === 'plan_implementation')
-  if (items.length === 0 && pendingImplementation.length === 0) {
+  if (items.length === 0 && pendingImplementation.length === 0 && !messageEdit) {
     return <section className="py-8 text-center"><p className="text-sm text-muted-foreground">{isRunning ? '正在等待 Pi 原生事件…' : '当前活动分支尚无可展示的原生条目。'}</p></section>
   }
 
@@ -220,8 +225,8 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   const jump = (turnId: string) => onRequestTurnJump?.(turnId, historyPageCursorForTurn(railEntries, turnId), items.some((item) => item.id === turnId))
   return <section className="conversation-stage pb-6">{navigationNotice && <div className="conversation-stage-content mb-2 flex items-center justify-end gap-2 text-xs text-muted-foreground" role="status"><span>{navigationNotice}</span><Button onClick={onRetryNavigation} size="sm" variant="ghost" type="button">重试</Button></div>}{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail navigationError={jumpError} key={history?.session.id} onReadPrompt={readPrompt} activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" ref={virtualizer.containerRef}><div className="absolute left-0 top-0 w-full"><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>{virtualItems.map((virtualItem) => {
     const item = items[virtualItem.index]!
-    return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement}><RenderErrorBoundary scope="turn" sessionId={history?.session.id} turnId={item.id}><TurnItem onBranchAnswer={onBranchAnswer} branchDisabled={branchDisabled || isRunning} revision={history?.revision} sessionId={sessionId ?? history?.session.id} cwd={sessionCwd ?? history?.session.cwd} hasFollowingTurn={item !== activeExecutionItem} onRetrySteering={onRetrySteering} canRetrySteering={isRunning} isRunning={isRunning && item === activeExecutionItem} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} runMessage={item === activeExecutionItem ? runMessage : undefined} runStatus={item === activeExecutionItem ? runStatus : undefined} /></RenderErrorBoundary></div>
-  })}</div>{pendingImplementation.map((input) => <PendingUserInput input={input} key={input.id} />)}</div></section>
+    return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement}><RenderErrorBoundary scope="turn" sessionId={history?.session.id} turnId={item.id}><TurnItem messageEditor={messageEdit?.entryId === item.id ? messageEdit.editor : undefined} onEdit={onEditLast && item.id === lastUserId ? () => onEditLast(item.id) : undefined} editDisabled={editDisabled} onBranchAnswer={onBranchAnswer} branchAnswerLabel={branchAnswerLabel} branchDisabled={branchDisabled || isRunning} revision={history?.revision} sessionId={sessionId ?? history?.session.id} cwd={sessionCwd ?? history?.session.cwd} hasFollowingTurn={item !== activeExecutionItem} onRetrySteering={onRetrySteering} canRetrySteering={isRunning} isRunning={isRunning && item === activeExecutionItem} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} runMessage={item === activeExecutionItem ? runMessage : undefined} runStatus={item === activeExecutionItem ? runStatus : undefined} /></RenderErrorBoundary></div>
+  })}</div>{messageEdit && !items.some((item) => item.id === messageEdit.entryId) && messageEdit.editor}{pendingImplementation.map((input) => <PendingUserInput input={input} key={input.id} />)}</div></section>
 }
 
 function HistoryLoadSentinel({ canLoad, hasEarlier, isLoading, onLoad, requested, scrollViewport }: { canLoad: boolean; hasEarlier: boolean; isLoading: boolean; onLoad: () => void; requested: { current: boolean }; scrollViewport: HTMLElement | null }) {
@@ -252,26 +257,28 @@ function HistoryError({ onRetry }: { onRetry: () => void }) {
   )
 }
 
-const TurnItem = memo(function TurnItem({ onBranchAnswer, branchDisabled, revision, sessionId, isRunning, item, cwd, hasFollowingTurn, onFinalAnswerStart, onFinalAnswerStream, onRetrySteering, canRetrySteering, runMessage, runStatus }: { onBranchAnswer?: (entryId: string, revision: string) => Promise<void>; branchDisabled: boolean; revision?: string; sessionId?: string; cwd?: string; hasFollowingTurn: boolean; onRetrySteering?: (turnId: string) => void; canRetrySteering: boolean; isRunning: boolean; item: TimelineItem; onFinalAnswerStart: ((turnId: string) => void) | undefined; onFinalAnswerStream: (() => void) | undefined; runMessage: string | undefined; runStatus: PromptStatus | undefined }) {
+const TurnItem = memo(function TurnItem({ messageEditor, onEdit, editDisabled, onBranchAnswer, branchAnswerLabel, branchDisabled, revision, sessionId, isRunning, item, cwd, hasFollowingTurn, onFinalAnswerStart, onFinalAnswerStream, onRetrySteering, canRetrySteering, runMessage, runStatus }: { messageEditor?: ReactNode; onEdit?: () => void; editDisabled: boolean; branchAnswerLabel?: string; onBranchAnswer?: (entryId: string, revision: string) => Promise<void>; branchDisabled: boolean; revision?: string; sessionId?: string; cwd?: string; hasFollowingTurn: boolean; onRetrySteering?: (turnId: string) => void; canRetrySteering: boolean; isRunning: boolean; item: TimelineItem; onFinalAnswerStart: ((turnId: string) => void) | undefined; onFinalAnswerStream: (() => void) | undefined; runMessage: string | undefined; runStatus: PromptStatus | undefined }) {
   const presentation = useMemo(() => projectTurnPresentation(item, isRunning), [item, isRunning])
   const files = useMemo(() => projectTurnFiles(presentation.activities, cwd, item.fileChanges), [presentation.activities, cwd, item.fileChanges])
   const branchEntry = presentation.finalAnswer.flatMap((part) => part.events).findLast((event) => event.event.type === 'message' && (event.event.message as { role?: string } | undefined)?.role === 'assistant')
   const summaryState = turnFileSummaryState(item, isRunning, runStatus, hasFollowingTurn)
   return (
     <article className="space-y-3" data-turn-id={item.id}>
-      {sessionId && !!item.attachments?.length && <div className="ml-auto w-fit max-w-full"><MessageAttachments attachments={item.attachments} scope={{ kind: 'session', sessionId }} /></div>}
       {item.attachmentWarning && <p role="alert" className="text-xs text-destructive">{item.attachmentWarning}</p>}
-      {item.prompt && <UserPrompt prompt={item.prompt} startedAt={item.startedAt} />}
+      {messageEditor ?? <>
+      {sessionId && !!item.attachments?.length && <div className="ml-auto w-fit max-w-full"><MessageAttachments attachments={item.attachments} scope={{ kind: 'session', sessionId }} /></div>}
+      {(item.prompt || onEdit) && <UserPrompt prompt={item.prompt ?? ''} startedAt={item.startedAt} onEdit={onEdit} editDisabled={editDisabled} />}
+      </>}
       {item.steering && item.steering.status !== 'applied' ? <div aria-live="polite" className="flex items-center justify-end gap-2 text-xs text-muted-foreground"><span className={item.steering.status === 'failed' ? 'text-destructive' : undefined}>{item.steering.status === 'sending' ? '发送中…' : item.steering.status === 'accepted' ? '引导已发送' : item.steering.status === 'unknown' ? '正在确认发送状态，请勿重复发送' : `发送失败：${item.steering.error ?? '请重试'}`}</span>{item.steering.status === 'failed' && onRetrySteering && <Button disabled={!canRetrySteering} onClick={() => onRetrySteering(item.id)} type="button" size="sm" variant="ghost">重试</Button>}</div> : <TurnExecution files={files} showFileProgress={!summaryState} isRunning={isRunning} item={item} presentation={presentation} runMessage={runMessage} runStatus={runStatus} />}
       {item.modelErrors?.map((error, index) => <ModelCallErrorNotice error={error} key={index} />)}
       {item.plan && <section aria-label="计划正文" id={`plan-${item.id}`} className="rounded-lg border bg-card p-4"><h2 className="mb-3 text-sm font-normal">计划已制定</h2><AssistantMarkdown source={item.plan.text} isStreaming={false} /></section>}
-      <FinalAnswer onBranch={!branchDisabled && branchEntry && revision && onBranchAnswer ? () => onBranchAnswer(branchEntry.id, revision) : undefined} isRunning={isRunning} onStart={() => onFinalAnswerStart?.(item.id)} onStream={onFinalAnswerStream} parts={presentation.finalAnswer} turnId={item.id} />
+      <FinalAnswer branchLabel={branchAnswerLabel} onBranch={!branchDisabled && branchEntry && revision && onBranchAnswer ? () => onBranchAnswer(branchEntry.id, revision) : undefined} isRunning={isRunning} onStart={() => onFinalAnswerStart?.(item.id)} onStream={onFinalAnswerStream} parts={presentation.finalAnswer} turnId={item.id} />
       {summaryState && (files.length > 0 || item.fileChangesIncomplete) && <TurnFileSummary files={files} state={summaryState} incomplete={item.fileChangesIncomplete} />}
     </article>
   )
 })
 
-function FinalAnswer({ onBranch, isRunning, onStart, onStream, parts, turnId }: { onBranch?: () => Promise<void>; isRunning: boolean; onStart: () => void; onStream: (() => void) | undefined; parts: Extract<TimelineItem['parts'][number], { kind: 'assistant_text' }>[]; turnId: string }) {
+function FinalAnswer({ branchLabel, onBranch, isRunning, onStart, onStream, parts, turnId }: { branchLabel?: string; onBranch?: () => Promise<void>; isRunning: boolean; onStart: () => void; onStream: (() => void) | undefined; parts: Extract<TimelineItem['parts'][number], { kind: 'assistant_text' }>[]; turnId: string }) {
   const hadAnswer = useRef(false)
   const previousAnswer = useRef('')
   const answer = parts.map((part) => part.text).join('\n')
@@ -290,10 +297,10 @@ function FinalAnswer({ onBranch, isRunning, onStart, onStream, parts, turnId }: 
   }, [answer, isRunning, onStart, onStream])
 
   // Part order survives history handoff; transport event IDs do not.
-  return <div className="space-y-3" data-final-answer-turn-id={turnId}>{parts.map((part, index) => <article key={index}><AssistantMarkdown isStreaming={isRunning} source={part.text} /></article>)}{!isRunning && answer.trim() && <AnswerActions text={answer} onBranch={onBranch} />}</div>
+  return <div className="space-y-3" data-final-answer-turn-id={turnId}>{parts.map((part, index) => <article key={index}><AssistantMarkdown isStreaming={isRunning} source={part.text} /></article>)}{!isRunning && answer.trim() && <AnswerActions text={answer} onBranch={onBranch} branchLabel={branchLabel} />}</div>
 }
 
-function UserPrompt({ prompt, startedAt }: { prompt: string; startedAt: string }) {
+function UserPrompt({ prompt, startedAt, onEdit, editDisabled = false }: { prompt: string; startedAt: string; onEdit?: () => void; editDisabled?: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const [hasOverflow, setHasOverflow] = useState(false)
   const [touchRevealed, setTouchRevealed] = useState(false)
@@ -342,19 +349,20 @@ function UserPrompt({ prompt, startedAt }: { prompt: string; startedAt: string }
   }, [expanded, prompt])
 
   return (
-    <div className="user-prompt ml-auto w-fit max-w-[min(72%,42rem)] rounded-[10px] focus-visible:outline-2 focus-visible:outline-ring" tabIndex={0} aria-label="用户消息" data-touch-revealed={touchRevealed} onPointerDown={(event) => {
+    <div className="user-prompt ml-auto w-fit max-w-[min(72%,42rem)] rounded-[10px] focus-visible:outline-2 focus-visible:outline-ring" tabIndex={0} aria-label="用户消息" data-editable={Boolean(onEdit)} data-touch-revealed={touchRevealed} onPointerDown={(event) => {
       if (event.pointerType === 'touch' && !(event.target as HTMLElement).closest('button')) setTouchRevealed((value) => !value)
     }} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setTouchRevealed(false) }}>
-      <div className="ml-auto w-fit max-w-full rounded-[10px] bg-[var(--user-prompt-background)] px-4 py-3 text-[var(--user-prompt-foreground)]">
+      {prompt && <div className="ml-auto w-fit max-w-full rounded-[10px] bg-[var(--user-prompt-background)] px-4 py-3 text-[var(--user-prompt-foreground)]">
         <div className={`relative ${expanded ? '' : 'max-h-56 overflow-hidden'}`} ref={content}>
           <pre className="whitespace-pre-wrap break-words font-sans text-[15px] leading-[26px]">{prompt}</pre>
           {!expanded && hasOverflow && <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[var(--user-prompt-background)] to-transparent" />}
         </div>
         {hasOverflow && <Button aria-expanded={expanded} className="mt-1.5 min-h-7 h-auto rounded-sm border-0 bg-transparent px-0 py-1 text-inherit opacity-80 shadow-none underline-offset-4 hover:bg-transparent hover:text-inherit hover:opacity-100 hover:underline aria-expanded:bg-transparent aria-expanded:text-inherit focus-visible:ring-1 focus-visible:ring-white/60 dark:hover:bg-transparent" onClick={() => setExpanded(!expanded)} size="sm" type="button" variant="ghost"><span className="inline-flex items-center gap-1 text-xs">{expanded ? '收起' : '显示更多'}<ChevronDown aria-hidden="true" className={`size-[1em] ${expanded ? 'rotate-180' : ''}`} /></span></Button>}
-      </div>
+      </div>}
       <div className="user-prompt-actions flex h-8 items-center justify-end gap-2 text-[15px] text-muted-foreground" role="group" aria-label="用户消息操作">
         <time className="truncate text-xs" dateTime={startedAt}>{formatUpdatedAt(startedAt)}</time>
-        <Button type="button" variant="ghost" size="icon-sm" className="border-0 text-[length:inherit] hover:bg-transparent dark:hover:bg-transparent" aria-label={copied ? '已复制' : '复制消息'} title={copied ? '已复制' : '复制消息'} disabled={copying} onClick={() => void copyPrompt()}>{copied ? <Check aria-hidden="true" className="size-[1em]" /> : <Copy aria-hidden="true" className="size-[1em]" />}</Button>
+        {prompt && <Button type="button" variant="ghost" size="icon-sm" className="border-0 text-[length:inherit] hover:bg-transparent dark:hover:bg-transparent" aria-label={copied ? '已复制' : '复制消息'} title={copied ? '已复制' : '复制消息'} disabled={copying} onClick={() => void copyPrompt()}>{copied ? <Check aria-hidden="true" className="size-[1em]" /> : <Copy aria-hidden="true" className="size-[1em]" />}</Button>}
+        {onEdit && <Button type="button" variant="ghost" size="icon-sm" className="border-0 text-[length:inherit] shadow-none" aria-label="编辑最后一条用户消息" title="编辑消息" disabled={editDisabled} onClick={onEdit}><Pencil aria-hidden="true" className="size-[1em]" /></Button>}
       </div>
       {copyError && <p role="alert" className="text-right text-xs text-destructive">{copyError}</p>}
     </div>

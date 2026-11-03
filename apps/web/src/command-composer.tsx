@@ -6,6 +6,7 @@ import type { SessionRunController } from './session-run-controller.js'
 import { commandToken, completeCommand, matchingCommands, parseComposerCommand } from './composer-commands.js'
 
 type Props = Omit<ComponentProps<typeof Textarea>, 'value' | 'onChange' | 'ref'> & {
+  commandsEnabled?: boolean
   value: string
   onValueChange: (value: string) => void
   onExecuteCommand: (value: string) => void
@@ -15,7 +16,7 @@ type Props = Omit<ComponentProps<typeof Textarea>, 'value' | 'onChange' | 'ref'>
   sessionRuns: SessionRunController
 }
 
-export function CommandComposer({ value, onValueChange, onExecuteCommand, textareaRef, sessionId, canQuery, sessionRuns, onKeyDown, onFocus, ...props }: Props) {
+export function CommandComposer({ commandsEnabled = true, value, onValueChange, onExecuteCommand, textareaRef, sessionId, canQuery, sessionRuns, onKeyDown, onFocus, ...props }: Props) {
   const listId = useId()
   const list = useRef<HTMLDivElement>(null)
   const pendingCaret = useRef<number | undefined>(undefined)
@@ -24,7 +25,7 @@ export function CommandComposer({ value, onValueChange, onExecuteCommand, textar
   const [composing, setComposing] = useState(false)
   const [dismissed, setDismissed] = useState(false)
   const [highlight, setHighlight] = useState(0)
-  const token = focused && !composing && !dismissed && sessionId && selection.value === value
+  const token = commandsEnabled && focused && !composing && !dismissed && sessionId && selection.value === value
     ? commandToken(value, selection.start, selection.end) : undefined
   const open = Boolean(token)
   const commandsQuery = useQuery({

@@ -13,7 +13,9 @@ import type { SessionRunController } from './session-run-controller.js'
 import { stripAnsiLine } from './ansi-text.js'
 import { activeRuntimeTurn, isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
-import { fetchProjects, fetchSessions, openProjectFolder } from './workspace-api.js'
+import { fetchProjects, fetchSessionHistory, fetchSessions, openProjectFolder } from './workspace-api.js'
+import { setDraftAttachments } from './attachment-draft.js'
+import { isRuntimeConnectionError } from './runtime-websocket-client.js'
 import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, projectName, projectSessionGroupKey, planModePolicy, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
 
 const emptyProjects: PiProject[] = []
@@ -25,6 +27,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const selectedSessionId = searchParams.get('session') ?? ''
   const draftProjectKey = searchParams.get('draftProject') ?? ''
   const drafts = useWorkspaceStore((state) => state.drafts)
+  const messageEdit = useWorkspaceStore((state) => state.messageEdits[selectedSessionId])
   const extensionStatuses = useWorkspaceStore((state) => state.extensionStatuses)
   const extensionWidgets = useWorkspaceStore((state) => state.extensionWidgets)
   const collapsedProjectKeys = useWorkspaceStore((state) => state.collapsedProjectKeys)
@@ -32,7 +35,6 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const runs = useWorkspaceStore((state) => state.runs)
   const runtimeDetails = useWorkspaceStore((state) => state.runtimeDetails)
   const runtimeStates = useWorkspaceStore((state) => state.runtimeStates)
-  const watchStates = useWorkspaceStore((state) => state.watchStates)
   const setDraft = useWorkspaceStore((state) => state.setDraft)
   const navigationOrder = useWorkspaceStore((state) => state.navigationOrder)
   const hideProject = useWorkspaceStore((state) => state.hideProject)
@@ -56,6 +58,8 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     setControlFailure(undefined)
   }
   const selectedSessionIdRef = useRef(selectedSessionId)
+  const editRead = useRef(0)
+  useEffect(() => { ++editRead.current }, [selectedSessionId])
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
   const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: fetchProjects, retry: false })
   const sessions = sessionsQuery.data ?? emptySessions
@@ -72,18 +76,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
   const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
   const { history, historyQuery, historyError, historyTurnCount, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, jumpError, cancelTurnJump, finishTurnJump, readTurnPrompt, requestTurnJump, loadEarlier, retryHistory } = useSessionHistory(selectedSessionId, Boolean(selectedSessionId))
-  const completedRunId = useWorkspaceStore((state) => state.sessionNotifications[selectedSessionId]?.completedRunId)
   const planTurnId = timelineItems(history?.entries, currentRun?.turns ?? [], currentRun?.systemEvents ?? []).findLast((item) => item.plan)?.id
-
-  useEffect(() => {
-    if (!selectedSessionId || watchStates[selectedSessionId] !== 'ready' || !completedRunId || !historyQuery.isSuccess || historyQuery.isFetching || historyQuery.isError) return
-    const markRead = () => {
-      if (document.visibilityState === 'visible') sessionRuns.markSessionRead(selectedSessionId, completedRunId)
-    }
-    markRead()
-    document.addEventListener('visibilitychange', markRead)
-    return () => document.removeEventListener('visibilitychange', markRead)
-  }, [selectedSessionId, watchStates, completedRunId, historyQuery.isSuccess, historyQuery.isFetching, historyQuery.isError, sessionRuns])
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId
@@ -93,7 +86,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const orderedProjects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
   const projects = useMemo(() => orderedProjects.filter((project) => !project.cwd || !hiddenProjectCwds[project.cwd]), [hiddenProjectCwds, orderedProjects])
   const draftProject = !selectedSessionId ? projects.find((project) => project.key === draftProjectKey) : undefined
-  const attachmentDraft = useAttachmentDraft(selectedSessionId, draftProject?.cwd)
+  const attachmentDraft = useAttachmentDraft(selectedSessionId, draftProject?.cwd, messageEdit ? `edit:${selectedSessionId}` : undefined)
   const isDraft = Boolean(draftProject)
 
   useEffect(() => {
@@ -122,12 +115,71 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     draftPrompt, setDraftPrompt, draftError, setDraftError, creatingDraft, submitDraft,
     draftModels, draftModel, draftLevels, draftThinking, draftSettingsStatus, draftSettingsError, loadDraftSettings,
   } = draft
-  const prompt = isDraft ? draftPrompt : drafts[selectedSessionId] ?? ''
+  const prompt = isDraft ? draftPrompt : messageEdit?.text ?? drafts[selectedSessionId] ?? ''
 
-  const { mutatingSessionId, createBranch, handleRename, handleDelete } = useSessionActions({
+  const { mutatingSessionId, createBranch, checkBranch, handleRename, handleDelete } = useSessionActions({
     sessionRuns, selectedSessionId, selectedSessionIdRef, modelOperation, sessions, projects,
     refetchSessions: sessionsQuery.refetch, setSearchParams,
   })
+
+  const editDisabled = isActive || modelOperation.current?.sessionId === selectedSessionId || mutatingSessionId !== undefined || submittingInput || Boolean(currentRun?.pendingInputs?.length) || Boolean(runtimeDetails[selectedSessionId]?.isCompacting)
+  function setComposerText(sessionId: string, text: string) {
+    const state = useWorkspaceStore.getState()
+    const edit = state.messageEdits[sessionId]
+    if (!edit) return state.setDraft(sessionId, text)
+    if (edit.status === 'editing') state.setMessageEdit(sessionId, { ...edit, text, input: undefined, error: undefined })
+  }
+  async function beginMessageEdit(entryId: string) {
+    if (editDisabled || messageEdit) return
+    const sessionId = selectedSessionId
+    const operation = ++editRead.current
+    const page = await fetchSessionHistory(sessionId).catch((cause) => {
+      if (operation === editRead.current && selectedSessionIdRef.current === sessionId) throw cause
+      return undefined
+    })
+    if (!page || operation !== editRead.current || selectedSessionIdRef.current !== sessionId || useWorkspaceStore.getState().messageEdits[sessionId]) return
+    const last = page.entries.findLast((entry) => entry.type === 'message' && (entry.raw.message as { role?: string })?.role === 'user')
+    if (last?.id !== entryId || page.revision !== history?.revision) throw new Error('会话历史已变化，请刷新后重新编辑。')
+    const turn = timelineItems(page.entries, [], []).find((item) => item.id === entryId)
+    if (!turn) throw new Error('无法读取完整用户消息。')
+    setDraftAttachments(`edit:${sessionId}`, turn.attachments ?? [])
+    useWorkspaceStore.getState().setMessageEdit(sessionId, { entryId, revision: page.revision, text: turn.prompt ?? '', status: 'editing' })
+    return true
+  }
+  function cancelMessageEdit() {
+    if (!messageEdit || messageEdit.status !== 'editing') return
+    ++editRead.current
+    attachmentDraft.clear([...attachmentDraft.items])
+    useWorkspaceStore.getState().setMessageEdit(selectedSessionId, undefined)
+  }
+  async function submitMessageEdit() {
+    const edit = useWorkspaceStore.getState().messageEdits[selectedSessionId]
+    if (!edit || edit.status === 'submitting' || (edit.status === 'editing' && editDisabled)) return
+    const sessionId = selectedSessionId
+    const items = [...attachmentDraft.items]
+    let input = edit.input
+    try {
+      if (!input) {
+        const refs = attachmentDraft.snapshot()
+        input = { entryId: edit.entryId, revision: edit.revision, message: edit.text.trim(), submissionId: crypto.randomUUID(), ...(refs.length ? { attachmentIds: refs.map((ref) => ref.id) } : {}) }
+      }
+      if (!input.message && !input.attachmentIds?.length) return
+      useWorkspaceStore.getState().setMessageEdit(sessionId, { ...edit, input, status: 'submitting', error: undefined })
+      const result = edit.status === 'unknown' ? await sessionRuns.getEditStatus(sessionId, input.submissionId) : await sessionRuns.editLast(sessionId, input)
+      const current = useWorkspaceStore.getState().messageEdits[sessionId]
+      if (current?.input?.submissionId !== input.submissionId) return
+      if (result.status === 'committed' || result.status === 'superseded') {
+        attachmentDraft.clear(items)
+        useWorkspaceStore.getState().setMessageEdit(sessionId, undefined)
+      } else if (result.status === 'rolled_back') useWorkspaceStore.getState().setMessageEdit(sessionId, { ...current, input: undefined, status: 'editing', error: '未提交新消息，原会话已恢复。' })
+      else useWorkspaceStore.getState().setMessageEdit(sessionId, { ...current, status: 'unknown', error: '正在确认发送状态，请勿重复发送。' })
+    } catch (cause) {
+      const current = useWorkspaceStore.getState().messageEdits[sessionId]
+      if (!current || current.input?.submissionId !== input?.submissionId) return
+      const unknown = edit.status === 'unknown' || isRuntimeConnectionError(cause) || (cause instanceof Error && 'code' in cause && cause.code === 'EDIT_RECOVERY_REQUIRED')
+      useWorkspaceStore.getState().setMessageEdit(sessionId, { ...current, status: unknown ? 'unknown' : 'editing', input: unknown ? input : undefined, error: cause instanceof Error ? cause.message : '编辑失败，请重试。' })
+    }
+  }
 
   useEffect(() => () => sessionRuns.releaseForeground(), [sessionRuns])
 
@@ -162,6 +214,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up', commandsChecked = false) {
+    if (messageEdit) return void submitMessageEdit()
     if (attachmentDraft.items.length && (attachmentDraft.busy || prompt.trimStart().startsWith('/'))) {
       const error = attachmentDraft.busy ? '请等待附件上传完成，或移除失败的附件。' : '带附件时暂不支持命令，请先移除附件。'
       if (isDraft) setDraftError(error); else setControlError(error)
@@ -282,12 +335,13 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   return {
+    messageEdit, editDisabled: Boolean(editDisabled), beginMessageEdit, cancelMessageEdit, submitMessageEdit,
     attachmentDraft, selectedSessionId, selectedSession, sessionResolution, draftProject, isDraft, prompt, currentRun, activeTurn, currentModel: isDraft ? draftModel : currentModel, modelLabel: isDraft ? (draftModels.find((model) => model.provider === draftModel?.provider && model.id === draftModel?.id)?.name ?? draftModel?.id ?? '选择模型') : modelLabel, modelStatus: isDraft ? draftSettingsStatus : modelStatus, modelError: isDraft ? draftSettingsError : modelError, status, isActive, isStreaming,
     extensionStatus, extensionWidget, planStatus, planPolicy, runtimeStatus, runtimeStates, runs, projects, collapsedProjectKeys,
-    navigationOrder, setNavigationOrder, setProjectCollapsed, setDraft, setDraftPrompt,
+    navigationOrder, setNavigationOrder, setProjectCollapsed, setDraft: setComposerText, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models: isDraft ? draftModels : models, thinkingLevels: isDraft ? draftLevels : thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus: isDraft ? draftSettingsStatus : thinkingStatus, thinkingError: isDraft ? draftSettingsError : thinkingError, thinkingFailure, currentThinkingLevel: isDraft ? draftThinking : runtimeDetails[selectedSessionId]?.thinkingLevel,
     sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, jumpError, cancelTurnJump, finishTurnJump,
-    selectSession, createBranch, startDraft, openProject, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    selectSession, createBranch, checkBranch, startDraft, openProject, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, requestTurnJump, openProjectFolder, changeModel, changeThinkingLevel,
     loadEarlier, retryHistory,
   }

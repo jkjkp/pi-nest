@@ -1,10 +1,14 @@
+import { randomUUID } from 'node:crypto'
+import { WorkspaceDatabase } from './workspace-database.js'
+import { SessionBranchStore } from './session-branch-store.js'
+import { SessionBranchService, BranchOperationConflict } from './session-branch-service.js'
+import { configurationSecurity } from './configuration-routes.js'
 import { resolveSessionLineage } from './session-lineage.js'
 import { AttachmentError, type PreparedInput } from './attachment-store.js'
 import { HistorySnapshotExpired } from './session-history-snapshots.js'
 import { runtimeSettingsSchema } from './configuration-schema.js'
 import type { PiSessionsResponse, PiSessionHistoryResponse } from '@pi-nest/contracts'
 import {
-  branchPiSession,
   readPiSessionForkSource,
   PiSessionBranchTargetError,
   createPiSession,
@@ -42,8 +46,8 @@ const createSessionSchema = z.object({
 }).strict()
 
 const branchSessionSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('clone') }).strict(),
-  z.object({ kind: z.literal('fork'), entryId: z.string().min(1).max(512), revision: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
+  z.object({ operationId: z.string().uuid().optional(), kind: z.literal('clone') }).strict(),
+  z.object({ operationId: z.string().uuid().optional(), mode: z.enum(['edit', 'continue']).optional(), kind: z.literal('fork'), entryId: z.string().min(1).max(512), revision: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
 ])
 
 const projectCwdSchema = z.object({ cwd: z.string().trim().min(1).max(4_096) }).strict()
@@ -85,14 +89,25 @@ async function resolveWorkspace(cwd: string, projects: ProjectRegistry, sessions
   }
 }
 
-export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects = new ProjectRegistry(), security = new RuntimeSecurity(), index: SessionIndex) {
+export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects = new ProjectRegistry(), security = new RuntimeSecurity(), index: SessionIndex, branches = new SessionBranchStore(new WorkspaceDatabase(':memory:'))) {
+  const branchService = new SessionBranchService(branches, index, runtime.attachments)
   return new Hono()
+    .use('/sessions/:sessionId/branch-operations/*', configurationSecurity(security))
+    .get('/sessions/:sessionId/branch-operations/:operationId', async (context) => {
+      if (!branches.health.available) return context.json({ error: '关系存储不可用', code: 'BRANCH_STORAGE_UNAVAILABLE' }, 503)
+      if (!z.string().uuid().safeParse(context.req.param('operationId')).success) return context.json({ error: 'Invalid operation' }, 400)
+      try {
+        const operation = await branchService.operation(context.req.param('sessionId'), context.req.param('operationId'))
+        return operation ? context.json(operation) : context.json({ error: '操作不存在' }, 404)
+      } catch (cause) { return context.json({ error: cause instanceof BranchOperationConflict ? cause.message : '读取分支状态失败' }, cause instanceof BranchOperationConflict ? 409 : 500) }
+    })
     .get('/sessions', async (context) => {
       try {
-        const sessions = resolveSessionLineage(await index.list())
+        const sessions = resolveSessionLineage(await index.list(), branches.relations())
 
         return context.json({
-          sessions: sessions.map(({ id, cwd, name, firstMessage, createdAt, updatedAt, parentSessionId, parentSessionMissing }) => ({ id, cwd, name, firstMessage: runtime.attachments.displayPrompt(firstMessage, id), createdAt, updatedAt, parentSessionId, parentSessionMissing })),
+          sessions: sessions.map(({ id, cwd, name, firstMessage, createdAt, updatedAt, parentSessionId, parentSessionMissing, branch }) => ({ id, cwd, name, firstMessage: runtime.attachments.displayPrompt(firstMessage, id), createdAt, updatedAt, parentSessionId, parentSessionMissing, branch })),
+          branchStorage: { available: branches.health.available },
         } satisfies PiSessionsResponse)
       } catch {
         return context.json({ error: 'Failed to list Pi sessions' }, 500)
@@ -175,6 +190,12 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
     .post('/sessions/:sessionId/branch', async (context) => {
       const parsed = branchSessionSchema.safeParse(await context.req.json().catch(() => undefined))
       if (!parsed.success) return context.json({ error: 'Invalid branch request' }, 400)
+      if (!branches.health.available) return context.json({ error: '关系存储不可用，普通对话仍可使用。', code: 'BRANCH_STORAGE_UNAVAILABLE' }, 503)
+      const request = { ...parsed.data, operationId: parsed.data.operationId ?? randomUUID() }
+      try {
+        const prior = await branchService.operation(context.req.param('sessionId'), request.operationId, request)
+        if (prior) return prior.result ? context.json(prior.result, 200) : context.json(prior, prior.state === 'pending' ? 202 : 409)
+      } catch (cause) { return context.json({ error: cause instanceof BranchOperationConflict ? cause.message : '读取分支记录失败' }, cause instanceof BranchOperationConflict ? 409 : 503) }
       const resolved = await resolveSession(index, context.req.param('sessionId'))
       if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
       if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
@@ -199,31 +220,10 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
             fallbackName: runtime.attachments.displayPrompt(source?.firstMessage, resolved.session.id) ?? '未命名会话',
           }
         }
-        const { session, draft, draftContent, entries } = branchPiSession({ ...parsed.data, ...naming, expectedSessionId: resolved.session.id, expectedCwd: resolved.session.cwd, sessionFile: resolved.session.sessionFile }, beforeShutdown)
-        const { id, cwd, createdAt, name, firstMessage } = session
-        index.register(session, {
-          createdAt,
-          cwd,
-          firstMessage,
-          id,
-          name,
-          parentSessionPath: resolved.session.sessionFile,
-          sessionFile: session.sessionFile,
-          updatedAt: createdAt,
-        })
-        runtime.attachments.inherit(entries, resolved.session.id, id)
-        let attachments: import('@pi-nest/contracts').AttachmentRef[] | undefined
-        let draftText = draft
-        if (draftContent) {
-          runtime.attachments.inherit(draftContent, resolved.session.id, id)
-          const projected = runtime.attachments.project({ role: 'user', content: draftContent }, id)
-          if (Array.isArray(projected.content)) {
-            attachments = projected.content.flatMap((block: any) => block.attachment ? [block.attachment] : [])
-            draftText = projected.content.flatMap((block: any) => block.type === 'text' ? [block.text] : []).join('')
-          }
-        }
-        return context.json({ session: { id, cwd, createdAt, updatedAt: createdAt, name, parentSessionId: resolved.session.id, firstMessage: runtime.attachments.displayPrompt(firstMessage, id) }, draft: draftText, ...(attachments?.length ? { attachments } : {}) }, 201)
+        const result = branchService.create(resolved.session, request, beforeShutdown, naming)
+        return context.json(result, 'state' in result ? 202 : 201)
       } catch (cause) {
+        if (!branches.health.available) return context.json({ error: '关系存储不可用，分支未创建。', code: 'BRANCH_STORAGE_UNAVAILABLE' }, 503)
         if (historyRevisionChanged(cause)) return context.json({ error: '会话历史已变化，请刷新后重新选择分支位置。', code: 'HISTORY_REVISION_CHANGED' }, 409)
         if (cause instanceof PiSessionBranchTargetError) return context.json({ error: cause.message, code: 'INVALID_BRANCH_TARGET' }, 400)
         console.error('Failed to branch Pi session', { cause })

@@ -34,6 +34,8 @@ function runtimeMock() {
     onResyncRequired: vi.fn((listener: (message: { sessionId: string }) => void) => { resyncs.add(listener); return () => resyncs.delete(listener) }),
     onSessionSnapshot: vi.fn((listener: (snapshot: any) => void) => { snapshots.add(listener); return () => snapshots.delete(listener) }),
     prompt: vi.fn().mockResolvedValue({ runId: 'run-1' }),
+    editLast: vi.fn().mockResolvedValue({ status: 'committed', submissionId: 'edit', userEntryId: 'new-user', runId: 'new-run' }),
+    getEditStatus: vi.fn().mockResolvedValue({ status: 'pending', submissionId: 'edit' }),
     steer: vi.fn().mockResolvedValue(undefined),
     steerQueued: vi.fn().mockResolvedValue(undefined),
     extensionUiResponse: vi.fn().mockResolvedValue(undefined),
@@ -398,7 +400,7 @@ describe('session run controller', () => {
     expect(controller.start({ sessionId: 'session-a', prompt: 'next' })).toBe(true)
   })
 
-  it.each(['visible', 'hidden'])('marks foreground completion according to document visibility: %s', async (visibilityState) => {
+  it.each(['visible', 'hidden'])('leaves foreground completion unread until its reading view acknowledges it: %s', async (visibilityState) => {
     vi.stubGlobal('document', { visibilityState })
     const runtime = runtimeMock()
     const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
@@ -406,7 +408,7 @@ describe('session run controller', () => {
     controller.start({ sessionId: 'session-a', prompt: 'hello' })
     await tick()
     runtime.emit({ sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'agent_settled' } })
-    expect(workspace.getState().sessionNotifications['session-a']?.readRunId).toBe(visibilityState === 'visible' ? 'run-1' : undefined)
+    expect(workspace.getState().sessionNotifications['session-a']?.readRunId).toBeUndefined()
   })
 
   it('does not let an old read acknowledgement clear a newer reply', () => {
@@ -1174,4 +1176,47 @@ it.each(['before', 'after'])('keeps native plugin-started turns when events arri
   expect(turns).toHaveLength(1)
   expect(turns?.[0]).toMatchObject({ prompt: 'expanded skill request', completedAt: expect.any(String) })
   expect(runtime.prompt).not.toHaveBeenCalled()
+})
+
+it('replaces old run projections before edited native events, and deduplicates the matching snapshot', async () => {
+  const runtime = runtimeMock()
+  const replaceHistory = vi.fn()
+  const controller = createSessionRunController({ runtime: runtime as never, state: { getState: workspace.getState }, replaceHistory, invalidateHistory: vi.fn() })
+  workspace.getState().setRun('session', { status: 'complete', systemEvents: [], pendingInputs: [], turns: [{ id: 'old-user', prompt: 'OLD', events: [], startedAt: '2026-11-02T00:00:00Z', completedAt: '2026-11-02T00:00:00Z' }] })
+  workspace.getState().setDraft('session', 'UNSENT')
+  const change = { id: 'position', entryId: 'old-user', revision: 'a'.repeat(64), sequence: 3 }
+  runtime.emit({ sessionId: 'session', sequence: 3, observedAt: '2026-11-02T00:00:00Z', event: { type: 'history_changed', change } })
+  expect(workspace.getState().runs.session).toBeUndefined()
+  expect(workspace.getState().drafts.session).toBe('UNSENT')
+  runtime.emit({ sessionId: 'session', sequence: 4, runId: 'new-run', observedAt: '2026-11-02T00:00:01Z', event: { type: 'agent_start' } })
+  runtime.emit({ sessionId: 'session', sequence: 5, runId: 'new-run', observedAt: '2026-11-02T00:00:01Z', event: { type: 'message', message: { role: 'user', content: 'NEW' } } })
+  expect(JSON.stringify(workspace.getState().runs.session)).toContain('NEW')
+  expect(JSON.stringify(workspace.getState().runs.session)).not.toContain('OLD')
+  runtime.snapshot({ sessionId: 'session', atSequence: 5, historyChange: change, runtime: { lifecycle: 'active', revision: 1 }, activeTurn: { runId: 'new-run', prompt: 'NEW', startedAt: '2026-11-02T00:00:01Z' } })
+  expect(replaceHistory).toHaveBeenCalledTimes(1)
+  expect(JSON.stringify(workspace.getState().runs.session)).toContain('NEW')
+  const input = { message: 'EDIT', entryId: 'old-user', revision: 'a'.repeat(64), submissionId: 'edit' }
+  expect(await controller.editLast('session', input)).toMatchObject({ status: 'committed' })
+  expect(runtime.editLast).toHaveBeenCalledWith('session', input)
+  expect(runtime.prompt).not.toHaveBeenCalled()
+  await controller.getEditStatus('session', 'edit')
+  expect(runtime.getEditStatus).toHaveBeenCalledWith('session', 'edit')
+  expect(runtime.editLast).toHaveBeenCalledTimes(1)
+})
+
+it('keeps an edit watched in the background when switching sessions before its receipt arrives', async () => {
+  const runtime = runtimeMock()
+  let release!: () => void
+  runtime.editLast.mockImplementationOnce(() => new Promise((done) => { release = () => done({ status: 'committed', submissionId: 'edit', userEntryId: 'new-user' }) }))
+  const controller = createSessionRunController({ runtime: runtime as never, state: { getState: workspace.getState }, invalidateHistory: vi.fn() })
+  controller.openSession('source')
+  await tick()
+  const submission = controller.editLast('source', { entryId: 'user', revision: 'a'.repeat(64), submissionId: 'edit', message: 'Edited' })
+  await tick()
+  controller.openSession('other')
+  await tick()
+  expect(runtime.watchedSessions()).toContainEqual(expect.objectContaining({ sessionId: 'source', role: 'background' }))
+  expect(runtime.unwatch).not.toHaveBeenCalledWith('source')
+  release()
+  await submission
 })

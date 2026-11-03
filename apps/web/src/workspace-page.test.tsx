@@ -24,6 +24,8 @@ vi.mock('./workspace-store.js', async (importOriginal) => {
 })
 
 const sessionRuns = {
+  editLast: async (_sessionId: string, input: { submissionId: string }) => ({ status: 'committed' as const, submissionId: input.submissionId }),
+  getEditStatus: async (_sessionId: string, submissionId: string) => ({ status: 'unknown' as const, submissionId }),
   markSessionRead: () => undefined,
   removeSessionNotification: () => undefined,
   queuePlanImplementation: (_sessionId: string, dialogId: string) => `plan-implementation:${dialogId}`,

@@ -1,4 +1,6 @@
 import { fileURLToPath } from 'node:url'
+import { existsSync } from 'node:fs'
+import { editRecord, pendingPiEdit, piEditRecoveryRecord, piEditStatus, readPiEditEntries, sessionEditCommand } from './session-edit.js'
 import { dirname, join, resolve } from 'node:path'
 import { getPackageDir } from '@earendil-works/pi-coding-agent'
 
@@ -47,7 +49,8 @@ export class PiRpcProcess {
   constructor(private readonly options: PiRpcProcessOptions) {
     const useNode = options.piExecutable === undefined && process.platform === 'win32'
     const extension = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './file-change-extension.ts' : './file-change-extension.js', import.meta.url))
-    const args = ['--mode', 'rpc', '--session', options.sessionFile, '--extension', extension]
+    const editExtension = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './session-edit-extension.ts' : './session-edit-extension.js', import.meta.url))
+    const args = ['--mode', 'rpc', '--session', options.sessionFile, '--extension', extension, '--extension', editExtension]
     const connectionOptions: PiRpcConnectionOptions = {
       cwd: options.cwd,
       executable: options.piExecutable ?? (useNode ? process.execPath : defaultPiExecutable()),
@@ -74,6 +77,10 @@ export class PiRpcProcess {
   async start(): Promise<PiRpcProcessState> {
     if (this.started) throw new Error('Pi RPC process is already started')
 
+    try {
+      if (existsSync(this.options.sessionFile)) piEditRecoveryRecord(readPiEditEntries(this.options.sessionFile))
+    } catch (cause) { throw new Error('Failed to start Pi RPC process', { cause }) }
+
     await this.connection.start()
     try {
       const state = stateFrom(await this.connection.send({ type: 'get_state' }))
@@ -82,6 +89,7 @@ export class PiRpcProcess {
         throw new Error('Pi RPC session ID did not match the server-resolved session')
       }
       this.started = true
+      if (existsSync(this.options.sessionFile) && pendingPiEdit(readPiEditEntries(this.options.sessionFile))) await this.send({ type: 'pi_nest_edit', action: 'recover' })
       return { sessionId: state.sessionId, state }
     } catch (cause) {
       await this.connection.close()
@@ -89,9 +97,23 @@ export class PiRpcProcess {
     }
   }
 
-  send(command: PiRpcRecord) {
+  async send(command: PiRpcRecord) {
     if (!this.started) throw new Error('Pi RPC process is not started')
-    return this.connection.send(command)
+    if (command.type === 'pi_nest_edit') {
+      const { type: _type, ...input } = command
+      await this.connection.send({ type: 'prompt', message: `/${sessionEditCommand} ${JSON.stringify(input)}` })
+      const entries = readPiEditEntries(this.options.sessionFile)
+      if (input.action === 'recover' && pendingPiEdit(entries)) throw new Error('EDIT_RECOVERY_REQUIRED: Pi edit recovery did not finish')
+      const record = entries.findLast((entry) => editRecord(entry)?.submissionId === input.submissionId)
+      return { type: 'response' as const, success: true, command: 'pi_nest_edit', data: { ...(typeof input.submissionId === 'string' ? piEditStatus(entries, input.submissionId) : {}), phase: record && editRecord(record)?.phase } }
+    }
+    if (typeof command.message === 'string' && command.message.trimStart().startsWith(`/${sessionEditCommand}`)) throw new Error('Internal session command is unavailable')
+    const response = await this.connection.send(command)
+    if (command.type === 'get_commands' && response.data && typeof response.data === 'object') {
+      const data = response.data as { commands?: { name: string }[] }
+      if (Array.isArray(data.commands)) return { ...response, data: { ...data, commands: data.commands.filter((item) => item.name !== sessionEditCommand) } }
+    }
+    return response
   }
 
   write(record: PiRpcRecord) {

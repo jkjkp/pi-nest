@@ -195,3 +195,24 @@ it('branches after an assistant reply, retaining that reply but excluding later 
   child.appendMessage({ role: 'user', content: 'continue in branch', timestamp: Date.now() })
   expect(child.getBranch()).toHaveLength(3)
 })
+
+it('records the prepared boundary before publication and leaves no child when recording fails', () => {
+  const first = prompt('first')
+  const second = prompt('second')
+  const files = readdirSync(join(directory, 'sessions'))
+  const prepared = vi.fn((value) => { expect(value.inheritedLeafId).toBe(first); expect(value.sourceEntryId).toBe(second); throw new Error('database full') })
+  expect(() => branchPiSession({ ...options(), kind: 'fork', mode: 'edit', entryId: second, onPrepared: prepared })).toThrow('database full')
+  expect(prepared).toHaveBeenCalledOnce()
+  expect(readdirSync(join(directory, 'sessions'))).toEqual(files)
+})
+it('rejects explicit continuation from user input and mismatched edit targets', () => {
+  const first = prompt('first')
+  expect(() => branchPiSession({ ...options(), kind: 'fork', mode: 'continue', entryId: first })).toThrow(PiSessionBranchTargetError)
+})
+it('preserves a published native child when post-publication work fails', () => {
+  prompt('original')
+  const original = readFileSync(source.getSessionFile()!)
+  expect(() => branchPiSession({ ...options(), kind: 'clone', onPublished: () => { throw new Error('after publication') } })).toThrow('after publication')
+  expect(readdirSync(join(directory, 'sessions')).filter((file) => file.endsWith('.jsonl'))).toHaveLength(2)
+  expect(readFileSync(source.getSessionFile()!)).toEqual(original)
+})

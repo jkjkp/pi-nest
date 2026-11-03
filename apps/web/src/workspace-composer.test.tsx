@@ -33,6 +33,20 @@ beforeEach(() => {
 afterEach(async () => { await act(() => root.unmount()); client.clear(); container.remove(); vi.unstubAllGlobals() })
 async function render() { await act(() => root.render(<QueryClientProvider client={client}><WorkspaceComposer {...props} /></QueryClientProvider>)) }
 
+it('keeps the ordinary draft visible and locks the bottom composer during inline editing', async () => {
+  props = { ...props, state: { ...props.state, status: 'idle', isActive: false, prompt: 'ordinary draft', messageEdit: { entryId: 'user', revision: 'r', text: '/delete', status: 'editing' } } }
+  await render()
+  const input = container.querySelector('textarea')!
+  expect(input.value).toBe('ordinary draft')
+  expect(input.disabled).toBe(true)
+  await act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true })))
+  expect(props.onSubmit).not.toHaveBeenCalled()
+  expect(props.commands.submit).not.toHaveBeenCalled()
+  expect(container.querySelector('[aria-label="发送提示词"]')).toBeNull()
+  expect(container.querySelector('[aria-label="重新发送"]')).toBeNull()
+  expect(container.querySelector('[aria-label="确认发送状态"]')).toBeNull()
+})
+
 it('places the compaction marker before the input and outside the chat history', async () => {
   props = { ...props, commands: { ...props.commands, compacted: true } }
   await render()

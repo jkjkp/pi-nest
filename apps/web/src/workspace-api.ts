@@ -1,3 +1,4 @@
+import { useWorkspaceStore } from './workspace-store.js'
 import type { PiProject, PiSessionInitialSettings, PiSessionBranchRequest, PiSessionBranchResponse, PiRuntimeSettings, PiSettingsSnapshot, PiSessionsResponse } from '@pi-nest/contracts'
 import { historyPageSize, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
 import type { PiSessionSummary } from './workspace.js'
@@ -43,6 +44,7 @@ export function fetchSessionTurnIndex(sessionId: string, revision?: string, sign
 export async function fetchSessions() {
   const body = await fetchJson<Partial<PiSessionsResponse>>('/api/sessions')
   if (!Array.isArray(body.sessions)) throw new Error('Invalid session list response')
+  useWorkspaceStore.getState().setBranchStorage(body.branchStorage ?? { available: true })
   return body.sessions
 }
 
@@ -125,18 +127,27 @@ export function discoverProviderModels(request: import('@pi-nest/contracts').PiM
   return configurationRequest<{ models: import('@pi-nest/contracts').PiDiscoveredModel[] }>('/api/configuration/models/discover', { method: 'POST', body: JSON.stringify(request) })
 }
 
+export function fetchBranchOperation(sessionId: string, operationId: string) {
+  return configurationRequest<import('@pi-nest/contracts').PiBranchOperation>(`${sessionUrl(sessionId)}/branch-operations/${encodeURIComponent(operationId)}`)
+}
+
 export async function branchSession(sessionId: string, request: PiSessionBranchRequest) {
-  const response = await fetch(`${sessionUrl(sessionId)}/branch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request) })
-  if (!response.ok) {
-    const body = await response.json().catch(() => undefined)
-    throw new Error(typeof body?.error === 'string' ? body.error : '创建分支会话失败，请重试。')
-  }
-  const body = await response.json() as PiSessionBranchResponse
-  if (!body.session?.id || body.session.id === sessionId || typeof body.draft !== 'string') throw new Error('分支会话返回数据无效，请刷新会话列表。')
+  const operationId = request.operationId ?? crypto.randomUUID()
+  let response: Response
+  try { response = await fetch(`${sessionUrl(sessionId)}/branch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...request, operationId }) }) }
+  catch { throw Object.assign(new Error('分支结果待确认，请查询结果，避免重复创建。'), { uncertain: true }) }
+  let body: PiSessionBranchResponse & { error?: string; state?: string }
+  try { body = await response.json() as typeof body }
+  catch { throw Object.assign(new Error('分支回执无法读取，请查询结果，避免重复创建。'), { uncertain: true }) }
+  if (response.status === 202 || body.state) throw Object.assign(new Error('分支结果待确认，请查询结果。'), { uncertain: true })
+  if (!response.ok) throw Object.assign(new Error(body.error ?? '创建分支失败，请重试。'), { uncertain: response.status >= 500 && response.status !== 503 })
+  if (!body.session?.id || body.session.id === sessionId || typeof body.draft !== 'string') throw Object.assign(new Error('分支结果待确认，请查询结果。'), { uncertain: true })
   return body
 }
 
-
+export function fetchSessionGraph(sessionId: string, signal?: AbortSignal) {
+  return configurationRequest<import('@pi-nest/contracts').PiSessionGraph>(`${sessionUrl(sessionId)}/graph`, { signal })
+}
 export async function fetchProjects() {
   const body = await configurationRequest<{ projects: PiProject[] }>('/api/projects')
   return body.projects

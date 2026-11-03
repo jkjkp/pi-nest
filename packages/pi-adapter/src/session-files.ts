@@ -245,6 +245,10 @@ async function readSummaryFromHandle(handle: FileHandle, signature: PiSessionFil
   let header: PiSessionHeader | undefined
   let name: string | undefined
   let firstMessage = ''
+  let edited = false
+  let editFallback = ''
+  let branchFirstMessage = ''
+  const firstByEntry = new Map<string, string>()
   let lastActivityTime: number | undefined
   let invalid = false
   let pending = ''
@@ -270,6 +274,17 @@ async function readSummaryFromHandle(handle: FileHandle, signature: PiSessionFil
       if (entry.type !== 'session' || typeof entry.id !== 'string') invalid = true
       else header = headerFromEntry(entry)
       return
+    }
+    if (typeof entry.id === 'string') {
+      const message = entry.message as Record<string, unknown> | undefined
+      const ownText = entry.type === 'message' && message?.role === 'user' ? sessionFirstMessage(textContent(message.content)) ?? '' : ''
+      branchFirstMessage = (typeof entry.parentId === 'string' ? firstByEntry.get(entry.parentId) : undefined) || ownText
+      firstByEntry.set(entry.id, branchFirstMessage)
+      if (entry.type === 'custom' && entry.customType === 'pi-nest-edit') {
+        edited = true
+        const data = entry.data as { previousLeafId?: unknown } | undefined
+        if (typeof data?.previousLeafId === 'string') editFallback = firstByEntry.get(data.previousLeafId) ?? ''
+      }
     }
     if (entry.type === 'session_info') {
       // The latest session_info wins, including an explicit clear.
@@ -321,7 +336,7 @@ async function readSummaryFromHandle(handle: FileHandle, signature: PiSessionFil
       cwd: header.cwd || undefined,
       sessionFile: file,
       name,
-      firstMessage: sessionFirstMessage(firstMessage),
+      firstMessage: sessionFirstMessage(edited ? branchFirstMessage || editFallback : firstMessage),
       createdAt: created && !Number.isNaN(created.getTime()) ? created.toISOString() : undefined,
       updatedAt: Number.isNaN(modifiedDate.getTime()) ? new Date(signature.mtimeMs).toISOString() : modifiedDate.toISOString(),
       parentSessionPath: header.parentSessionPath,
