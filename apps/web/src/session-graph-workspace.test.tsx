@@ -14,10 +14,9 @@ vi.mock('./workspace-api.js', () => ({
 }))
 vi.mock('./session-timeline.js', () => ({ SessionTimeline: (props: {
   onEditLast?: unknown; onRetrySteering?: unknown; sessionId: string; branchDisabled?: boolean; history?: { entries: unknown[] }
-  onBranchAnswer?: (id: string, revision: string) => Promise<void>; onBranchUser?: (id: string, revision: string) => Promise<void>
+  onBranchAnswer?: (id: string, revision: string) => Promise<void>
 }) => <div data-preview-session={props.sessionId} data-mutable={Boolean(props.onEditLast || props.onRetrySteering)} data-entries={props.history?.entries.length}>
   Read only<button disabled={props.branchDisabled} onClick={() => void props.onBranchAnswer?.('a', 'r').catch(() => {})}>从此轮后新建分支</button>
-  <button disabled={props.branchDisabled} onClick={() => void props.onBranchUser?.('u', 'r').catch(() => {})}>修改此轮新建分支</button>
 </div> }))
 let root: Root; let container: HTMLDivElement; let client: QueryClient
 beforeEach(() => {
@@ -71,11 +70,11 @@ it('returns to the mounted current conversation and can page through the full pr
   expect(container.querySelector('textarea')).toBe(input)
   expect(input?.parentElement?.inert).toBe(false)
 })
-it.each(['edit', 'continue'] as const)('creates %s from the specific message and preview revision', async (mode) => {
+it('creates a continuation branch from the specific answer and preview revision', async () => {
   onBranch.mockResolvedValue(undefined); await mount()
   await act(async () => node('other').click()); await settle()
-  await act(async () => button(mode === 'edit' ? '修改此轮新建分支' : '从此轮后新建分支').click())
-  expect(onBranch).toHaveBeenCalledExactlyOnceWith('other', { kind: 'fork', mode, entryId: mode === 'edit' ? 'u' : 'a', revision: 'r' })
+  await act(async () => button('从此轮后新建分支').click())
+  expect(onBranch).toHaveBeenCalledExactlyOnceWith('other', { kind: 'fork', mode: 'continue', entryId: 'a', revision: 'r' })
   expect(container.querySelector('textarea')?.parentElement?.inert).toBe(false)
 })
 it('does not clear a newer preview when an earlier branch operation finishes', async () => {
@@ -103,7 +102,6 @@ it('keeps native relations and the original conversation usable when SQLite is u
   vi.mocked(fetchSessionGraph).mockResolvedValue({ sessions, branchStorage: { available: false } })
   await mount(); expect(container.querySelectorAll('[data-session-node]')).toHaveLength(3)
   await act(async () => node('other').click()); await settle()
-  expect(button('修改此轮新建分支').disabled).toBe(true)
   expect(button('从此轮后新建分支').disabled).toBe(true)
   await act(async () => button('返回当前会话').click())
   expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('keep draft')

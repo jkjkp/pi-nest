@@ -31,7 +31,6 @@ export function SessionGraphPreview({ selection, cwd, branchDisabled, onBranch }
       onRequestTurnJump={(...args) => { beginTurnNavigation(); return view.requestTurnJump(...args) }} onReadTurnPrompt={view.readTurnPrompt} navigationNotice={view.navigationNotice} onRetryNavigation={view.retryNavigation}
       turns={run?.turns} systemEvents={run?.systemEvents} runStatus={run?.status} isRunning={isRunning}
       branchDisabled={branchDisabled || isRunning} editDisabled branchAnswerLabel="从此轮后新建分支"
-      onBranchUser={(entryId, revision) => onBranch({ kind: 'fork', mode: 'edit', entryId, revision })}
       onBranchAnswer={(entryId, revision) => onBranch({ kind: 'fork', mode: 'continue', entryId, revision })}
       onFinalAnswerStart={scrollToFinalAnswer} onFinalAnswerStream={followFinalAnswer}
       registerTimelineScroll={registerTimelineScroll} onRetry={view.retryHistory} scrollViewport={scrollViewport} />

@@ -26,7 +26,6 @@
 
 .user-prompt:focus-visible .user-prompt-actions,
 .user-prompt:has(:focus-visible) .user-prompt-actions,
-.user-prompt[data-editable="true"] .user-prompt-actions,
 .user-prompt[data-touch-revealed="true"] .user-prompt-actions {
   opacity: 1;
   visibility: visible;

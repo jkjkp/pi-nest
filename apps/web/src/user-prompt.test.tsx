@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -20,13 +21,29 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-async function renderPrompt(prompt = '第一行\n**原始文字**') {
+async function renderPrompt(prompt = '第一行\n**原始文字**', onEditLast?: (entryId: string) => void) {
   const history = { revision: 'fixture', session: { id: 'source' }, hasEarlier: false, entries: [
     { id: 'user', parentId: null, type: 'message', timestamp: '2026-10-25T00:00:00Z', raw: { type: 'message', message: { role: 'user', content: prompt } } },
   ] }
-  await act(() => root.render(<SessionTimeline error={false} isLoading={false} history={history} onRetry={() => {}} />))
+  await act(() => root.render(<SessionTimeline error={false} isLoading={false} history={history} onRetry={() => {}} onEditLast={onEditLast} />))
 }
 function copyButton() { return container.querySelector<HTMLButtonElement>('[aria-label="复制消息"]')! }
+
+it('hides the last editable user message actions until interaction', async () => {
+  const style = document.createElement('style')
+  style.textContent = readFileSync(`${import.meta.dirname}/index.css`, 'utf8')
+  document.head.append(style)
+  try {
+    await renderPrompt('最后一条消息', vi.fn())
+    expect(container.querySelector('[aria-label="编辑最后一条用户消息"]')).not.toBeNull()
+    const actions = container.querySelector<HTMLElement>('.user-prompt-actions')!
+    expect(getComputedStyle(actions).visibility).toBe('hidden')
+    expect(getComputedStyle(actions).opacity).toBe('0')
+    expect(getComputedStyle(actions).pointerEvents).toBe('none')
+  } finally {
+    style.remove()
+  }
+})
 
 it('copies the full collapsed prompt and resets its borderless success icon', async () => {
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(300)
@@ -158,22 +175,16 @@ it('keeps the prompt toggle transparent in both states with a small directional 
   expect(container.querySelector('.bg-gradient-to-t')).not.toBeNull()
 })
 
-it('creates an independent edit branch on any native user message without invoking same-file editing', async () => {
-  const onBranchUser = vi.fn().mockRejectedValueOnce(new Error('关系存储不可用')).mockResolvedValue(undefined)
+it('only offers copy and last-message editing on user bubbles', async () => {
   const onEditLast = vi.fn()
   const entries = ['older', 'latest'].map((id, index) => ({ id, parentId: index ? 'older' : null, type: 'message', timestamp: '2026-11-03T00:00:00Z', raw: { message: { role: 'user', content: id } } }))
   const history = { revision: 'branch-revision', session: { id: 'source' }, hasEarlier: false, entries }
-  const render = (branchDisabled = false) => act(() => root.render(<SessionTimeline error={false} isLoading={false} history={history} onRetry={() => {}} onEditLast={onEditLast} onBranchUser={onBranchUser} branchDisabled={branchDisabled} />))
-  await render()
-  const buttons = container.querySelectorAll<HTMLButtonElement>('[aria-label="修改此轮新建分支"]')
-  expect(buttons).toHaveLength(2)
-  await act(async () => buttons[0].click())
-  expect(onBranchUser).toHaveBeenCalledExactlyOnceWith('older', 'branch-revision')
-  expect(onEditLast).not.toHaveBeenCalled()
-  expect(container.querySelector('[role="alert"]')?.textContent).toBe('关系存储不可用')
-  await act(async () => buttons[0].click())
-  expect(container.querySelector('[role="alert"]')).toBeNull()
-  await render(true)
+  await act(() => root.render(<SessionTimeline error={false} isLoading={false} history={history} onRetry={() => {}} onEditLast={onEditLast} />))
   expect(container.querySelector('[aria-label="修改此轮新建分支"]')).toBeNull()
+  expect([...container.querySelectorAll('.user-prompt-actions')].map((actions) => [...actions.querySelectorAll('button')].map((button) => button.getAttribute('aria-label')))).toEqual([
+    ['复制消息'], ['复制消息', '编辑最后一条用户消息'],
+  ])
   expect(container.querySelectorAll('[aria-label="编辑最后一条用户消息"]')).toHaveLength(1)
+  await act(() => container.querySelector<HTMLButtonElement>('[aria-label="编辑最后一条用户消息"]')!.click())
+  expect(onEditLast).toHaveBeenCalledExactlyOnceWith('latest')
 })

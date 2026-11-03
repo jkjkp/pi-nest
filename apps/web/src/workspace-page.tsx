@@ -222,10 +222,6 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   onRequestTurnJump={navigateToTurn}
                   onReadTurnPrompt={readTurnPrompt}
                   branchDisabled={mutatingSessionId !== undefined}
-                  onBranchUser={async (entryId, revision) => {
-                    const result = await session.createBranch({ kind: 'fork', mode: 'edit', entryId, revision })
-                    if (currentSessionRef.current === selectedSessionId) selectSession(result.session.id)
-                  }}
                   onBranchAnswer={async (entryId, revision) => {
                     const result = await session.createBranch({ kind: 'fork', entryId, revision })
                     if (currentSessionRef.current === selectedSessionId) selectSession(result.session.id)
