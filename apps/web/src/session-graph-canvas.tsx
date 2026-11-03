@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { fitDiagramCamera, panDiagramCamera, zoomDiagramCamera, type DiagramCamera } from './diagram-camera.js'
 import type { GraphNode } from './session-graph-model.js'
@@ -39,7 +40,7 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
       <Button size="sm" variant="ghost" onClick={() => { const next = measured(); setCamera(fitDiagramCamera({ width: Math.max(480, ...nodes.map((node) => node.x + 284)), height: Math.max(300, ...nodes.map((node) => node.y + 156)) }, next)) }}>适应画布</Button>
       <Button size="sm" variant="ghost" onClick={onLocate}>定位当前</Button>
     </div>
-    <div ref={(element) => { viewport.current = element }} tabIndex={0} aria-label="会话分支画布，方向键平移，点击节点只读查看" className="relative min-h-0 flex-1 touch-none overflow-clip bg-muted/20 outline-offset-[-2px]"
+    <div ref={(element) => { viewport.current = element }} tabIndex={0} aria-label="会话分支画布，方向键平移，点击节点查看会话" className="relative min-h-0 flex-1 touch-none overflow-clip bg-muted/20 outline-offset-[-2px]"
       onFocus={() => { const next = measured(); if (next.width !== camera.width || next.height !== camera.height) setCamera(next) }}
       onKeyDown={(event) => { if (event.target !== event.currentTarget) return; const move = ({ ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80] } as Record<string, number[]>)[event.key]; if (move) { event.preventDefault(); setCamera(panDiagramCamera(measured(), move[0], move[1])) } }}
       onPointerDown={(event) => { if (event.button !== 0 || (event.target as Element).closest('button')) return; drag.current = { x: event.clientX, y: event.clientY }; event.currentTarget.setPointerCapture(event.pointerId) }}
@@ -51,17 +52,25 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
         </g>
       </svg>
       <div className="absolute origin-top-left" style={{ transform: `translate(${camera.x}px,${camera.y}px) scale(${camera.scale})` }}>
-        {visible.map((node) => <div key={node.id} data-session-node={node.id} className="absolute h-[132px] w-[260px]" style={{ left: node.x, top: node.y }}>
-          <button type="button" aria-pressed={node.id === selectedNodeId} title={node.label}
-            className={`flex size-full flex-col gap-1 rounded-lg border bg-card p-3 text-left text-xs shadow-sm hover:bg-accent focus-visible:outline-2 focus-visible:outline-primary ${node.id === selectedNodeId ? 'ring-2 ring-primary' : node.id === selectedSessionId ? 'border-primary/60' : ''}`}
+        {visible.map((node) => {
+          const state = node.id === selectedSessionId ? 'current' : node.id === selectedNodeId ? 'preview' : 'idle'
+          return <div key={node.id} data-session-node={node.id} className="absolute h-[132px] w-[260px]" style={{ left: node.x, top: node.y }}>
+          <button type="button" data-node-state={state} aria-current={state === 'current' ? 'true' : undefined} aria-pressed={state === 'preview'} title={node.label}
+            className="session-graph-node flex size-full flex-col gap-1 rounded-lg border-2 bg-card p-3 text-left text-xs shadow-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground"
             onClick={() => onSelect(node)}>
-            <span className="pr-6 text-muted-foreground">{node.id === selectedSessionId ? '当前会话' : '独立会话'}{node.status ? ` · ${node.status}` : ''}{node.id === selectedNodeId ? ' · 预览中' : ''}</span>
+            <span className="flex h-[18px] w-full min-w-0 items-center gap-2 pr-6">
+              <span className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] leading-[14px] ${state === 'current' ? 'bg-ring/15 text-foreground' : state === 'preview' ? 'bg-warning/15 text-foreground' : 'text-muted-foreground'}`}>
+                {state === 'preview' && <Eye aria-hidden="true" className="size-3" />}
+                {state === 'current' ? '当前会话' : state === 'preview' ? '只读预览' : '独立会话'}
+              </span>
+              {node.status && <span className="truncate text-muted-foreground">{node.status}</span>}
+            </span>
             <span className="w-full truncate font-medium">{node.label}</span>
             <span className="line-clamp-2 break-all text-muted-foreground">{node.summary}</span>
             {(node.notice || node.connectionLabel) && <span className={`mt-auto w-full truncate ${node.notice ? 'text-destructive' : 'text-muted-foreground'}`} title={[node.notice, node.connectionLabel, node.sourceEntryId && `来源节点 ${node.sourceEntryId}`].filter(Boolean).join(' · ')}>{node.notice || node.connectionLabel}</span>}
           </button>
           {node.hasChildren && <Button size="icon-sm" variant="ghost" className="absolute right-1 top-1" aria-label={`${node.collapsed ? '展开' : '折叠'} ${node.label} 的子会话`} aria-expanded={!node.collapsed} onClick={() => onToggle(node.id)}>{node.collapsed ? '+' : '−'}</Button>}
-        </div>)}
+        </div>})}
       </div>
     </div>
   </div>

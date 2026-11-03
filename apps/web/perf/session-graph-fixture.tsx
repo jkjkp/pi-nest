@@ -9,7 +9,18 @@ import { useWorkspaceStore } from '../src/workspace-store.js'
 import { runtimeFixture } from './runtime-fixture.js'
 import type { PiSessionSummary } from '@pi-nest/contracts'
 
-const large = new URLSearchParams(location.search).has('large')
+const params = new URLSearchParams(location.search)
+// Exercise the existing light theme without changing the host's appearance settings.
+if (params.has('light')) {
+  const disableDarkRules = (rules: CSSRuleList) => {
+    for (const rule of rules) {
+      if (rule instanceof CSSMediaRule && rule.conditionText.includes('prefers-color-scheme: dark')) rule.media.mediaText = 'not all'
+      else if ('cssRules' in rule) disableDarkRules(rule.cssRules as CSSRuleList)
+    }
+  }
+  for (const sheet of document.styleSheets) disableDarkRules(sheet.cssRules)
+}
+const large = params.has('large')
 const revision = 'a'.repeat(64)
 const timestamp = new Date().toISOString()
 const sessions: PiSessionSummary[] = Array.from({ length: large ? 100 : 3 }, (_, index) => ({
