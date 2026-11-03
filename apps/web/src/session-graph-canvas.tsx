@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -11,7 +11,9 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
   const drag = useRef<{ x: number; y: number } | undefined>(undefined)
   useEffect(() => {
     if (!viewport.current) return
-    const observer = new ResizeObserver(([entry]) => setCamera((value) => ({ ...value, width: entry.contentRect.width, height: entry.contentRect.height })))
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width > 0 && entry.contentRect.height > 0) setCamera((value) => ({ ...value, width: entry.contentRect.width, height: entry.contentRect.height }))
+    })
     observer.observe(viewport.current)
     return () => observer.disconnect()
   }, [])
@@ -22,16 +24,31 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
   })
   const visibleIds = new Set(visible.map((node) => node.id))
   function measured() { const rect = viewport.current?.getBoundingClientRect(); return { ...camera, width: rect?.width || camera.width, height: rect?.height || camera.height } }
-  const lastLocate = useRef<string | undefined>(undefined)
-  useEffect(() => {
-    const key = JSON.stringify([selectedSessionId, locateRequest])
+  const previousLayout = useRef<{ byId: Map<string, GraphNode>; current: string; locateRequest: number } | undefined>(undefined)
+  useLayoutEffect(() => {
     const node = byId.get(selectedSessionId)
-    if (lastLocate.current === key || !node) return
-    const frame = requestAnimationFrame(() => {
-      lastLocate.current = key
-      setCamera((value) => ({ ...value, x: 24 - node.x * value.scale, y: 48 - node.y * value.scale }))
+    if (!node) return
+    const previous = previousLayout.current
+    previousLayout.current = { byId, current: selectedSessionId, locateRequest }
+    setCamera((value) => {
+      const rect = viewport.current?.getBoundingClientRect()
+      const width = rect?.width || value.width; const height = rect?.height || value.height
+      const anchor = previous?.byId.get(previous.current)
+      const shared = anchor && byId.has(anchor.id) ? anchor : [...(previous?.byId.values() ?? [])].find((item) => byId.has(item.id))
+      let x = value.x; let y = value.y
+      if (shared) {
+        const next = byId.get(shared.id)!
+        x += (shared.x - next.x) * value.scale; y += (shared.y - next.y) * value.scale
+      }
+      if (!shared || previous?.locateRequest !== locateRequest) {
+        x = 24 - node.x * value.scale; y = 48 - node.y * value.scale
+      } else if (previous.current !== selectedSessionId) {
+        const left = node.x * value.scale + x; const top = node.y * value.scale + y
+        x += left < 24 ? 24 - left : Math.min(0, width - 24 - left - 260 * value.scale)
+        y += top < 48 ? 48 - top : Math.min(0, height - 24 - top - 132 * value.scale)
+      }
+      return x === value.x && y === value.y && width === value.width && height === value.height ? value : { ...value, x, y, width, height }
     })
-    return () => cancelAnimationFrame(frame)
   }, [locateRequest, byId, selectedSessionId])
   return <div className="flex min-h-0 flex-1 flex-col">
     <div className="flex flex-wrap items-center gap-1 border-b p-2">

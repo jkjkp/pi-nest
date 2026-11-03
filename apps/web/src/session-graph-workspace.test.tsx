@@ -297,3 +297,50 @@ it('omits the graph banner and refresh row while retaining narrow-screen navigat
   await act(async () => button('返回画布').click())
   expect(container.querySelector('[aria-label="当前会话对话"]')?.getAttribute('aria-hidden')).toBe('true')
 })
+
+async function renderTarget(sessionId: string) {
+  await act(async () => root.render(<QueryClientProvider client={client}><SessionGraphWorkspace enabled sessionId={sessionId} onPreview={() => {}} onCurrentNodeClick={onCurrentNodeClick} onSelect={onSelect} onBranch={onBranch} onRename={onRename} onClone={onClone} onDelete={onDelete}>
+    <textarea aria-label="Existing draft" defaultValue="keep draft" />
+  </SessionGraphWorkspace></QueryClientProvider>))
+}
+
+it('keeps cached family cards mounted while another current session in that family loads', async () => {
+  await renderTarget('source'); await settle()
+  const source = node('source')
+  let finish!: (graph: Awaited<ReturnType<typeof fetchSessionGraph>>) => void
+  vi.mocked(fetchSessionGraph).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+  await renderTarget('other'); await settle()
+  expect(container.querySelectorAll('[data-session-node]')).toHaveLength(3)
+  expect(node('source')).toBe(source)
+  expect(node('other').getAttribute('aria-current')).toBe('true')
+  await act(async () => finish({ sessions, branchStorage: { available: true } })); await settle()
+  expect(node('source')).toBe(source)
+})
+
+it('does not show an unrelated family while its new graph loads or fails, and permits retry', async () => {
+  await renderTarget('source'); await settle()
+  let fail!: (cause: Error) => void
+  vi.mocked(fetchSessionGraph).mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject }))
+  await renderTarget('unrelated'); await settle()
+  expect(container.querySelectorAll('[data-session-node]')).toHaveLength(0)
+  expect(container.textContent).toContain('正在读取关联会话')
+  await act(async () => fail(new Error('Read failed'))); await settle()
+  expect(container.querySelectorAll('[data-session-node]')).toHaveLength(0)
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('关联会话读取失败')
+  vi.mocked(fetchSessionGraph).mockResolvedValueOnce({ sessions: [{ id: 'unrelated', cwd: '/w' }], branchStorage: { available: true } })
+  await act(async () => button('重试').click()); await settle()
+  expect(node('unrelated')).toBeTruthy()
+  expect(node('source')).toBeNull()
+})
+
+it('retains another branch fold when the current session changes inside the same family', async () => {
+  const family = [...sessions, { id: 'parallel', name: 'Parallel', cwd: '/w', parentSessionId: 'source' }]
+  vi.mocked(fetchSessionGraph).mockResolvedValue({ sessions: family, branchStorage: { available: true } })
+  await renderTarget('source'); await settle()
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="折叠 Other 的子会话"]')!.click())
+  expect(node('grandchild')).toBeNull()
+  await renderTarget('parallel'); await settle()
+  expect(node('grandchild')).toBeNull()
+  expect(container.querySelector('[aria-label="展开 Other 的子会话"]')?.getAttribute('aria-expanded')).toBe('false')
+  expect(node('parallel').getAttribute('aria-current')).toBe('true')
+})

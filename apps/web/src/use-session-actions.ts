@@ -1,7 +1,8 @@
 import { useRef, useState, type RefObject } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, type Query } from '@tanstack/react-query'
 import type { SetURLSearchParams } from 'react-router'
-import type { PiSessionBranchRequest, PiSessionBranchResponse, PiSessionSummary } from '@pi-nest/contracts'
+import type { PiSessionBranchRequest, PiSessionBranchResponse, PiSessionGraph, PiSessionSummary } from '@pi-nest/contracts'
+import { graphFamily } from '@pi-nest/contracts/session-graph'
 import { setDraftAttachments, useAttachmentStore } from './attachment-draft.js'
 import { sessionHistoryQueryKey } from './history.js'
 import type { SessionRunController } from './session-run-controller.js'
@@ -26,9 +27,24 @@ export function useSessionActions({ sessionRuns, selectedSessionId, selectedSess
   const branchingSession = useRef<string | undefined>(undefined)
   const [mutatingSessionId, setMutatingSessionId] = useState<string>()
 
-  function applyBranchResult(result: PiSessionBranchResponse) {
+  function relatedGraphs(sessionId: string) {
+    const family = graphFamily(queryClient.getQueryData<PiSessionSummary[]>(['sessions']) ?? sessions, sessionId)
+    return { queryKey: ['session-graph'], predicate: (query: Query) => family.some((session) => session.id === query.queryKey[1]) || ((query.state.data as PiSessionGraph | undefined)?.sessions.some((session) => session.id === sessionId) ?? false) }
+  }
+
+  async function applyBranchResult(result: PiSessionBranchResponse, sourceId: string) {
     queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => [result.session, ...(current ?? []).filter((session) => session.id !== result.session.id)])
-    void queryClient.invalidateQueries({ queryKey: ['session-graph'] })
+    const related = relatedGraphs(sourceId)
+    await queryClient.cancelQueries(related)
+    const graphs = queryClient.getQueriesData<PiSessionGraph>(related)
+    const source = graphs.find(([, graph]) => graph)?.[1] ?? { sessions: queryClient.getQueryData<PiSessionSummary[]>(['sessions']) ?? [], branchStorage: useWorkspaceStore.getState().branchStorage }
+    for (const [key, graph] of graphs) {
+      const current = graph ?? source
+      queryClient.setQueryData(key, { ...current, sessions: graphFamily([...current.sessions.filter((session) => session.id !== result.session.id), result.session], key[1] as string) })
+    }
+    queryClient.setQueryData(['session-graph', result.session.id], { ...source, sessions: graphFamily([...source.sessions.filter((session) => session.id !== result.session.id), result.session], result.session.id) })
+    // The destination refetches on selection; fetching the source here would duplicate that read.
+    void queryClient.invalidateQueries({ ...related, refetchType: 'none' })
     const store = useWorkspaceStore.getState()
     if (!result.draftRecoveryRequired && !store.drafts[result.session.id] && !useAttachmentStore.getState().drafts[result.session.id]?.length) {
       store.setDraft(result.session.id, result.draft)
@@ -51,7 +67,7 @@ export function useSessionActions({ sessionRuns, selectedSessionId, selectedSess
       try { result = await branchSession(sessionId, { ...request, operationId }) }
       catch (cause) { if (!(cause as { uncertain?: boolean }).uncertain) store.setBranchOperation(sessionId); throw cause }
       store.setBranchOperation(sessionId)
-      applyBranchResult(result)
+      await applyBranchResult(result, sessionId)
       return result
     } finally { branchingSession.current = undefined; setMutatingSessionId(undefined) }
   }
@@ -63,7 +79,7 @@ export function useSessionActions({ sessionRuns, selectedSessionId, selectedSess
     const operation = await fetchBranchOperation(sessionId, saved.operationId)
     if (operation.result) {
       const result = operation.result
-      applyBranchResult(result)
+      await applyBranchResult(result, sessionId)
       store.setBranchOperation(sessionId)
       return result
     }
@@ -86,16 +102,32 @@ export function useSessionActions({ sessionRuns, selectedSessionId, selectedSess
     setMutatingSessionId(sessionId)
     try {
       await deleteSession(sessionId)
-      void queryClient.invalidateQueries({ queryKey: ['session-graph'] })
+      const related = relatedGraphs(sessionId)
+      await queryClient.cancelQueries(related)
+      const graphs = queryClient.getQueriesData<PiSessionGraph>(related)
+      for (const [key, graph] of graphs) if (key[1] !== sessionId) {
+        const current = graph ?? { sessions: queryClient.getQueryData<PiSessionSummary[]>(['sessions']) ?? sessions, branchStorage: useWorkspaceStore.getState().branchStorage }
+        queryClient.setQueryData(key, { ...current, sessions: graphFamily(current.sessions.filter((session) => session.id !== sessionId), key[1] as string) })
+      }
+      queryClient.removeQueries({ queryKey: ['session-graph', sessionId], exact: true })
       sessionRuns.removeSessionNotification(sessionId)
       useWorkspaceStore.getState().clearFilePreview(sessionId)
       queryClient.removeQueries({ queryKey: ['session-file-preview', sessionId] })
       queryClient.setQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'], (current) => current?.filter((session) => session.id !== sessionId))
       if (selectedSessionIdRef.current === sessionId) {
-        const next = projects.flatMap((project) => project.sessions).find((session) => session.id !== sessionId)
+        const remaining = projects.flatMap((project) => project.sessions).filter((session) => session.id !== sessionId)
+        const deleted = sessions.find((session) => session.id === sessionId)
+        const family = graphFamily(sessions, sessionId)
+        const next = remaining.find((session) => session.id === deleted?.parentSessionId && family.some((member) => member.id === session.id))
+          ?? remaining.find((session) => family.some((member) => member.id === session.id))
+          ?? remaining.find((session) => session.cwd === deleted?.cwd)
+          ?? remaining[0]
+        if (next && !queryClient.getQueryData(['session-graph', next.id])) queryClient.setQueryData(['session-graph', next.id], { sessions: graphFamily(remaining, next.id), branchStorage: useWorkspaceStore.getState().branchStorage })
+        if (next) void queryClient.invalidateQueries({ queryKey: ['session-graph', next.id], exact: true, refetchType: 'none' })
         if (!next) sessionRuns.releaseForeground()
         setSearchParams(next ? { session: next.id } : {})
       }
+      void queryClient.invalidateQueries({ queryKey: ['session-graph'], predicate: (query) => graphs.some(([key]) => key[1] === query.queryKey[1]) && query.queryKey[1] !== sessionId })
       queryClient.removeQueries({ queryKey: sessionHistoryQueryKey(sessionId) })
       queryClient.removeQueries({ queryKey: ['session-history-page', sessionId] })
       await refetchSessions()

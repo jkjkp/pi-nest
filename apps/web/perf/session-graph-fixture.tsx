@@ -58,6 +58,7 @@ const report = () => { metrics.textContent = JSON.stringify({ sessions: sessions
 if (PerformanceObserver.supportedEntryTypes.includes('longtask')) new PerformanceObserver((list) => { longTasks.push(...list.getEntries().map((entry) => entry.duration)); report() }).observe({ type: 'longtask' })
 window.fetch = async (input, init) => {
   const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.origin)
+  if (params.has('slow') && (url.pathname.endsWith('/graph') || url.pathname.endsWith('/history') || url.pathname.endsWith('/branch'))) await new Promise((resolve) => setTimeout(resolve, 300))
   const id = decodeURIComponent(url.pathname.split('/')[3] ?? selected)
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
   if (url.pathname.endsWith('/bootstrap')) return json({ token: 'fixture', runtimeId: 'fixture', websocketPath: '/fixture-ws' })

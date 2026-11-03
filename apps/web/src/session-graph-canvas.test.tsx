@@ -1,6 +1,8 @@
 // @vitest-environment happy-dom
 import { renderToStaticMarkup } from 'react-dom/server'
-import { expect, it } from 'vitest'
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { expect, it, vi } from 'vitest'
 import { SessionGraphCanvas } from './session-graph-canvas.js'
 import type { GraphNode } from './session-graph-model.js'
 
@@ -40,4 +42,72 @@ it('keeps the current identity when a stale preview id equals the send target', 
   expect(node('current').getAttribute('data-node-state')).toBe('current')
   expect(node('current').getAttribute('aria-pressed')).toBe('false')
   expect(node('current').textContent).not.toContain('只读预览')
+})
+
+async function withCanvas(check: (fixture: {
+  container: HTMLDivElement; update: (current: string, nextNodes?: GraphNode[], locate?: number) => Promise<void>
+  transform: () => string; position: (id: string) => { x: number; y: number }
+}) => Promise<void>) {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  const container = document.createElement('div'); document.body.append(container)
+  const root = createRoot(container)
+  const transform = () => container.querySelector<HTMLElement>('[data-session-node]')!.parentElement!.style.transform
+  const position = (id: string) => {
+    const node = container.querySelector<HTMLElement>(`[data-session-node="${id}"]`)!
+    const [x, y, scale] = transform().match(/-?\d+(?:\.\d+)?/g)!.map(Number)
+    return { x: Number.parseFloat(node.style.left) * scale + x, y: Number.parseFloat(node.style.top) * scale + y }
+  }
+  async function update(current: string, nextNodes = nodes, locate = 0) {
+    await act(async () => root.render(<SessionGraphCanvas renderNodeMenu={() => null} nodes={nextNodes} selectedSessionId={current} locateRequest={locate} onSelect={() => {}} onToggle={() => {}} onLocate={() => {}} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)) })
+  }
+  try { await update('current'); await check({ container, update, transform, position }) }
+  finally { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals() }
+}
+
+it('keeps the viewport and mounted cards when switching to an already visible current node', async () => {
+  await withCanvas(async ({ container, update, transform }) => {
+    const before = transform()
+    const card = container.querySelector('[data-session-node="current"]')
+    await update('preview')
+    expect(transform()).toBe(before)
+    expect(container.querySelector('[data-session-node="current"]')).toBe(card)
+    expect(container.querySelector('[aria-current="true"]')?.getAttribute('title')).toBe('preview')
+  })
+})
+
+it('anchors the existing current node on screen when deletion changes the tree layout', async () => {
+  await withCanvas(async ({ update, position }) => {
+    const before = position('current')
+    await update('current', nodes.map((node) => ({ ...node, y: node.y + 164 })))
+    expect(position('current')).toEqual(before)
+  })
+})
+
+it('still locates the current node when the user explicitly requests it', async () => {
+  await withCanvas(async ({ update, position }) => {
+    await update('preview')
+    await update('preview', nodes, 1)
+    expect(position('preview')).toEqual({ x: 24, y: 48 })
+  })
+})
+
+it('keeps the new current card visible after switching while the narrow-screen canvas is hidden', async () => {
+  let resize!: (width: number, height: number) => void
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(callback: (entries: { contentRect: { width: number; height: number } }[]) => void) { resize = (width, height) => callback([{ contentRect: { width, height } }]) }
+    observe() {}
+    disconnect() {}
+  })
+  await withCanvas(async ({ update, position }) => {
+    await act(async () => resize(500, 400))
+    await act(async () => resize(0, 0))
+    await update('preview')
+    await act(async () => resize(500, 400))
+    const point = position('preview')
+    expect(point.x).toBeGreaterThanOrEqual(0)
+    expect(point.y).toBeGreaterThanOrEqual(0)
+    expect(point.x + 260).toBeLessThanOrEqual(500)
+    expect(point.y + 132).toBeLessThanOrEqual(400)
+  })
 })

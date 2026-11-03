@@ -24,8 +24,10 @@ describe('SessionTimeline', () => {
     expect(markup).toContain('data-turn-file-summary')
   })
 
-  it('renders nothing while history loads, then displays the loaded messages', () => {
-    expect(render(<SessionTimeline error={false} history={undefined} isLoading onRetry={() => undefined} />)).toBe('')
+  it('shows a loading state while history loads, then displays the loaded messages', () => {
+    const loading = render(<SessionTimeline error={false} history={undefined} isLoading onRetry={() => undefined} />)
+    expect(loading).toContain('role="status"')
+    expect(loading).toContain('正在读取会话')
     expect(render(<SessionTimeline error={false} history={history} isLoading={false} onRetry={() => undefined} />)).toContain('answer')
   })
 

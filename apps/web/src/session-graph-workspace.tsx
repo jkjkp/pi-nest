@@ -1,8 +1,8 @@
 import { useShallow } from 'zustand/react/shallow'
 import { sessionDisplayName, sessionStatusLabel } from './workspace.js'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import type { PiSessionBranchRequest, PiSessionSummary } from '@pi-nest/contracts'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import type { PiSessionBranchRequest, PiSessionGraph, PiSessionSummary } from '@pi-nest/contracts'
 import { Button } from '@/components/ui/button'
 import { ArrowRight, Copy, Pencil, Trash2 } from 'lucide-react'
 import { ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from '@/components/ui/context-menu'
@@ -22,7 +22,7 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
 }) {
   const root = useRef<HTMLDivElement>(null)
   const [wide, setWide] = useState(false)
-  const [folds, setFolds] = useState<{ owner: string; collapsed: Record<string, boolean> }>({ owner: sessionId, collapsed: {} })
+  const [folds, setFolds] = useState<Record<string, boolean>>({})
   const [locateRequest, setLocateRequest] = useState(0)
   const [showDetails, setShowDetails] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -35,11 +35,20 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
   useLayoutEffect(() => { intent.current = { sessionId, selection } }, [sessionId, selection])
   const statuses = useWorkspaceStore(useShallow((state) => Object.fromEntries(Object.keys({ ...state.sessionNotifications, ...state.runs }).map((id) => [id, state.runs[id]?.status ?? (state.sessionNotifications[id]?.pendingRunId ? 'running' : 'idle')]))))
   const pendingOperation = useWorkspaceStore((state) => selection ? state.branchOperations[selection.sessionId] : undefined)
-  const graph = useQuery({ queryKey: ['session-graph', sessionId], enabled: enabled && Boolean(sessionId), queryFn: ({ signal }) => fetchSessionGraph(sessionId, signal), retry: false })
+  const queryClient = useQueryClient()
+  const graph = useQuery({ queryKey: ['session-graph', sessionId], enabled: enabled && Boolean(sessionId), queryFn: ({ signal }) => fetchSessionGraph(sessionId, signal), retry: false,
+    initialData: () => queryClient.getQueriesData<PiSessionGraph>({ queryKey: ['session-graph'] }).find(([, data]) => data?.sessions.some((session) => session.id === sessionId))?.[1],
+  })
   const sessions = graph.data?.sessions
+  const revealedSession = useRef<string | undefined>(undefined)
+  useLayoutEffect(() => {
+    if (revealedSession.current === sessionId || !sessions?.some((session) => session.id === sessionId)) return
+    revealedSession.current = sessionId
+    setFolds((value) => graphAncestors(sessions, sessionId).some((id) => value[id]) ? { ...value, ...Object.fromEntries(graphAncestors(sessions, sessionId).map((id) => [id, false])) } : value)
+  }, [sessionId, sessions])
   const nodes = useMemo(() => {
-    return layoutGraph(sessions ?? [], folds.owner === sessionId ? folds.collapsed : {}).map((node) => statuses[node.id] ? { ...node, status: sessionStatusLabel(statuses[node.id]) } : node)
-  }, [sessions, folds, sessionId, statuses])
+    return layoutGraph(sessions ?? [], folds).map((node) => node.id === mutationSessionId ? { ...node, status: '更新中…' } : statuses[node.id] ? { ...node, status: sessionStatusLabel(statuses[node.id]) } : node)
+  }, [sessions, folds, statuses, mutationSessionId])
   useEffect(() => {
     if (!root.current) return
     const observer = new ResizeObserver(([entry]) => setWide(entry.contentRect.width >= 960))
@@ -91,7 +100,7 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
     setShowDetails(true)
   }
   function revealCurrent() {
-    setFolds((value) => ({ owner: sessionId, collapsed: { ...(value.owner === sessionId ? value.collapsed : {}), ...Object.fromEntries(graphAncestors(sessions ?? [], sessionId).map((id) => [id, false])) } }))
+    setFolds((value) => ({ ...value, ...Object.fromEntries(graphAncestors(sessions ?? [], sessionId).map((id) => [id, false])) }))
     setLocateRequest((value) => value + 1)
   }
   async function branch(request: PiSessionBranchRequest) {
@@ -122,10 +131,7 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
         {graph.isPending && <p role="status" className="p-2 text-xs">正在读取关联会话…</p>}
         <SessionGraphCanvas renderNodeMenu={nodeMenu} nodes={nodes} selectedSessionId={sessionId} selectedNodeId={selection?.sessionId} onSelect={choose}
           toolbarActions={enabled && !wide && <Button size="sm" variant="ghost" onClick={() => setShowDetails(true)}>查看对话</Button>}
-          locateRequest={locateRequest} onLocate={revealCurrent} onToggle={(id) => setFolds((value) => {
-            const collapsed = value.owner === sessionId ? value.collapsed : {}
-            return { owner: sessionId, collapsed: { ...collapsed, [id]: !collapsed[id] } }
-          })} />
+          locateRequest={locateRequest} onLocate={revealCurrent} onToggle={(id) => setFolds((value) => ({ ...value, [id]: !value[id] }))} />
       </section>
       <section aria-label={selection ? '节点只读预览' : '当前会话对话'} aria-hidden={enabled && !wide && !showDetails} inert={enabled && !wide && !showDetails} className={`${enabled && !wide && !showDetails ? 'invisible pointer-events-none absolute inset-0' : 'relative'} flex min-h-0 min-w-0 flex-col`}>
         {enabled && !wide && showDetails && <div className="border-b p-2"><Button size="sm" variant="ghost" onClick={() => setShowDetails(false)}>返回画布</Button></div>}
@@ -135,7 +141,7 @@ export function SessionGraphWorkspace({ enabled, sessionId, selection, onPreview
             <Button size="sm" variant="ghost" onClick={() => onPreview(undefined)}>返回当前会话</Button>
             <Button size="sm" variant="outline" onClick={() => switchTo(selection.sessionId)}>切换到此会话继续</Button>
           </div>
-          {pendingOperation && <p role="status" className="p-2 text-xs">此会话分支创建结果待确认；请切换到此会话后查询结果，勿重复创建。</p>}
+          {pendingOperation && !saving && mutationSessionId !== selection.sessionId && <p role="status" className="p-2 text-xs">此会话分支创建结果待确认；请切换到此会话后查询结果，勿重复创建。</p>}
           <SessionGraphPreview key={selection.sessionId} selection={selection} cwd={source?.cwd} onBranch={branch} branchDisabled={saving || Boolean(pendingOperation) || !graph.data?.branchStorage.available} />
         </>}
         <div aria-hidden={Boolean(selection)} inert={Boolean(selection)} className={`${selection ? 'invisible pointer-events-none absolute inset-0' : 'relative'} flex min-h-0 flex-1 flex-col`}>{children}</div>

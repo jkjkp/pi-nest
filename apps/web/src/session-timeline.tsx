@@ -213,7 +213,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     return onReadTurnPrompt(entry.id, historyPageCursorForTurn(railEntries, entry.id))
   }, [items, onReadTurnPrompt, railEntries])
 
-  if (isLoading && items.length === 0 && !messageEdit) return null
+  if (isLoading && items.length === 0 && !messageEdit) return <section role="status" aria-busy="true" className="conversation-stage min-h-40 py-8"><p className="conversation-stage-content text-sm text-muted-foreground">正在读取会话…</p></section>
   if (error && items.length === 0 && !messageEdit) return <HistoryError onRetry={onRetry} />
 
   const pendingImplementation = pendingInputs.filter((input) => input.mode === 'plan_implementation')
