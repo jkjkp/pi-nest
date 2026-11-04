@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { preparePiImage } from '@pi-nest/pi-adapter'
 import { createApp } from './app.js'
 import { createSessionIndexFixture } from './test-fixtures/session-index.js'
-import { PiRuntimeRegistry } from './pi-runtime-registry.js'
+import { PiRuntimeRegistry, PiSessionDeletionError } from './pi-runtime-registry.js'
 import type { PiRuntimeHost } from './pi-runtime-host.js'
 import { RuntimeSecurity } from './runtime-security.js'
 
@@ -73,6 +73,7 @@ function runtimeMock() {
     beginPrompt: vi.fn(),
     beginMutation: vi.fn().mockResolvedValue(() => undefined),
     deleteSession: vi.fn().mockResolvedValue(undefined),
+    deleteIdleSession: vi.fn(async (_sessionId: string, removeFile: () => Promise<unknown>) => { await removeFile() }),
     isPromptStreaming: vi.fn().mockReturnValue(false),
     startPrompt: vi.fn(),
   }
@@ -198,18 +199,53 @@ describe('Pi Nest API', () => {
     expect(renamePiSession).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', name: 'Renamed', sessionFile: '/pi/session.jsonl' })
     expect(sessionIndex.invalidateCalls).toEqual(['/pi/session.jsonl'])
     expect(finish).toHaveBeenCalledOnce()
-    runtime.beginMutation.mockReturnValueOnce(undefined)
+    runtime.deleteIdleSession.mockRejectedValueOnce(new PiSessionDeletionError('SESSION_RUNNING', 409, 'Pi session is busy'))
     expect((await app().request('/api/sessions/session-1', { method: 'DELETE' })).status).toBe(409)
     expect(deletePiSession).not.toHaveBeenCalled()
   })
 
   it('removes the exact native file from the shared index after deletion', async () => {
-    runtime.beginMutation.mockReturnValueOnce(Promise.resolve(vi.fn()))
     const response = await app().request('/api/sessions/session-1', { method: 'DELETE' })
     expect(response.status).toBe(204)
     expect(deletePiSession).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'session-1', sessionFile: '/pi/session.jsonl' })
     expect(sessionIndex.forgetCalls).toEqual(['/pi/session.jsonl'])
-    expect(runtime.deleteSession).toHaveBeenCalledWith('session-1')
+    expect(runtime.deleteIdleSession).toHaveBeenCalledWith('session-1', expect.any(Function))
+  })
+
+  it('holds one DELETE through runtime startup and removes the file only after the child closes', async () => {
+    let ready!: (state: object) => void
+    let exited!: () => void
+    const host = nativeHost()
+    host.start.mockReturnValueOnce(new Promise((resolve) => { ready = resolve }))
+    host.close.mockReturnValueOnce(new Promise<void>((resolve) => { exited = resolve }))
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const route = createApp(registry, undefined, undefined, sessionIndex.index)
+    try {
+      const loading = registry.resume(nativeSession)!
+      await vi.waitFor(() => expect(host.start).toHaveBeenCalled())
+      const deleting = route.request('/api/sessions/session-1', { method: 'DELETE' })
+      await vi.waitFor(() => expect(registry.sessionAccessError('session-1')?.code).toBe('SESSION_DELETING'))
+      expect(deletePiSession).not.toHaveBeenCalled()
+      ready({})
+      await loading
+      await vi.waitFor(() => expect(host.close).toHaveBeenCalled())
+      expect(deletePiSession).not.toHaveBeenCalled()
+      exited()
+      expect((await deleting).status).toBe(204)
+      expect(deletePiSession).toHaveBeenCalledOnce()
+      expect(sessionIndex.forgetCalls).toEqual(['/pi/session.jsonl'])
+    } finally { ready({}); exited(); await registry.close() }
+  })
+
+  it.each([
+    ['SESSION_RUNNING', 409], ['SESSION_DELETING', 409], ['SESSION_DELETE_TIMEOUT', 503], ['SESSION_CLOSE_FAILED', 503],
+  ] as const)('reports %s without removing the indexed session', async (code, status) => {
+    runtime.deleteIdleSession.mockRejectedValueOnce(new PiSessionDeletionError(code, status, '具体的删除错误'))
+    const response = await app().request('/api/sessions/session-1', { method: 'DELETE' })
+    expect(response.status).toBe(status)
+    expect(await response.json()).toEqual({ code, error: '具体的删除错误' })
+    expect(deletePiSession).not.toHaveBeenCalled()
+    expect(sessionIndex.forgetCalls).toEqual([])
   })
 
   it('returns handled admission for a first control command without a fake first message', async () => {
@@ -264,6 +300,21 @@ describe('Pi Nest API', () => {
     expect(deletePiSession).toHaveBeenCalledWith({ expectedCwd: '/working', expectedSessionId: 'created-session', sessionFile: '/pi/created.jsonl' })
     expect(sessionIndex.forgetCalls).toEqual(['/pi/created.jsonl'])
     expect(sessionIndex.sessions).not.toContainEqual(expect.objectContaining({ id: 'created-session' }))
+  })
+
+  it('retains a failed initialization when its process cannot be confirmed closed', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    runtime.beginPrompt.mockReturnValue({ accepted: Promise.reject(new Error('startup failed')), settled: Promise.resolve({ model: undefined, stopReason: undefined }) })
+    runtime.deleteSession.mockRejectedValueOnce(new Error('still running'))
+    try {
+      const response = await app().request('/api/sessions', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd: '/working', prompt: 'First prompt' }),
+      })
+      expect(response.status).toBe(500)
+      expect(deletePiSession).not.toHaveBeenCalled()
+      expect(sessionIndex.forgetCalls).toEqual([])
+      expect(sessionIndex.sessions).toContainEqual(expect.objectContaining({ id: 'created-session' }))
+    } finally { log.mockRestore() }
   })
 
   it('prepares an attachment once for a new session and transfers it before the first prompt', async () => {

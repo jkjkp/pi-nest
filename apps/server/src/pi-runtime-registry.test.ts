@@ -85,6 +85,245 @@ function hostMock() {
   return { ...host, beginPrompt: vi.fn((message: string) => ({ accepted: Promise.resolve(), settled: host.prompt(message) })) }
 }
 
+describe('idle session deletion', () => {
+  it('waits for prompt finalization after agent_settled before closing the host', async () => {
+    const running = deferred<{ model: undefined; stopReason: string }>()
+    const host = hostMock()
+    host.prompt.mockReturnValueOnce(running.promise)
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const removeFile = vi.fn().mockResolvedValue(undefined)
+    try {
+      const prompt = registry.beginPrompt(session, 'run')!
+      await prompt.accepted
+      host.emit({ type: 'agent_settled' })
+      const deleting = registry.deleteIdleSession(session.id, removeFile)
+      await Promise.resolve()
+      expect(host.close).not.toHaveBeenCalled()
+      expect(removeFile).not.toHaveBeenCalled()
+      running.resolve({ model: undefined, stopReason: 'stop' })
+      await prompt.settled
+      await deleting
+      expect(removeFile).toHaveBeenCalledOnce()
+    } finally { running.resolve({ model: undefined, stopReason: 'stop' }); await registry.close() }
+  })
+
+  it('waits for a command-list read admitted during a turn that has since finished', async () => {
+    const pending = deferred<Record<string, unknown>>()
+    const running = deferred<{ model: undefined; stopReason: string }>()
+    const host = { ...hostMock(), command: vi.fn(() => pending.promise) }
+    host.prompt.mockReturnValueOnce(running.promise)
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const removeFile = vi.fn().mockResolvedValue(undefined)
+    try {
+      const prompt = registry.beginPrompt(session, 'run')!
+      await prompt.accepted
+      const reading = registry.commandWhileRunning(session.id, { type: 'get_commands' })!
+      running.resolve({ model: undefined, stopReason: 'stop' })
+      await prompt.settled
+      const deleting = registry.deleteIdleSession(session.id, removeFile)
+      await Promise.resolve()
+      expect(removeFile).not.toHaveBeenCalled()
+      await registry.deleteIdleSession('unrelated', vi.fn().mockResolvedValue(undefined))
+      expect(removeFile).not.toHaveBeenCalled()
+      pending.resolve({ data: {} })
+      await reading
+      await deleting
+      expect(removeFile).toHaveBeenCalledOnce()
+    } finally { pending.resolve({}); running.resolve({ model: undefined, stopReason: 'stop' }); await registry.close() }
+  })
+
+  it('waits for all concurrent reads, including a failed query', async () => {
+    const state = deferred<Record<string, unknown>>()
+    const statistics = deferred<Record<string, unknown>>()
+    const host = { ...hostMock(), command: vi.fn().mockReturnValueOnce(state.promise).mockReturnValueOnce(statistics.promise) }
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const removeFile = vi.fn().mockResolvedValue(undefined)
+    try {
+      await registry.resume(session)
+      const reading = registry.commandWhenIdle(session, { type: 'get_state' })!
+      await vi.waitFor(() => expect(host.command).toHaveBeenCalled())
+      const querying = registry.getSessionStatistics(session.id)!
+      const rejected = expect(reading).rejects.toThrow('query rejected')
+      const deleting = registry.deleteIdleSession(session.id, removeFile)
+      state.reject(new PiRpcCommandError('query rejected'))
+      await rejected
+      expect(removeFile).not.toHaveBeenCalled()
+      statistics.resolve({ data: {} })
+      await querying
+      await deleting
+      expect(removeFile).toHaveBeenCalledOnce()
+    } finally { state.resolve({}); statistics.resolve({}); await registry.close() }
+  })
+
+  it('rejects real mutations and prompts without waiting or closing the host', async () => {
+    const pending = deferred<Record<string, unknown>>()
+    const host = { ...hostMock(), command: vi.fn(() => pending.promise) }
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const removeFile = vi.fn()
+    try {
+      await registry.resume(session)
+      const compacting = registry.commandWhenIdle(session, { type: 'compact' })!
+      await expect(registry.deleteIdleSession(session.id, removeFile)).rejects.toMatchObject({ code: 'SESSION_BUSY' })
+      expect(host.close).not.toHaveBeenCalled()
+      expect(removeFile).not.toHaveBeenCalled()
+      pending.resolve({ data: {} })
+      await compacting
+      const finish = await registry.beginMutation(session.id)
+      await expect(registry.deleteIdleSession(session.id, removeFile)).rejects.toMatchObject({ code: 'SESSION_BUSY' })
+      finish?.()
+      const running = deferred<{ model: undefined; stopReason: string }>()
+      host.prompt.mockReturnValueOnce(running.promise)
+      const prompt = registry.beginPrompt(session, 'run')!
+      await prompt.accepted
+      await expect(registry.deleteIdleSession(session.id, removeFile)).rejects.toMatchObject({ code: 'SESSION_RUNNING' })
+      running.resolve({ model: undefined, stopReason: 'stop' })
+      await prompt.settled
+    } finally { pending.resolve({}); await registry.close() }
+  })
+
+  it('does not hold a prompt lock after a concurrent statistics query finishes', async () => {
+    const pending = deferred<Record<string, unknown>>()
+    const host = { ...hostMock(), command: vi.fn(() => pending.promise) }
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    try {
+      await registry.resume(session)
+      host.emit({ type: 'agent_start' })
+      const querying = registry.getSessionStatistics(session.id)!
+      host.emit({ type: 'agent_settled' })
+      pending.resolve({ data: {} })
+      await querying
+      await registry.deleteIdleSession(session.id, vi.fn().mockResolvedValue(undefined))
+    } finally { pending.resolve({}); await registry.close() }
+  })
+
+  it.each(['get_state', 'set_model'])('restores the %s reservation after a native turn settles before its RPC response', async (type) => {
+    const pending = deferred<Record<string, unknown>>()
+    const host = { ...hostMock(), command: vi.fn(() => pending.promise) }
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const removeFile = vi.fn().mockResolvedValue(undefined)
+    try {
+      await registry.resume(session)
+      const command = registry.commandWhenIdle(session, { type })!
+      host.emit({ type: 'agent_start' })
+      host.emit({ type: 'agent_settled' })
+      expect(registry.beginMutation(session.id)).toBeUndefined()
+      if (type === 'set_model') await expect(registry.deleteIdleSession(session.id, removeFile)).rejects.toMatchObject({ code: 'SESSION_BUSY' })
+      pending.resolve({ data: {} })
+      await command
+      await registry.deleteIdleSession(session.id, removeFile)
+      expect(removeFile).toHaveBeenCalledOnce()
+    } finally { pending.resolve({}); await registry.close() }
+  })
+
+  it('keeps deletion successful if daemon cleanup fails after the file was removed', async () => {
+    const registry = new PiRuntimeRegistry()
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.spyOn(registry, 'deleteSession').mockRejectedValueOnce(new Error('sidecar unavailable'))
+    const removeFile = vi.fn().mockResolvedValue(undefined)
+    try {
+      await registry.deleteIdleSession(session.id, removeFile)
+      expect(removeFile).toHaveBeenCalledOnce()
+      expect(registry.sessionAccessError(session.id)?.code).toBe('SESSION_NOT_FOUND')
+      expect(log).toHaveBeenCalledWith('Failed to clean up deleted Pi session', expect.any(Object))
+    } finally { log.mockRestore(); await registry.close() }
+  })
+
+  it.each(['resume', 'get_state', 'get_available_models', 'get_available_thinking_levels', 'get_commands', 'get_session_stats'])('waits for %s, reserves deletion, and blocks stale requests after success', async (operation) => {
+    const pending = deferred<Record<string, unknown>>()
+    const host = { ...hostMock(), command: vi.fn().mockResolvedValue({ data: {} }) }
+    const createHost = vi.fn(() => host as unknown as PiRuntimeHost)
+    const registry = new PiRuntimeRegistry({ createHost })
+    const removeFile = vi.fn().mockResolvedValue(undefined)
+    try {
+      let current: Promise<unknown>
+      if (operation === 'resume') {
+        host.start.mockReturnValueOnce(pending.promise)
+        current = registry.resume(session)!
+      } else {
+        await registry.resume(session)
+        host.command.mockReturnValueOnce(pending.promise)
+        current = operation === 'get_session_stats' ? registry.getSessionStatistics(session.id)! : registry.commandWhenIdle(session, { type: operation })!
+      }
+      const deleting = registry.deleteIdleSession(session.id, removeFile)
+      await Promise.resolve()
+      expect(removeFile).not.toHaveBeenCalled()
+      expect(registry.resume(session)).toBeUndefined()
+      expect(registry.beginPrompt(session, 'must not start')).toBeUndefined()
+      expect(registry.beginMutation(session.id)).toBeUndefined()
+      expect(registry.beginGlobalSettingsUpdate()).toBeUndefined()
+      await expect(registry.deleteIdleSession(session.id, removeFile)).rejects.toMatchObject({ code: 'SESSION_DELETING' })
+      pending.resolve({ data: {} })
+      await current
+      await deleting
+      expect(host.close).toHaveBeenCalledBefore(removeFile)
+      expect(removeFile).toHaveBeenCalledOnce()
+      expect(registry.resume(session)).toBeUndefined()
+      expect(registry.beginPrompt(session, 'stale request')).toBeUndefined()
+      expect(createHost).toHaveBeenCalledOnce()
+      expect(registry.sessionAccessError(session.id)).toMatchObject({ code: 'SESSION_NOT_FOUND' })
+    } finally { pending.resolve({}); await registry.close() }
+  })
+
+  it('times out without releasing the pending operation lock and permits a later retry', async () => {
+    const pending = deferred<Record<string, unknown>>()
+    const host = { ...hostMock(), command: vi.fn(() => pending.promise) }
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost, runtimeStartTimeoutMs: 10 })
+    const removeFile = vi.fn().mockResolvedValue(undefined)
+    try {
+      await registry.resume(session)
+      const reading = registry.commandWhenIdle(session, { type: 'get_state' })!
+      await expect(registry.deleteIdleSession(session.id, removeFile)).rejects.toMatchObject({ code: 'SESSION_DELETE_TIMEOUT' })
+      expect(removeFile).not.toHaveBeenCalled()
+      expect(registry.beginMutation(session.id)).toBeUndefined()
+      expect(registry.sessionAccessError(session.id)).toBeUndefined()
+      pending.resolve({ data: {} })
+      await reading
+      await registry.deleteIdleSession(session.id, removeFile)
+      expect(removeFile).toHaveBeenCalledOnce()
+    } finally { pending.resolve({}); await registry.close() }
+  })
+
+  it('preserves a native turn started during initialization', async () => {
+    const pending = deferred<Record<string, unknown>>()
+    const host = hostMock()
+    host.start.mockReturnValueOnce(pending.promise)
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const removeFile = vi.fn()
+    try {
+      const loading = registry.resume(session)!
+      await vi.waitFor(() => expect(host.start).toHaveBeenCalled())
+      const deleting = registry.deleteIdleSession(session.id, removeFile)
+      host.emit({ type: 'agent_start' })
+      pending.resolve({})
+      await loading
+      await expect(deleting).rejects.toMatchObject({ code: 'SESSION_RUNNING' })
+      expect(registry.isPromptActive(session.id)).toBe(true)
+      expect(host.close).not.toHaveBeenCalled()
+      expect(removeFile).not.toHaveBeenCalled()
+      host.emit({ type: 'agent_settled' })
+    } finally { pending.resolve({}); await registry.close() }
+  })
+
+  it('retains the session on close or file failure and does not block another session', async () => {
+    const host = hostMock()
+    const registry = new PiRuntimeRegistry({ createHost: () => host as unknown as PiRuntimeHost })
+    const removeFile = vi.fn().mockResolvedValue(undefined)
+    try {
+      await registry.resume(session)
+      host.close.mockRejectedValueOnce(new Error('still running'))
+      await expect(registry.deleteIdleSession(session.id, removeFile)).rejects.toMatchObject({ code: 'SESSION_CLOSE_FAILED' })
+      expect(removeFile).not.toHaveBeenCalled()
+      expect(registry.sessionAccessError(session.id)).toBeUndefined()
+      removeFile.mockRejectedValueOnce(new Error('access denied'))
+      await expect(registry.deleteIdleSession(session.id, removeFile)).rejects.toThrow('access denied')
+      expect(registry.sessionAccessError(session.id)).toBeUndefined()
+      await registry.deleteIdleSession('other-session', vi.fn().mockResolvedValue(undefined))
+      await registry.deleteIdleSession(session.id, removeFile)
+      expect(removeFile).toHaveBeenCalledTimes(2)
+    } finally { await registry.close() }
+  })
+})
+
 describe('PiRuntimeRegistry', () => {
   it('keeps native follow-up offsets and ID precedence when selecting a queued steering input', async () => {
     const host = { ...hostMock(), command: vi.fn().mockResolvedValue({ success: true }) }

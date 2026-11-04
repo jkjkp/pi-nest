@@ -169,6 +169,43 @@ describe('PiRpcConnection', () => {
     await connection.close()
   })
 
+  it('does not finish closing until the terminated child exits, including concurrent close calls', async () => {
+    vi.useFakeTimers()
+    const child = new FakeChild(false)
+    child.kill.mockReturnValue(true)
+    const { connection } = createConnection(child)
+    await connection.start()
+    const closed = vi.fn()
+    const first = connection.close().then(closed)
+    const second = connection.close().then(closed)
+    try {
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM')
+      expect(closed).not.toHaveBeenCalled()
+      child.exitCode = 0
+      child.emit('exit', 0, null)
+      await Promise.all([first, second])
+      expect(closed).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('reports a child that cannot be confirmed stopped and allows close to be retried', async () => {
+    vi.useFakeTimers()
+    const child = new FakeChild(false)
+    child.kill.mockReturnValue(false)
+    const { connection } = createConnection(child)
+    await connection.start()
+    const closing = expect(connection.close()).rejects.toThrow('Pi RPC process did not exit')
+    try {
+      await vi.advanceTimersByTimeAsync(15_000)
+      await closing
+      expect(child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL')
+      child.exitCode = 0
+      child.emit('exit', 0, null)
+      await connection.close()
+    } finally { vi.useRealTimers() }
+  })
+
   it('reports an unexpected child exit to failure observers', async () => {
     const child = new FakeChild()
     const { connection } = createConnection(child)

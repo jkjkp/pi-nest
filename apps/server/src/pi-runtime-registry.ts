@@ -20,7 +20,8 @@ import { RuntimeExtensionState } from './runtime-extension-state.js'
 import { PiRuntimeResumeError, type PiRuntimeStreamError, SessionEventStream } from './session-event-stream.js'
 
 type HostFactory = (session: PiRuntimeSession) => PiRuntimeHost
-type Lock = 'mutation' | 'prompt'
+type Lock = 'mutation' | 'prompt' | 'read' | 'resume'
+type IdleOperation = { promise: Promise<unknown>; lock?: Exclude<Lock, 'prompt'> }
 type RegistryEntry = { failureUnsubscribe: () => void; host: PiRuntimeHost; lastUsed: number; session: PiRuntimeSession; unsubscribe: () => void }
 type StreamEntry = { stream: SessionEventStream }
 type StreamListener = (event: PiRuntimeEvent) => void
@@ -45,6 +46,10 @@ type RuntimeState = {
 
 export type PiRuntimePrompt = { accepted: Promise<PiPromptDisposition>; runId: string; settled: Promise<PiRuntimePromptResult> }
 type RuntimeStatusListener = (status: PiRuntimeStatus) => void
+
+export class PiSessionDeletionError extends Error {
+  constructor(readonly code: string, readonly status: 404 | 409 | 503, message: string) { super(message) }
+}
 
 export class PiRuntimeBusyError extends Error {
   constructor() { super('Pi session is busy') }
@@ -91,6 +96,10 @@ export class PiRuntimeRegistry {
   private readonly compacting = new Set<string>()
   private readonly extensionCommands = new Set<string>()
   private readonly locks = new Map<string, Lock>()
+  private readonly idleOperations = new Map<string, Set<IdleOperation>>()
+  private readonly extensionResponses = new Set<string>()
+  private readonly deleting = new Set<string>()
+  private readonly deleted = new Set<string>()
   private readonly extensionState: RuntimeExtensionState
   private readonly projectionsReady: Promise<void>
   private readonly states = new Map<string, RuntimeState>()
@@ -113,8 +122,29 @@ export class PiRuntimeRegistry {
   private readonly runtimeStartTimeoutMs: number
   private readonly maxLoadedRuntimes: number
 
+  sessionAccessError(sessionId: string) {
+    if (this.deleted.has(sessionId)) return new PiSessionDeletionError('SESSION_NOT_FOUND', 404, 'Pi 会话已删除。')
+    if (this.deleting.has(sessionId)) return new PiSessionDeletionError('SESSION_DELETING', 409, 'Pi 会话正在删除，请稍候。')
+    return undefined
+  }
+
+  private trackIdleOperation<T>(sessionId: string, operation: Promise<T>, lock?: Exclude<Lock, 'prompt'>) {
+    const operations = this.idleOperations.get(sessionId) ?? new Set<IdleOperation>()
+    const tracked = operation.finally(() => {
+      operations.delete(record)
+      if (!operations.size) this.idleOperations.delete(sessionId)
+    })
+    const record = { promise: tracked, lock }
+    operations.add(record)
+    this.idleOperations.set(sessionId, operations)
+    return tracked
+  }
+
   getSessionStatistics(sessionId: string) {
-    return this.entries.get(sessionId)?.host.command({ type: 'get_session_stats' })
+    const error = this.sessionAccessError(sessionId)
+    if (error) throw error
+    const operation = this.entries.get(sessionId)?.host.command({ type: 'get_session_stats' })
+    return operation ? this.trackIdleOperation(sessionId, operation) : undefined
   }
 
   isPromptActive(sessionId: string) {
@@ -131,7 +161,7 @@ export class PiRuntimeRegistry {
 
   /** Runs an RPC command that is valid only while the agent is actively streaming. */
   async commandWhileRunning(sessionId: string, command: Record<string, unknown>) {
-    if (!this.isPromptActive(sessionId)) return undefined
+    if (this.sessionAccessError(sessionId) || !this.isPromptActive(sessionId)) return undefined
     const entry = this.entries.get(sessionId)
     if (!entry) return undefined
     if (command.type === 'follow_up') return this.stateFor(sessionId).queue.enqueue(command, entry.session.sessionFile, () => this.publishInputQueue(sessionId))
@@ -158,12 +188,13 @@ export class PiRuntimeRegistry {
       const input = command as AttachmentInput
       return this.stateFor(sessionId).queue.steer(input, entry.host, entry.session.sessionFile)
     }
-    return entry.host.command(command)
+    const result = entry.host.command(command)
+    return command.type === 'get_commands' ? this.trackIdleOperation(sessionId, result) : result
   }
 
   /** Registered extensions run through Pi's prompt preflight, without inventing a model turn. */
   async executeExtensionCommand(session: PiRuntimeSession, message: string) {
-    if (this.settingsUpdating || this.extensionCommands.has(session.id) || this.locks.get(session.id) === 'mutation') throw new PiRuntimeBusyError()
+    if (this.sessionAccessError(session.id) || this.settingsUpdating || this.extensionCommands.has(session.id) || this.locks.has(session.id) && !this.isPromptActive(session.id)) throw new PiRuntimeBusyError()
     const entry = this.entries.get(session.id)
     if (!entry) throw new Error('Pi runtime is not loaded')
     this.extensionCommands.add(session.id)
@@ -188,15 +219,16 @@ export class PiRuntimeRegistry {
 
   /** Serializes an idle-only RPC control command with other session mutations. */
   commandWhenIdle(session: PiRuntimeSession, command: Record<string, unknown>): Promise<Record<string, unknown> | undefined> | undefined {
-    if (this.settingsUpdating || this.locks.has(session.id) || this.extensionCommands.has(session.id)) throw new PiRuntimeBusyError()
+    if (this.sessionAccessError(session.id) || this.settingsUpdating || this.locks.has(session.id) || this.extensionCommands.has(session.id)) throw new PiRuntimeBusyError()
     if (!this.entries.has(session.id)) return undefined
     const readOnly = typeof command.type === 'string' && ['get_state', 'get_runtime_state', 'get_available_models', 'get_available_thinking_levels', 'get_commands'].includes(command.type)
     const previousModel = this.entries.get(session.id)?.host.currentModel
     const previousThinking = this.entries.get(session.id)?.host.currentThinkingLevel
     this.cancelUnload(session.id)
-    this.locks.set(session.id, 'mutation')
+    const lock = readOnly ? 'read' : 'mutation'
+    this.locks.set(session.id, lock)
     if (!readOnly) this.transition(session.id, 'loading')
-    return this.projectionsReady.then(() => this.getOrCreate(session))
+    const operation = this.projectionsReady.then(() => this.getOrCreate(session))
       .then((entry) => {
         if (command.type === 'compact') this.compacting.add(session.id)
         return entry.host.command(command)
@@ -204,14 +236,14 @@ export class PiRuntimeRegistry {
       .then((result) => {
         const host = this.entries.get(session.id)?.host
         const metadataChanged = host?.currentModel?.id !== previousModel?.id || host?.currentModel?.provider !== previousModel?.provider || host?.currentThinkingLevel !== previousThinking
-        this.transition(session.id, 'idle', undefined, undefined, readOnly && metadataChanged)
+        this.transition(session.id, this.states.get(session.id)?.activeTurn ? 'active' : 'idle', undefined, undefined, readOnly && metadataChanged)
         this.touch(session.id)
         return result
       })
       .catch(async (cause) => {
         if (cause instanceof PiRuntimeCapacityError) throw cause
         if (cause instanceof PiRpcCommandError) {
-          this.transition(session.id, 'idle')
+          this.transition(session.id, this.states.get(session.id)?.activeTurn ? 'active' : 'idle')
           throw cause
         }
         this.fail(session.id, cause)
@@ -220,12 +252,16 @@ export class PiRuntimeRegistry {
       })
       .finally(() => {
         this.compacting.delete(session.id)
-        this.locks.delete(session.id)
+        if (this.locks.get(session.id) === lock) this.locks.delete(session.id)
         this.scheduleUnload(session.id)
       })
+    return this.trackIdleOperation(session.id, operation, lock)
   }
 
   async respondToExtension(sessionId: string, response: Record<string, unknown>) {
+    const error = this.sessionAccessError(sessionId)
+    if (error) throw error
+    if (this.extensionResponses.has(sessionId)) throw new PiRuntimeBusyError()
     const id = typeof response.id === 'string' ? response.id : undefined
     const pending = id ? this.extensionState.takeDialog(sessionId, id) : undefined
     if (!id || !pending) return false
@@ -234,19 +270,18 @@ export class PiRuntimeRegistry {
       pending.restore()
       return false
     }
+    this.extensionResponses.add(sessionId)
     try {
-      await entry.host.respondToExtension(response)
-    } catch (cause) {
-      pending.restore()
-      throw cause
-    }
-    await this.publishExtensionDialogResolved(sessionId, id)
-    return true
+      try { await entry.host.respondToExtension(response) }
+      catch (cause) { pending.restore(); throw cause }
+      await this.publishExtensionDialogResolved(sessionId, id)
+      return true
+    } finally { this.extensionResponses.delete(sessionId) }
   }
 
   /** Prevents a global Settings write from racing any runtime start or active run. */
   beginGlobalSettingsUpdate() {
-    if (this.settingsUpdating || this.locks.size > 0 || this.extensionCommands.size > 0) return undefined
+    if (this.settingsUpdating || this.deleting.size > 0 || this.extensionResponses.size > 0 || this.locks.size > 0 || this.extensionCommands.size > 0) return undefined
     this.settingsUpdating = true
     return async (reload = false) => {
       try {
@@ -268,6 +303,8 @@ export class PiRuntimeRegistry {
     replayIdle = false,
   ) {
     await this.projectionsReady
+    const error = this.sessionAccessError(sessionId)
+    if (error) throw error
     const state = this.stateFor(sessionId)
     this.cancelUnload(sessionId)
     const firstSequence = state.activeTurn?.firstSequence
@@ -288,6 +325,8 @@ export class PiRuntimeRegistry {
       listener,
       onError,
     )
+    const accessError = this.sessionAccessError(sessionId)
+    if (accessError) { unsubscribe(); unsubscribeStatus?.(); throw accessError }
     const unwatch = () => {
       unsubscribe()
       unsubscribeStatus?.()
@@ -315,18 +354,18 @@ export class PiRuntimeRegistry {
   }
 
   resume(session: PiRuntimeSession): Promise<void> | undefined {
-    if (this.settingsUpdating || this.locks.has(session.id) || this.extensionCommands.has(session.id)) return undefined
+    if (this.sessionAccessError(session.id) || this.settingsUpdating || this.locks.has(session.id) || this.extensionCommands.has(session.id)) return undefined
     const alreadyIdle = this.entries.has(session.id) && this.stateFor(session.id).lifecycle === 'idle'
     this.cancelUnload(session.id)
-    this.locks.set(session.id, 'mutation')
-    return this.projectionsReady.then(() => this.getOrCreate(session))
+    this.locks.set(session.id, 'resume')
+    return this.trackIdleOperation(session.id, this.projectionsReady.then(() => this.getOrCreate(session))
       .then(async (entry) => {
         this.expiredStreams.delete(session.id)
         this.streamFor(session.id)
         if (!alreadyIdle) this.transition(session.id, 'loading')
         return entry.host.start()
       })
-      .then(async () => { await this.publishHistoryChange(session); this.transition(session.id, 'idle'); this.touch(session.id) })
+      .then(async () => { await this.publishHistoryChange(session); this.transition(session.id, this.states.get(session.id)?.activeTurn ? 'active' : 'idle'); this.touch(session.id) })
       .catch(async (cause) => {
         if (cause instanceof PiRuntimeCapacityError) throw cause
         this.fail(session.id, cause)
@@ -334,9 +373,9 @@ export class PiRuntimeRegistry {
         throw cause
       })
       .finally(() => {
-        this.locks.delete(session.id)
+        if (this.locks.get(session.id) === 'resume') this.locks.delete(session.id)
         this.scheduleUnload(session.id)
-      })
+      }), 'resume')
   }
 
   startPrompt(session: PiRuntimeSession, message: string): Promise<PiRuntimePromptResult> | undefined {
@@ -391,7 +430,7 @@ export class PiRuntimeRegistry {
 
   /** Starts a prompt while exposing the RPC-admission boundary to callers that create a session. Attachment input must arrive already prepared so validation never hides inside prompt execution. */
   beginPrompt(session: PiRuntimeSession, message: string, attachments?: { input: AttachmentInput; prepared: PreparedInput }, initialSettings?: PiSessionInitialSettings, edit?: PiEditLastInput): PiRuntimePrompt | undefined {
-    if (this.settingsUpdating || this.locks.has(session.id) || this.extensionCommands.has(session.id)) return undefined
+    if (this.sessionAccessError(session.id) || this.settingsUpdating || this.locks.has(session.id) || this.extensionCommands.has(session.id)) return undefined
     this.cancelUnload(session.id)
     this.locks.set(session.id, 'prompt')
     const state = this.stateFor(session.id)
@@ -519,11 +558,12 @@ export class PiRuntimeRegistry {
         // A rejected input leaves the queue untouched until the caller restores it, so draining here would reorder the queue.
         if (!rejected) void this.drainFollowUp(session.id)
       })
-    void settled.catch(rejectAccepted)
+    const completion = this.trackIdleOperation(session.id, settled)
+    void completion.catch(rejectAccepted)
     return {
       accepted,
       runId,
-      settled,
+      settled: completion,
     }
   }
 
@@ -548,7 +588,7 @@ export class PiRuntimeRegistry {
   }
 
   beginMutation(sessionId: string, beforeUnload?: () => void): Promise<(() => void) | undefined> | undefined {
-    if (this.settingsUpdating || this.locks.has(sessionId) || this.extensionCommands.has(sessionId)) return undefined
+    if (this.sessionAccessError(sessionId) || this.settingsUpdating || this.locks.has(sessionId) || this.extensionCommands.has(sessionId)) return undefined
     this.locks.set(sessionId, 'mutation')
 
     return this.projectionsReady.then(async () => {
@@ -568,10 +608,62 @@ export class PiRuntimeRegistry {
     })
   }
 
+  async deleteIdleSession(sessionId: string, removeFile: () => Promise<unknown>) {
+    const accessError = this.sessionAccessError(sessionId)
+    if (accessError) throw accessError
+    const busyError = () => {
+      if (this.states.get(sessionId)?.activeTurn || this.isPromptActive(sessionId)) return new PiSessionDeletionError('SESSION_RUNNING', 409, 'Pi 会话正在执行任务，请等待任务结束后删除。')
+      return new PiSessionDeletionError('SESSION_BUSY', 409, 'Pi 会话正在处理其他操作，请稍后重试。')
+    }
+    const busy = () => {
+      const state = this.states.get(sessionId)
+      const lock = this.locks.get(sessionId)
+      return this.settingsUpdating || this.extensionCommands.has(sessionId) || this.extensionResponses.has(sessionId)
+        || [...this.idleOperations.get(sessionId) ?? []].some((operation) => operation.lock === 'mutation')
+        || state?.promotingInput || state?.activeTurn || (lock !== undefined && lock !== 'read' && lock !== 'resume')
+    }
+    if (busy()) throw busyError()
+    this.deleting.add(sessionId)
+    this.cancelUnload(sessionId)
+    let ownsLock = false
+    let timer: NodeJS.Timeout | undefined
+    try {
+      const operations = this.idleOperations.get(sessionId)
+      if (operations?.size) {
+        await Promise.race([
+          Promise.allSettled([...operations].map((operation) => operation.promise)),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new PiSessionDeletionError('SESSION_DELETE_TIMEOUT', 503, '等待会话初始化或查询结束超时，会话文件已保留，请稍后重试。')), this.runtimeStartTimeoutMs)
+          }),
+        ])
+        clearTimeout(timer)
+      }
+      if (busy() || this.locks.has(sessionId)) throw busyError()
+      this.locks.set(sessionId, 'mutation')
+      ownsLock = true
+      try { await this.remove(sessionId, 'mutation') }
+      catch (cause) {
+        console.error('Failed to close Pi session for deletion', { sessionId, cause })
+        throw new PiSessionDeletionError('SESSION_CLOSE_FAILED', 503, '无法确认会话进程已退出，会话文件已保留，请稍后重试。')
+      }
+      await removeFile()
+      // shortcut: Block stale bindings until restart; revisit when restoring deleted session IDs is supported.
+      this.deleted.add(sessionId)
+      try { await this.deleteSession(sessionId) }
+      catch (cause) { console.error('Failed to clean up deleted Pi session', { sessionId, cause }) }
+    } finally {
+      clearTimeout(timer)
+      if (ownsLock && this.locks.get(sessionId) === 'mutation') this.locks.delete(sessionId)
+      this.deleting.delete(sessionId)
+      if (!this.deleted.has(sessionId)) this.scheduleUnload(sessionId)
+    }
+  }
+
   async close() {
     await this.projectionsReady
     await Promise.all([...this.entries.keys()].map((sessionId) => this.remove(sessionId, 'shutdown')))
     this.locks.clear()
+    this.deleted.clear()
     for (const state of this.states.values()) clearTimeout(state.unloadTimer)
     await Promise.all([...this.streams.values()].map(({ stream }) => stream.close()))
     this.streams.clear()
@@ -584,17 +676,19 @@ export class PiRuntimeRegistry {
 
   /** Clears daemon-only state after the persistent Pi session was deleted. */
   async deleteSession(sessionId: string) {
-    await this.remove(sessionId, 'deleted')
-    const state = this.states.get(sessionId)
-    if (state) clearTimeout(state.unloadTimer)
-    const stream = this.streams.get(sessionId)
-    if (stream) {
-      this.streams.delete(sessionId)
-      await stream.stream.close()
+    try { await this.remove(sessionId, 'deleted') }
+    finally {
+      const state = this.states.get(sessionId)
+      if (state) clearTimeout(state.unloadTimer)
+      const stream = this.streams.get(sessionId)
+      try { if (stream) await stream.stream.close() }
+      finally {
+        this.streams.delete(sessionId)
+        this.expiredStreams.delete(sessionId)
+        this.states.delete(sessionId)
+        this.extensionState.forget(sessionId)
+      }
     }
-    this.expiredStreams.delete(sessionId)
-    this.states.delete(sessionId)
-    this.extensionState.forget(sessionId)
   }
 
   /** Returns a deep copy of the daemon-only extension UI projection. */
@@ -651,11 +745,11 @@ export class PiRuntimeRegistry {
     const entry = this.entries.get(sessionId)
     if (options.expected && entry !== options.expected) return false
     if (entry) {
-      this.entries.delete(sessionId)
       if (this.extensionState.hasDialogs(sessionId)) await this.clearPendingExtensionDialogs(sessionId)
+      await entry.host.close()
+      this.entries.delete(sessionId)
       entry.unsubscribe()
       entry.failureUnsubscribe()
-      await entry.host.close()
       this.stateFor(sessionId).queue.setNativeQueue([], [])
     }
     if (entry && (reason === 'failed' || reason === 'deleted')) this.history.unpin(entry.session)
@@ -672,7 +766,7 @@ export class PiRuntimeRegistry {
   private async makeCapacity(sessionId: string) {
     if (this.entries.size < this.maxLoadedRuntimes) return
     const candidate = [...this.entries.entries()]
-      .filter(([id, entry]) => id !== sessionId && this.stateFor(id).lifecycle === 'idle' && this.stateFor(id).subscribers.size === 0 && !this.locks.has(id) && !this.extensionCommands.has(id))
+      .filter(([id, entry]) => id !== sessionId && !this.deleting.has(id) && this.stateFor(id).lifecycle === 'idle' && this.stateFor(id).subscribers.size === 0 && !this.locks.has(id) && !this.extensionCommands.has(id))
       .sort(([leftId, left], [rightId, right]) => left.lastUsed - right.lastUsed || leftId.localeCompare(rightId))[0]
     if (!candidate) throw new PiRuntimeCapacityError()
     await this.remove(candidate[0], 'capacityEvicted', { expected: candidate[1], preserveUnloadDeadline: true })
@@ -706,6 +800,7 @@ export class PiRuntimeRegistry {
   }
 
   private scheduleUnload(sessionId: string) {
+    if (this.sessionAccessError(sessionId)) return
     const state = this.stateFor(sessionId)
     if (state.subscribers.size > 0 || this.locks.has(sessionId) || this.extensionCommands.has(sessionId) || (state.lifecycle !== 'idle' && state.lifecycle !== 'notLoaded')) return
     clearTimeout(state.unloadTimer)
@@ -715,6 +810,7 @@ export class PiRuntimeRegistry {
   }
 
   private async expire(sessionId: string, generation: number) {
+    if (this.sessionAccessError(sessionId)) return
     const state = this.stateFor(sessionId)
     if (state.unloadGeneration !== generation || state.subscribers.size > 0 || this.locks.has(sessionId) || this.extensionCommands.has(sessionId) || (state.lifecycle !== 'idle' && state.lifecycle !== 'notLoaded')) return
     state.unloadTimer = undefined
@@ -825,7 +921,9 @@ export class PiRuntimeRegistry {
       try { this.history.unpin(session, activeTurn.runId) }
       catch (cause) { console.error('Failed to publish history snapshot', { sessionId, name: cause instanceof Error ? cause.name : 'Error' }) }
     }
-    this.locks.delete(sessionId)
+    const operation = [...this.idleOperations.get(sessionId) ?? []].find((pending) => pending.lock)
+    if (operation?.lock) this.locks.set(sessionId, operation.lock)
+    else this.locks.delete(sessionId)
     this.transition(sessionId, 'idle', undefined, undefined, false, notifyCompletion ? state.completedRun : undefined)
     this.scheduleUnload(sessionId)
     if (activeTurn.native) queueMicrotask(() => { void this.drainFollowUp(sessionId) })
@@ -836,6 +934,8 @@ export class PiRuntimeRegistry {
   }
 
   async resumeQueued(session: PiRuntimeSession, inputId: string) {
+    const error = this.sessionAccessError(session.id)
+    if (error) throw error
     const state = this.stateFor(session.id)
     if (state.promotingInput) throw new PiRuntimeBusyError()
     const input = state.queue.selectForRecovery(inputId)
@@ -864,6 +964,8 @@ export class PiRuntimeRegistry {
 
   /** Drops a queued follow-up at the user's request and returns it so the client can restore the text. */
   async dropQueued(sessionId: string, inputId: string): Promise<PiQueuedInput> {
+    const error = this.sessionAccessError(sessionId)
+    if (error) throw error
     const state = this.stateFor(sessionId)
     if (state.promotingInput) throw new PiRuntimeBusyError()
     const input = state.queue.selectForDrop(inputId)
@@ -884,6 +986,7 @@ export class PiRuntimeRegistry {
   }
 
   private async drainFollowUp(sessionId: string) {
+    if (this.sessionAccessError(sessionId)) return
     const state = this.stateFor(sessionId)
     const entry = this.entries.get(sessionId)
     if (!entry || state.promotingInput || this.locks.has(sessionId) || this.extensionCommands.has(sessionId) || state.lifecycle !== 'idle' || state.completedRun?.stopReason === 'aborted' || state.completedRun?.stopReason === 'error') return

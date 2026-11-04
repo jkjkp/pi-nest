@@ -102,9 +102,20 @@ it('requires authorization for the native picker and does not register selected 
   expect((await app.request('/api/projects/select-folder', { method: 'POST', headers, body: '{"extra":true}' })).status).toBe(400)
   const selected = await app.request('/api/projects/select-folder', { method: 'POST', headers, body: JSON.stringify({ cwd: directory }) })
   expect(await selected.json()).toEqual({ cwd: directory })
-  expect(selectProjectFolder).toHaveBeenCalledExactlyOnceWith(directory)
+  expect(selectProjectFolder).toHaveBeenCalledExactlyOnceWith(directory, expect.any(AbortSignal))
   expect(projects.list()).toEqual([])
   vi.mocked(selectProjectFolder).mockResolvedValue(null)
   const cancelled = await app.request('/api/projects/select-folder', { method: 'POST', headers, body: '{}' })
   expect(await cancelled.json()).toEqual({ cwd: null })
+})
+
+it.each(['PROJECT_FOLDER_PICKER_BUSY', 'PROJECT_FOLDER_PICKER_TIMEOUT', 'ENOENT'])('reports a safe and distinct picker error for %s', async (code) => {
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  const security = new RuntimeSecurity('http://localhost:31415')
+  const app = createApp(undefined, security, projects, createSessionIndexFixture().index)
+  const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }
+  vi.mocked(selectProjectFolder).mockRejectedValueOnce(Object.assign(new Error(code === 'ENOENT' ? 'internal process details' : '选择器提示'), { code }))
+  const response = await app.request('/api/projects/select-folder', { method: 'POST', headers, body: '{}' })
+  expect(response.status).toBe(503)
+  expect(await response.json()).toEqual({ code: code === 'ENOENT' ? 'PROJECT_FOLDER_PICKER_FAILED' : code, error: code === 'ENOENT' ? '无法打开系统文件夹选择器，请重试或手动输入绝对路径。' : '选择器提示' })
 })

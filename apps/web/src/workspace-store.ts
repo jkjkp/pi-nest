@@ -63,6 +63,8 @@ type WorkspaceState = {
   navigationOpen: boolean
   navigationCollapsed: boolean
   navigationWidth: number
+  graphSplitRatio: number
+  setGraphSplitRatio: (ratio: number) => void
   runtimeStates: Record<string, Omit<RuntimeStatus, 'sessionId'>>
   runtimeStatistics: Record<string, RuntimeStatisticsState>
   setRuntimeStatistics: (sessionId: string, statistics: RuntimeStatisticsState) => void
@@ -197,6 +199,8 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
   navigationOpen: false,
   navigationCollapsed: false,
   navigationWidth: 272,
+  graphSplitRatio: 0.45,
+  setGraphSplitRatio: (ratio) => set({ graphSplitRatio: Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0.45 }),
   runtimeStates: {},
   runtimeStatistics: {},
   setRuntimeStatistics: (sessionId, statistics) => set((state) => ({ runtimeStatistics: { ...state.runtimeStatistics, [sessionId]: statistics } })),
@@ -423,10 +427,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist(createWorkspaceState,
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ workspaceView: state.workspaceView, branchOperations: state.branchOperations, filePreviews: state.filePreviews, fileReadingPositions: state.fileReadingPositions, navigationWidth: state.navigationWidth, navigationCollapsed: state.navigationCollapsed, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ workspaceView: state.workspaceView, branchOperations: state.branchOperations, filePreviews: state.filePreviews, fileReadingPositions: state.fileReadingPositions, navigationWidth: state.navigationWidth, navigationCollapsed: state.navigationCollapsed, graphSplitRatio: state.graphSplitRatio, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, hiddenProjectCwds: state.hiddenProjectCwds, navigationOrder: state.navigationOrder }),
       merge: (persisted, current) => {
         const saved = persisted && typeof persisted === 'object' ? persisted as Partial<WorkspaceState> : {}
-        return { ...current, ...saved, filePreviews: restoreFilePanels(saved.filePreviews), fileReadingPositions: restoreFilePositions(saved.fileReadingPositions) }
+        return { ...current, ...saved, graphSplitRatio: typeof saved.graphSplitRatio === 'number' && Number.isFinite(saved.graphSplitRatio) ? Math.max(0, Math.min(1, saved.graphSplitRatio)) : current.graphSplitRatio, filePreviews: restoreFilePanels(saved.filePreviews), fileReadingPositions: restoreFilePositions(saved.fileReadingPositions) }
       },
       storage: createJSONStorage(() => (typeof window === 'undefined' ? unavailableStorage : window.localStorage)),
     },

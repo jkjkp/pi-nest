@@ -89,6 +89,8 @@ it.each(['prepared', 'tree-hook', 'selected', 'system', 'user', 'compacted', 'ha
         if (stage === 'system' || stage === 'user') await expect.poll(() => child?.exitCode !== null || child?.signalCode !== null).toBe(true)
         else if (stage === 'handled') await rpc.send({ type: 'pi_nest_edit', action: 'recover' })
         else await expect.poll(() => piEditStatus(readPiEditEntries(sessionFile), submissionId).status).toBe('committed')
+        // A committed user entry precedes the provider request; do not shut down before observing it.
+        if (stage === 'compacted') await expect.poll(() => requestText).toContain('KEEP_SUMMARY')
       }
     }
     await rpc.close()

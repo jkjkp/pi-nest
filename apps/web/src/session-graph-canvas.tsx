@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from 'react'
 import { Eye } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -7,7 +7,15 @@ import type { GraphNode } from './session-graph-model.js'
 
 export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, onSelect, onToggle, onLocate, locateRequest, renderNodeMenu, toolbarActions }: { toolbarActions?: ReactNode; renderNodeMenu: (node: GraphNode) => ReactNode; onToggle: (id: string) => void; onLocate: () => void; locateRequest: number; nodes: GraphNode[]; selectedSessionId: string; selectedNodeId?: string; onSelect: (node: GraphNode) => void }) {
   const viewport = useRef<HTMLDivElement>(null)
-  const [camera, setCamera] = useState<DiagramCamera>({ scale: 1, x: 0, y: 0, width: 800, height: 600, fit: false })
+  const [camera, commitCamera] = useState<DiagramCamera>({ scale: 1, x: 0, y: 0, width: 800, height: 600, fit: false })
+  const latestCamera = useRef(camera)
+  const wheelFrame = useRef<number | undefined>(undefined)
+  const setCamera = useCallback((update: SetStateAction<DiagramCamera>) => {
+    if (wheelFrame.current !== undefined) cancelAnimationFrame(wheelFrame.current)
+    wheelFrame.current = undefined
+    latestCamera.current = typeof update === 'function' ? update(latestCamera.current) : update
+    commitCamera(latestCamera.current)
+  }, [])
   const drag = useRef<{ x: number; y: number } | undefined>(undefined)
   useEffect(() => {
     if (!viewport.current) return
@@ -16,6 +24,30 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
     })
     observer.observe(viewport.current)
     return () => observer.disconnect()
+  }, [setCamera])
+  useEffect(() => {
+    const element = viewport.current
+    if (!element) return
+    const wheel = (event: WheelEvent) => {
+      if (!event.deltaY || !Number.isFinite(event.deltaY)) return
+      event.preventDefault(); event.stopPropagation()
+      const current = latestCamera.current
+      const rect = element.getBoundingClientRect()
+      const height = rect.height || current.height
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? height : 1
+      const delta = Math.max(-120, Math.min(120, event.deltaY * unit))
+      latestCamera.current = zoomDiagramCamera({ ...current, width: rect.width || current.width, height }, Math.max(0.01, Math.min(2, current.scale * Math.exp(-delta * 0.002))), { x: event.clientX - rect.left, y: event.clientY - rect.top })
+      if (wheelFrame.current === undefined) wheelFrame.current = requestAnimationFrame(() => {
+        wheelFrame.current = undefined
+        commitCamera(latestCamera.current)
+      })
+    }
+    element.addEventListener('wheel', wheel, { passive: false })
+    return () => {
+      element.removeEventListener('wheel', wheel)
+      if (wheelFrame.current !== undefined) cancelAnimationFrame(wheelFrame.current)
+      wheelFrame.current = undefined
+    }
   }, [])
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
   const visible = nodes.filter((node) => {
@@ -23,7 +55,7 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
     return x + 260 * camera.scale >= -128 && x <= camera.width + 128 && y + 132 * camera.scale >= -128 && y <= camera.height + 128
   })
   const visibleIds = new Set(visible.map((node) => node.id))
-  function measured() { const rect = viewport.current?.getBoundingClientRect(); return { ...camera, width: rect?.width || camera.width, height: rect?.height || camera.height } }
+  function measured(current: DiagramCamera) { const rect = viewport.current?.getBoundingClientRect(); return { ...current, width: rect?.width || current.width, height: rect?.height || current.height } }
   const previousLayout = useRef<{ byId: Map<string, GraphNode>; current: string; locateRequest: number } | undefined>(undefined)
   useLayoutEffect(() => {
     const node = byId.get(selectedSessionId)
@@ -49,19 +81,19 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
       }
       return x === value.x && y === value.y && width === value.width && height === value.height ? value : { ...value, x, y, width, height }
     })
-  }, [locateRequest, byId, selectedSessionId])
-  return <div className="flex min-h-0 flex-1 flex-col">
+  }, [locateRequest, byId, selectedSessionId, setCamera])
+  return <div className="flex min-h-0 flex-1 flex-col" onContextMenu={(event) => { if (event.currentTarget.contains(event.target as Node)) event.preventDefault() }}>
     <div className="flex flex-wrap items-center gap-1 border-b p-2">
-      <Button size="sm" variant="ghost" aria-label="缩小树状画布" onClick={() => setCamera(zoomDiagramCamera(measured(), Math.max(0.25, camera.scale / 1.2)))}>−</Button>
+      <Button size="sm" variant="ghost" aria-label="缩小树状画布" onClick={() => setCamera((current) => zoomDiagramCamera(measured(current), Math.max(0.01, current.scale / 1.2)))}>−</Button>
       <span className="text-xs tabular-nums">{Math.round(camera.scale * 100)}%</span>
-      <Button size="sm" variant="ghost" aria-label="放大树状画布" onClick={() => setCamera(zoomDiagramCamera(measured(), Math.min(2, Math.max(0.25, camera.scale * 1.2))))}>+</Button>
-      <Button size="sm" variant="ghost" onClick={() => { const next = measured(); setCamera(fitDiagramCamera({ width: Math.max(480, ...nodes.map((node) => node.x + 284)), height: Math.max(300, ...nodes.map((node) => node.y + 156)) }, next)) }}>适应画布</Button>
+      <Button size="sm" variant="ghost" aria-label="放大树状画布" onClick={() => setCamera((current) => zoomDiagramCamera(measured(current), Math.min(2, current.scale * 1.2)))}>+</Button>
+      <Button size="sm" variant="ghost" onClick={() => setCamera((current) => fitDiagramCamera({ width: Math.max(480, ...nodes.map((node) => node.x + 284)), height: Math.max(300, ...nodes.map((node) => node.y + 156)) }, measured(current)))}>适应画布</Button>
       <Button size="sm" variant="ghost" onClick={onLocate}>定位当前</Button>
       {toolbarActions}
     </div>
-    <div ref={(element) => { viewport.current = element }} tabIndex={0} aria-label="会话分支画布，方向键平移，点击节点查看会话" className="relative min-h-0 flex-1 touch-none overflow-clip bg-muted/20 outline-offset-[-2px]"
-      onFocus={() => { const next = measured(); if (next.width !== camera.width || next.height !== camera.height) setCamera(next) }}
-      onKeyDown={(event) => { if (event.target !== event.currentTarget) return; const move = ({ ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80] } as Record<string, number[]>)[event.key]; if (move) { event.preventDefault(); setCamera(panDiagramCamera(measured(), move[0], move[1])) } }}
+    <div ref={(element) => { viewport.current = element }} tabIndex={0} aria-label="会话分支画布，方向键平移，点击节点查看会话" title="滚轮缩放，拖动或方向键平移" className="relative min-h-0 flex-1 touch-none overflow-clip bg-muted/20 outline-offset-[-2px]"
+      onFocus={() => setCamera((current) => { const next = measured(current); return next.width !== current.width || next.height !== current.height ? next : current })}
+      onKeyDown={(event) => { if (event.target !== event.currentTarget) return; const move = ({ ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80] } as Record<string, number[]>)[event.key]; if (move) { event.preventDefault(); setCamera((current) => panDiagramCamera(measured(current), move[0], move[1])) } }}
       onPointerDown={(event) => { if (event.button !== 0 || !event.currentTarget.contains(event.target as Node) || (event.target as Element).closest('button')) return; drag.current = { x: event.clientX, y: event.clientY }; event.currentTarget.setPointerCapture(event.pointerId) }}
       onPointerMove={(event) => { if (!drag.current) return; const delta = { x: event.clientX - drag.current.x, y: event.clientY - drag.current.y }; drag.current = { x: event.clientX, y: event.clientY }; setCamera((current) => panDiagramCamera({ ...current, width: viewport.current?.clientWidth || current.width, height: viewport.current?.clientHeight || current.height }, delta.x, delta.y)) }}
       onPointerUp={() => { drag.current = undefined }} onPointerCancel={() => { drag.current = undefined }}>

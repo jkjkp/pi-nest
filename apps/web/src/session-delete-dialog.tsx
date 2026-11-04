@@ -21,7 +21,7 @@ export function SessionDeleteDialog({ session, run, mutationSessionId, onDelete,
     inFlight.current = true
     setPending(true); setError(undefined)
     try { await onDelete(session.id); onClose() }
-    catch { setError('删除失败，请刷新后重试。') }
+    catch (cause) { setError(cause instanceof Error ? `删除失败：${cause.message}` : '删除失败，请稍后重试。') }
     finally { inFlight.current = false; setPending(false) }
   }
   return <AlertDialog open onOpenChange={(open) => { if (!open && !inFlight.current) onClose() }}>

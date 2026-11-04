@@ -29,7 +29,7 @@ beforeEach(() => {
   vi.mocked(fetchSessionGraph).mockReset().mockResolvedValue({ sessions, branchStorage: { available: true } })
   vi.mocked(fetchSessionHistory).mockReset().mockImplementation(async (id, before) => ({ session: { id }, revision: 'r', entries: [{ id: before ? 'old' : 'u', parentId: null, type: 'message', timestamp: '', raw: { message: { role: 'user', content: 'question' } } }], hasEarlier: !before, beforeCursor: before ? undefined : 'older' }))
   vi.mocked(fetchSessionTurnIndex).mockReset().mockResolvedValue({ revision: 'r', entries: [] })
-  useWorkspaceStore.setState({ runs: {}, sessionNotifications: {}, branchOperations: {} })
+  useWorkspaceStore.setState({ runs: {}, sessionNotifications: {}, branchOperations: {}, graphSplitRatio: 0.45 })
 })
 afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); vi.unstubAllGlobals() })
 const button = (name: string) => [...container.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === name)!
@@ -46,6 +46,30 @@ function Fixture({ initial = 'source' }: { initial?: string }) {
 async function mount(initial?: string) {
   await act(async () => root.render(<QueryClientProvider client={client}><Fixture initial={initial} /></QueryClientProvider>)); await settle()
 }
+it('clamps the visible split to panel minimums and restores the saved preference after narrow mode without remounting the draft', async () => {
+  let width = 1000
+  const observers = new Set<() => void>()
+  vi.stubGlobal('ResizeObserver', class {
+    readonly resize: () => void
+    constructor(callback: (entries: { contentRect: { width: number; height: number } }[]) => void) { this.resize = () => callback([{ contentRect: { width, height: 700 } }]) }
+    observe() { observers.add(this.resize); this.resize() }
+    disconnect() { observers.delete(this.resize) }
+  })
+  useWorkspaceStore.getState().setGraphSplitRatio(0.7)
+  await mount()
+  const draft = container.querySelector('textarea')
+  expect(container.querySelector('[role="separator"]')?.getAttribute('aria-valuenow')).toBe('64')
+  expect(useWorkspaceStore.getState().graphSplitRatio).toBe(0.7)
+  await act(async () => { width = 800; observers.forEach((resize) => resize()) })
+  expect(container.querySelector('[role="separator"]')).toBeNull()
+  expect(button('查看对话')).toBeTruthy()
+  await act(async () => { width = 1600; observers.forEach((resize) => resize()) })
+  expect(container.querySelector('[role="separator"]')?.getAttribute('aria-valuenow')).toBe('70')
+  expect(container.querySelector('textarea')).toBe(draft)
+  expect(draft?.value).toBe('keep draft')
+  expect(fetchSessionGraph).toHaveBeenCalledTimes(1)
+  expect(fetchSessionHistory).not.toHaveBeenCalled()
+})
 it('draws metadata only and previews only the requested session without changing target, draft or notifications', async () => {
   await mount()
   expect(container.querySelectorAll('[data-session-node]')).toHaveLength(3)

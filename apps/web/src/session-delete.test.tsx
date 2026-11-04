@@ -82,11 +82,12 @@ it('sends only one deletion while Enter is held or a request is pending', async 
 })
 
 it('keeps the confirmation open after failure and permits a retry', async () => {
-  props.onDelete = vi.fn().mockRejectedValueOnce(new Error('failure')).mockResolvedValueOnce(undefined)
+  props.onDelete = vi.fn().mockRejectedValueOnce(new Error('等待初始化结束超时，会话文件已保留')).mockResolvedValueOnce(undefined)
   await render()
   await open()
   await enter(confirm())
   expect(dialog()?.textContent).toContain('删除失败')
+  expect(dialog()?.textContent).toContain('等待初始化结束超时，会话文件已保留')
   expect(confirm().disabled).toBe(false)
   await enter(confirm())
   expect(props.onDelete).toHaveBeenCalledTimes(2)

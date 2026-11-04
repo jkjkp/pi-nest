@@ -26,7 +26,7 @@ import { z } from 'zod'
 
 import { ProjectRegistry } from './project-registry.js'
 import { RuntimeSecurity } from './runtime-security.js'
-import { PiRuntimeRegistry } from './pi-runtime-registry.js'
+import { PiRuntimeRegistry, PiSessionDeletionError } from './pi-runtime-registry.js'
 import type { SessionIndex } from './session-index.js'
 
 const sessionNameSchema = z
@@ -173,9 +173,11 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
         const uncertainSessionId = runtime.attachments.uncertainSession(draftScope, input)
         if (uncertainSessionId) return context.json({ error: '输入状态待确认，会话已保留，请查看历史后再决定是否重试。', code: 'SUBMISSION_UNKNOWN', sessionId: uncertainSessionId }, 409)
         if (created) {
-          index.forget(created.sessionFile)
-          await runtime.deleteSession(created.id).catch(() => undefined)
-          await deletePiSession({ expectedCwd: created.cwd, expectedSessionId: created.id, sessionFile: created.sessionFile }).catch(() => undefined)
+          try {
+            await runtime.deleteSession(created.id)
+            await deletePiSession({ expectedCwd: created.cwd, expectedSessionId: created.id, sessionFile: created.sessionFile })
+            index.forget(created.sessionFile)
+          } catch (cause) { console.error('Failed to roll back Pi session initialization; session retained', { sessionId: created.id, cause }) }
         }
         if (cause instanceof AttachmentError) return context.json({ error: cause.message, code: cause.code }, cause.status)
         if (!busy) console.error('Failed to initialize Pi session', { cause })
@@ -363,26 +365,18 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
       const resolved = await resolveSession(index, sessionId)
       if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
       if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
-
-      const mutation = runtime.beginMutation(sessionId)
-      if (!mutation) return context.json({ error: 'Pi session is busy' }, 409)
-
-      let finishMutation: (() => void) | undefined
-
       try {
-        finishMutation = await mutation
-        await deletePiSession({
+        await runtime.deleteIdleSession(sessionId, () => deletePiSession({
           expectedCwd: resolved.session.cwd,
           expectedSessionId: resolved.session.id,
           sessionFile: resolved.session.sessionFile,
-        })
+        }))
         index.forget(resolved.session.sessionFile)
-        await runtime.deleteSession(sessionId)
         return context.body(null, 204)
-      } catch {
-        return context.json({ error: 'Failed to delete Pi session' }, 500)
-      } finally {
-        finishMutation?.()
+      } catch (cause) {
+        if (cause instanceof PiSessionDeletionError) return context.json({ error: cause.message, code: cause.code }, cause.status)
+        console.error('Failed to delete Pi session', { sessionId, cause })
+        return context.json({ error: '删除会话失败，请稍后重试。', code: 'SESSION_DELETE_FAILED' }, 500)
       }
     })
 }

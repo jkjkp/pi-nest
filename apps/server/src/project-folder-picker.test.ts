@@ -9,9 +9,13 @@ import { selectProjectFolder } from './project-folder-picker.js'
 vi.mock('node:child_process', async (original) => {
   const { promisify } = await import('node:util')
   const mocked = vi.fn()
-  Object.defineProperty(mocked, promisify.custom, { value: (...args: unknown[]) => new Promise((resolve, reject) => {
-    mocked(...args, (error: Error | null, stdout: string, stderr: string) => error ? reject(error) : resolve({ stdout, stderr }))
-  }) })
+  Object.defineProperty(mocked, promisify.custom, { value: (...args: unknown[]) => {
+    let child: unknown
+    const result = new Promise((resolve, reject) => {
+      child = mocked(...args, (error: Error | null, stdout: string, stderr: string) => error ? reject(error) : resolve({ stdout, stderr }))
+    })
+    return Object.assign(result, { child })
+  } })
   return { ...await original<typeof import('node:child_process')>(), execFile: mocked }
 })
 beforeEach(() => {
@@ -83,8 +87,42 @@ it.each(['D:\\中文 project & $test', '\\\\server\\share\\项目 folder'])('ope
   expect(script).toContain('$env:PI_NEST_PICKER_START')
   expect(script).toContain('[System.Text.UTF8Encoding]::new($false)')
   expect(script).toContain('$dialog.Dispose()')
+  expect(script).toContain('$owner.TopMost = $true')
+  expect(script).toContain('$owner.Show()')
+  expect(script).toContain('$dialog.ShowDialog($owner)')
+  expect(script).toContain('$owner.Dispose()')
   expect(script).not.toContain(directory)
   expect(validate).toHaveBeenLastCalledWith(directory)
+})
+
+it('kills on cancellation but retains the lock until the process has actually closed', async () => {
+  let complete!: (error: Error | null, stdout: string, stderr: string) => void
+  const kill = vi.fn()
+  vi.mocked(execFile).mockImplementation((_file, _args, _options, callback) => {
+    complete = callback as typeof complete
+    return { kill } as unknown as ReturnType<typeof execFile>
+  })
+  const controller = new AbortController()
+  const first = selectProjectFolder(undefined, controller.signal)
+  controller.abort()
+  expect(kill).toHaveBeenCalledOnce()
+  await expect(selectProjectFolder()).rejects.toMatchObject({ code: 'PROJECT_FOLDER_PICKER_BUSY' })
+  complete(Object.assign(new Error('terminated'), { killed: true }), '', '')
+  await expect(first).resolves.toBeNull()
+  output('')
+  await expect(selectProjectFolder()).resolves.toBeNull()
+  await expect(selectProjectFolder(undefined, controller.signal)).resolves.toBeNull()
+  expect(execFile).toHaveBeenCalledTimes(2)
+})
+
+it('reports picker timeout separately from launch failure and allows retry', async () => {
+  vi.mocked(execFile).mockImplementation((_file, _args, _options, callback) => {
+    ;(callback as (error: Error) => void)(Object.assign(new Error('timed out'), { killed: true, signal: 'SIGTERM', code: null }))
+    return {} as ReturnType<typeof execFile>
+  })
+  await expect(selectProjectFolder()).rejects.toMatchObject({ code: 'PROJECT_FOLDER_PICKER_TIMEOUT', message: expect.stringContaining('超时') })
+  output('')
+  await expect(selectProjectFolder()).resolves.toBeNull()
 })
 
 it('handles Windows cancellation, validation errors and launch failure without leaving the picker locked', async () => {

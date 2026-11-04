@@ -7,6 +7,22 @@ let api: typeof import('./workspace-api.js')
 beforeEach(async () => { vi.resetModules(); api = await import('./workspace-api.js') })
 afterEach(() => vi.unstubAllGlobals())
 
+it.each([
+  [409, 'SESSION_RUNNING', '会话正在执行任务'],
+  [503, 'SESSION_DELETE_TIMEOUT', '等待初始化结束超时'],
+])('preserves deletion status, code and message (%s)', async (status, code, message) => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ code, error: message }, { status }))
+  vi.stubGlobal('fetch', fetcher)
+  await expect(api.deleteSession('session/one')).rejects.toMatchObject({ status, code, message })
+  expect(fetcher).toHaveBeenCalledExactlyOnceWith('/api/sessions/session%2Fone', { method: 'DELETE' })
+})
+
+it('handles an unreadable deletion error and accepts an empty 204 response', async () => {
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValueOnce(new Response('unavailable', { status: 500 })).mockResolvedValueOnce(new Response(null, { status: 204 })))
+  await expect(api.deleteSession('one')).rejects.toMatchObject({ status: 500, message: '删除会话失败，请稍后重试。' })
+  await expect(api.deleteSession('one')).resolves.toBeUndefined()
+})
+
 it('uses one bootstrap for concurrent thumbnails and later business requests', async () => {
   const fetcher = vi.fn<typeof fetch>().mockImplementation(async (url) => url === '/api/runtime/bootstrap'
     ? Response.json(credentials) : new Response('image'))
