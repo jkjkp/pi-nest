@@ -54,6 +54,8 @@ export class PiRpcConnection {
   private buffer = ''
   private child: ChildProcessWithoutNullStreams | undefined
   private closed = false
+  private exited = false
+  private closing: Promise<void> | undefined
   private decoder = new StringDecoder('utf8')
   private nextId = 0
   private processError: Error | undefined
@@ -86,8 +88,12 @@ export class PiRpcConnection {
     child.stderr.on('data', (chunk: Buffer) => {
       this.stderr += chunk.toString('utf8')
     })
-    child.once('error', (cause) => this.fail(new PiRpcConnectionError('process_error', `Pi RPC process error: ${cause.message}`, { cause })))
+    child.once('error', (cause) => {
+      if (!child.pid) this.exited = true
+      this.fail(new PiRpcConnectionError('process_error', `Pi RPC process error: ${cause.message}`, { cause }))
+    })
     child.once('exit', (code, signal) => {
+      this.exited = true
       if (!this.closed) {
         this.fail(new PiRpcConnectionError('process_exit', `Pi RPC process exited before close (code ${code ?? 'null'}, signal ${signal ?? 'null'})`))
       }
@@ -140,24 +146,38 @@ export class PiRpcConnection {
     this.child.stdin.write(`${JSON.stringify(record)}\n`)
   }
 
-  async close() {
+  close(): Promise<void> {
+    if (this.closing) return this.closing
     const child = this.child
-    if (!child || this.closed) return
+    if (!child) return Promise.resolve()
     this.closed = true
-    child.stdin.end()
-
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        child.kill('SIGTERM')
-        resolve()
-      }, this.stopTimeoutMs)
-      child.once('exit', () => {
-        clearTimeout(timeout)
-        resolve()
-      })
+    const stopped = new Promise<void>((resolve, reject) => {
+      if (this.exited || child.exitCode !== null || child.signalCode !== null) { resolve(); return }
+      let timer: NodeJS.Timeout | undefined
+      const finish = (error?: Error) => {
+        clearTimeout(timer)
+        child.off('exit', onExit)
+        if (error) reject(error)
+        else resolve()
+      }
+      const onExit = () => finish()
+      let attempts = 0
+      const terminate = () => {
+        if (attempts === 2) { finish(new Error('Pi RPC process did not exit after termination')); return }
+        timer = setTimeout(terminate, this.stopTimeoutMs)
+        try { child.kill(attempts++ === 0 ? 'SIGTERM' : 'SIGKILL') }
+        catch (cause) { finish(cause instanceof Error ? cause : new Error(String(cause))) }
+      }
+      child.once('exit', onExit)
+      timer = setTimeout(terminate, this.stopTimeoutMs)
+      try { child.stdin.end() }
+      catch (cause) { finish(cause instanceof Error ? cause : new Error(String(cause))) }
     })
-    this.rejectPending(new Error('Pi RPC connection closed'))
-    this.child = undefined
+    this.closing = stopped.then(() => { this.child = undefined }).finally(() => {
+      this.rejectPending(new Error('Pi RPC connection closed'))
+      this.closing = undefined
+    })
+    return this.closing
   }
 
   private consumeStdout(chunk: Buffer) {

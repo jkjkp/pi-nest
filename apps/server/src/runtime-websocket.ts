@@ -5,7 +5,7 @@ import { PiRpcCommandError } from '@pi-nest/pi-adapter'
 import { z } from 'zod'
 
 import type { PiRuntimeEvent, PiRuntimeSession } from './pi-runtime-host.js'
-import { PiSessionEditError, PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry, type PiRuntimeSessionSnapshot, type PiRuntimeStatus } from './pi-runtime-registry.js'
+import { PiSessionDeletionError, PiSessionEditError, PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry, type PiRuntimeSessionSnapshot, type PiRuntimeStatus } from './pi-runtime-registry.js'
 import { PiRuntimeResumeError } from './session-event-stream.js'
 import type { SessionIndex } from './session-index.js'
 
@@ -81,6 +81,8 @@ export class RuntimeWebSocketBroker {
     if (command.data.type === 'watch') return this.watch(socket, state, command.data)
     if (command.data.type === 'unwatch') return this.unwatch(socket, state, command.data)
     if ('message' in command.data && command.data.type !== 'steer_queued' && !command.data.message.trim() && !('attachmentIds' in command.data && command.data.attachmentIds?.length)) return this.error(socket, command.data.id, 'INVALID_COMMAND', '输入不能为空', command.data.sessionId)
+    const accessError = this.runtime.sessionAccessError(command.data.sessionId)
+    if (accessError) return this.error(socket, command.data.id, accessError.code, accessError.message, command.data.sessionId)
     const watched = state.sessions.get(command.data.sessionId)
     if (!watched) return this.error(socket, command.data.id, 'SESSION_NOT_WATCHED', 'Pi session is not watched', command.data.sessionId)
 
@@ -233,6 +235,8 @@ export class RuntimeWebSocketBroker {
   }
 
   private async watch(socket: RuntimeSocket, state: SocketState, command: { id: string; resume?: { after: number }; sessionId: string }): Promise<void> {
+    const accessError = this.runtime.sessionAccessError(command.sessionId)
+    if (accessError) return this.error(socket, command.id, accessError.code, accessError.message, command.sessionId)
     const after = command.resume?.after ?? 0
 
     let session
@@ -255,6 +259,7 @@ export class RuntimeWebSocketBroker {
         (status) => this.runtimeStatus(socket, status),
       )
     } catch (cause) {
+      if (cause instanceof PiSessionDeletionError) return this.error(socket, command.id, cause.code, cause.message, session.id)
       if (cause instanceof PiRuntimeResumeError && after > 0) {
         this.resyncRequired(socket, session.id, cause.code === 'RESUME_GAP' ? 'event_buffer_expired' : 'sequence_gap')
         return this.watch(socket, state, { ...command, resume: { after: 0 } })

@@ -95,6 +95,7 @@ export class PiRuntimeHost {
   private thinkingLevel: string | undefined
   private model: { id: string; provider: string } | undefined
   private started = false
+  private closing: Promise<void> | undefined
   private autoCompactionEnabled: boolean | undefined
   private latestUsage: { input: number; cacheRead: number; cacheWrite: number } | undefined
   private usageObserved = false
@@ -126,7 +127,8 @@ export class PiRuntimeHost {
   }
 
   async start(): Promise<PiRpcProcessState> {
-    if (this.started && this.process && this.startResult) return this.startResult
+    if (this.started && this.process && this.startResult && !this.closing) return this.startResult
+    if (this.process) throw new Error('Pi runtime process must finish closing before restart')
 
     const process = this.createProcess(this.session)
     this.process = process
@@ -262,7 +264,10 @@ export class PiRuntimeHost {
     this.process.write(response)
   }
 
-  async close() {
+  close(): Promise<void> {
+    if (this.closing) return this.closing
+    const process = this.process
+    if (!process) return Promise.resolve()
     this.running = false
     this.started = false
     this.startResult = undefined
@@ -273,9 +278,8 @@ export class PiRuntimeHost {
     this.processUnsubscribe = undefined
     this.processFailureUnsubscribe?.()
     this.processFailureUnsubscribe = undefined
-    const process = this.process
-    this.process = undefined
-    await process?.close()
+    this.closing = process.close().then(() => { this.process = undefined }).finally(() => { this.closing = undefined })
+    return this.closing
   }
 
   private publish(event: Record<string, unknown>) {

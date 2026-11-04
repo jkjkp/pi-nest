@@ -50,6 +50,28 @@ function hostFor(process: FakeProcess) {
 }
 
 describe('PiRuntimeHost', () => {
+  it('keeps ownership of a process after failed close and permits restart only after a confirmed close', async () => {
+    const process = new FakeProcess()
+    const createProcess = vi.fn(() => process as never)
+    const host = new PiRuntimeHost({ cwd: '/fixture', id: 'session-1', sessionFile: '/fixture/session.jsonl' }, createProcess)
+    await host.start()
+    const close = vi.spyOn(process, 'close').mockRejectedValueOnce(new Error('still running'))
+    await expect(host.close()).rejects.toThrow('still running')
+    await expect(host.start()).rejects.toThrow('finish closing')
+    expect(createProcess).toHaveBeenCalledOnce()
+    let exit!: () => void
+    close.mockReturnValueOnce(new Promise<void>((resolve) => { exit = resolve }))
+    const first = host.close()
+    const second = host.close()
+    expect(first).toBe(second)
+    await expect(host.start()).rejects.toThrow('finish closing')
+    exit()
+    await first
+    await host.start()
+    expect(createProcess).toHaveBeenCalledTimes(2)
+    await host.close()
+  })
+
   it('caches the Pi-selected startup model and refreshes it after a state read', async () => {
     const process = new FakeProcess()
     process.start = async () => ({ sessionId: 'session-1', state: { sessionId: 'session-1', model: { provider: 'test', id: 'default' }, thinkingLevel: 'medium' } })

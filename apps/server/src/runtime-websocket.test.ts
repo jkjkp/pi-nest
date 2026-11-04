@@ -7,7 +7,7 @@ import { join } from 'node:path'
 
 import { preparePiImage } from '@pi-nest/pi-adapter'
 import { RuntimeWebSocketBroker } from './runtime-websocket.js'
-import { PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
+import { PiSessionDeletionError, PiRuntimeBusyError, PiRuntimeCapacityError, PiRuntimeRegistry } from './pi-runtime-registry.js'
 import type { PiRuntimeHost } from './pi-runtime-host.js'
 import { createSessionIndexFixture } from './test-fixtures/session-index.js'
 
@@ -51,6 +51,7 @@ function runtime() {
   const subscribers = new Map<string, Set<(event: any) => void>>()
   return {
     attachments: new AttachmentStore(),
+    sessionAccessError: vi.fn(),
     isPromptActive: vi.fn(() => false),
     executeExtensionCommand: vi.fn().mockResolvedValue({ disposition: 'handled' }),
     abort: vi.fn().mockResolvedValue(true),
@@ -72,6 +73,37 @@ function runtime() {
 }
 
 describe('RuntimeWebSocketBroker', () => {
+  it('reports deletion that starts while a watch is being established', async () => {
+    const registry = runtime()
+    registry.watch.mockRejectedValueOnce(new PiSessionDeletionError('SESSION_DELETING', 409, '会话正在删除'))
+    const broker = createBroker(registry)
+    const client = socket()
+    broker.open(client)
+    await broker.message(client, JSON.stringify({ id: 'watch', type: 'watch', sessionId: nativeSession.id }))
+    expect(client.sent).toContainEqual(expect.objectContaining({ id: 'watch', type: 'error', code: 'SESSION_DELETING', message: '会话正在删除' }))
+    broker.close(client)
+  })
+
+  it('rejects old watched bindings and fresh watches after the session is deleted', async () => {
+    const host = nativeHost()
+    const createHost = vi.fn(() => host as unknown as PiRuntimeHost)
+    const registry = new PiRuntimeRegistry({ createHost })
+    const broker = createBroker(registry)
+    const client = socket()
+    broker.open(client)
+    try {
+      await broker.message(client, JSON.stringify({ id: 'watch', type: 'watch', sessionId: nativeSession.id }))
+      await registry.resume(nativeBinding)
+      await registry.deleteIdleSession(nativeSession.id, vi.fn().mockResolvedValue(undefined))
+      for (const type of ['resume', 'get_runtime_state', 'get_session_stats', 'watch', 'prompt']) {
+        await broker.message(client, JSON.stringify({ id: type, type, sessionId: nativeSession.id, ...(type === 'prompt' ? { message: 'stale' } : {}) }))
+        expect(client.sent).toContainEqual(expect.objectContaining({ id: type, type: 'error', code: 'SESSION_NOT_FOUND' }))
+      }
+      expect(createHost).toHaveBeenCalledOnce()
+      expect(host.beginPrompt).not.toHaveBeenCalled()
+    } finally { broker.close(client); await registry.close() }
+  })
+
   it('requires watch, acknowledges commands, and sends complete unknown Pi events unchanged', async () => {
     const registry = runtime()
     const broker = createBroker(registry)

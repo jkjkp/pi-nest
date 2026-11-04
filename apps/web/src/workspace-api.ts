@@ -60,7 +60,10 @@ export async function openProjectFolder(cwd: string) {
 
 export async function deleteSession(sessionId: string) {
   const response = await fetch(sessionUrl(sessionId), { method: 'DELETE' })
-  if (!response.ok) throw new Error('Failed to delete Pi session')
+  if (!response.ok) {
+    const body = await response.json().catch(() => undefined)
+    throw Object.assign(new Error(typeof body?.error === 'string' ? body.error : '删除会话失败，请稍后重试。'), { status: response.status, code: body?.code })
+  }
 }
 
 export async function renameSession(sessionId: string, name: string) {

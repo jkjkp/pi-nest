@@ -18,7 +18,7 @@ afterEach(async () => {
 
 function runtime() {
   return {
-    abort: vi.fn(), beginMutation: vi.fn(), beginPrompt: vi.fn(), isPromptStreaming: vi.fn(), startPrompt: vi.fn(), unwatch: vi.fn(), watch: vi.fn(() => () => undefined),
+    sessionAccessError: vi.fn(), abort: vi.fn(), beginMutation: vi.fn(), beginPrompt: vi.fn(), isPromptStreaming: vi.fn(), startPrompt: vi.fn(), unwatch: vi.fn(), watch: vi.fn(() => () => undefined),
   }
 }
 
