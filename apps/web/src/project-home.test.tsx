@@ -27,7 +27,7 @@ beforeEach(() => {
   useWorkspaceStore.setState({ runs: {}, drafts: {}, hiddenProjectCwds: {}, collapsedProjectKeys: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} }, watchStates: {}, runtimeStates: {}, runtimeDetails: {} })
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
 })
-afterEach(async () => { await act(() => root.unmount()); client.clear(); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(async () => { await act(() => root.unmount()); client.clear(); container.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 function Location() { const location = useLocation(); return <output data-route>{location.pathname}{location.search}</output> }
 async function mount(path = '/') { await act(() => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[path]}><WorkspacePage sessionRuns={controller} /><Location /></MemoryRouter></QueryClientProvider>)) }
 async function click(label: string) { await act(() => [...document.querySelectorAll('button')].find((node) => node.textContent === label)!.click()) }
@@ -159,10 +159,10 @@ it('replaces the single source using the native picker and submits only the fina
   await act(() => container.querySelector<HTMLButtonElement>('[aria-label="创建项目"]')!.click())
   const dialog = document.querySelector('[role="dialog"]')!
   await click('选择文件夹')
-  expect(dialog.querySelector('input')).toBeNull()
-  expect(selectProjectFolder).toHaveBeenNthCalledWith(1, undefined)
+  expect(dialog.querySelector<HTMLInputElement>('input')?.value).toBe('/first')
+  expect(selectProjectFolder).toHaveBeenNthCalledWith(1, undefined, expect.any(AbortSignal))
   await click('重新选择')
-  expect(selectProjectFolder).toHaveBeenNthCalledWith(2, '/first')
+  expect(selectProjectFolder).toHaveBeenNthCalledWith(2, '/first', expect.any(AbortSignal))
   expect(dialog.textContent).toContain('/second')
   expect(dialog.textContent).not.toContain('/first')
   expect(addProject).not.toHaveBeenCalled()
@@ -170,7 +170,7 @@ it('replaces the single source using the native picker and submits only the fina
   expect(addProject).toHaveBeenCalledExactlyOnceWith({ kind: 'open', cwd: '/second' })
 })
 
-it('keeps the previous source when the native picker is cancelled and disables actions while it is open', async () => {
+it('keeps the previous source when the native picker is cancelled and permits closing while it is open', async () => {
   vi.mocked(addProject).mockResolvedValue({ cwd: '/first', createdAt: '2026-10-18T00:00:00Z' })
   let finish!: (cwd: string | null) => void
   vi.mocked(selectProjectFolder).mockResolvedValueOnce('/first').mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
@@ -180,7 +180,7 @@ it('keeps the previous source when the native picker is cancelled and disables a
   await click('选择文件夹')
   await click('重新选择')
   expect(dialog.querySelector<HTMLButtonElement>('[type="submit"]')?.disabled).toBe(true)
-  expect(dialog.querySelector<HTMLButtonElement>('[aria-label="关闭"]')?.disabled).toBe(true)
+  expect(dialog.querySelector<HTMLButtonElement>('[aria-label="关闭"]')?.disabled).toBe(false)
   await act(() => finish(null))
   expect(dialog.textContent).toContain('/first')
   expect(addProject).not.toHaveBeenCalled()
@@ -199,6 +199,63 @@ it('handles native picker cancellation and failure without registering a project
   expect(dialog.textContent).toContain('无法打开系统文件夹选择器')
   expect(addProject).not.toHaveBeenCalled()
   expect(container.querySelector('[data-route]')?.textContent).toBe('/')
+})
+
+it.each(['关闭', '取消', 'Escape'])('allows %s during a pending selection and ignores the old response after reopening', async (action) => {
+  let finish!: (cwd: string | null) => void
+  vi.mocked(selectProjectFolder).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve })).mockResolvedValueOnce('/current')
+  await mount()
+  await act(() => container.querySelector<HTMLButtonElement>('[aria-label="创建项目"]')!.click())
+  await click('选择文件夹')
+  const signal = vi.mocked(selectProjectFolder).mock.calls[0]![1]!
+  if (action === '关闭') await act(() => document.querySelector<HTMLButtonElement>('[aria-label="关闭"]')!.click())
+  else if (action === 'Escape') await act(() => document.querySelector('[role="dialog"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+  else await click('取消')
+  expect(signal.aborted).toBe(true)
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+  await act(() => container.querySelector<HTMLButtonElement>('[aria-label="创建项目"]')!.click())
+  await click('选择文件夹')
+  await act(() => finish('/stale'))
+  expect(document.querySelector<HTMLInputElement>('[role="dialog"] input')?.value).toBe('/current')
+  expect(addProject).not.toHaveBeenCalled()
+})
+
+it('cancels a selection, retries in the same dialog and keeps the new selection when the old request finishes', async () => {
+  let finish!: (cwd: string | null) => void
+  vi.mocked(selectProjectFolder).mockImplementationOnce(() => new Promise((resolve) => { finish = resolve })).mockResolvedValueOnce('/current')
+  await mount()
+  await act(() => container.querySelector<HTMLButtonElement>('[aria-label="创建项目"]')!.click())
+  await click('选择文件夹')
+  await click('取消选择')
+  expect(vi.mocked(selectProjectFolder).mock.calls[0]![1]!.aborted).toBe(true)
+  await click('选择文件夹')
+  await act(() => finish('/stale'))
+  expect(document.querySelector<HTMLInputElement>('[role="dialog"] input')?.value).toBe('/current')
+})
+
+it('can register a manually entered server path without opening the native picker', async () => {
+  vi.mocked(addProject).mockResolvedValue({ cwd: 'D:\\中文 project', createdAt: '2026-11-05T00:00:00Z' })
+  await mount()
+  await act(() => container.querySelector<HTMLButtonElement>('[aria-label="创建项目"]')!.click())
+  await fill(document.querySelector<HTMLInputElement>('[role="dialog"] input')!, '  D:\\中文 project  ')
+  await click('创建项目')
+  expect(addProject).toHaveBeenCalledExactlyOnceWith({ kind: 'open', cwd: 'D:\\中文 project' })
+  expect(selectProjectFolder).not.toHaveBeenCalled()
+})
+
+it('aborts a stalled selection at the frontend deadline and restores the manual path entry', async () => {
+  vi.mocked(selectProjectFolder).mockImplementationOnce((_cwd, signal) => new Promise((_resolve, reject) => {
+    signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+  }))
+  await mount()
+  await act(() => container.querySelector<HTMLButtonElement>('[aria-label="创建项目"]')!.click())
+  vi.useFakeTimers()
+  await click('选择文件夹')
+  await act(() => vi.advanceTimersByTimeAsync(120_000))
+  const dialog = document.querySelector('[role="dialog"]')!
+  expect(dialog.querySelector('[role="alert"]')?.textContent).toContain('超时')
+  expect(dialog.querySelector<HTMLInputElement>('input')?.disabled).toBe(false)
+  expect(vi.mocked(selectProjectFolder).mock.calls[0]![1]!.aborted).toBe(true)
 })
 
 

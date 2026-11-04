@@ -18,10 +18,12 @@ export function createProjectRoutes(projects: ProjectRegistry, security: Runtime
     .post('/select-folder', async (context) => {
       const parsed = z.object({ cwd: pathSchema.optional() }).strict().safeParse(await context.req.json().catch(() => undefined))
       if (!parsed.success) return context.json({ error: '文件夹选择请求无效。' }, 400)
-      try { return context.json({ cwd: await selectProjectFolder(parsed.data.cwd) }) }
+      try { return context.json({ cwd: await selectProjectFolder(parsed.data.cwd, context.req.raw.signal) }) }
       catch (cause) {
         console.error('Failed to select project folder', { cause })
-        return context.json({ error: cause instanceof Error && !('code' in cause) ? cause.message : '无法打开系统文件夹选择器，请重试。' }, 503)
+        const code = (cause as { code?: string }).code
+        const pickerError = code === 'PROJECT_FOLDER_PICKER_BUSY' || code === 'PROJECT_FOLDER_PICKER_TIMEOUT'
+        return context.json({ error: cause instanceof Error && (pickerError || !code) ? cause.message : '无法打开系统文件夹选择器，请重试或手动输入绝对路径。', code: pickerError ? code : 'PROJECT_FOLDER_PICKER_FAILED' }, 503)
       }
     })
     .get('/', (context) => {

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 let openProjectFolder: typeof import('./workspace-api.js')['openProjectFolder']
-beforeEach(async () => { vi.resetModules(); ({ openProjectFolder } = await import('./workspace-api.js')) })
+let selectProjectFolder: typeof import('./workspace-api.js')['selectProjectFolder']
+beforeEach(async () => { vi.resetModules(); ({ openProjectFolder, selectProjectFolder } = await import('./workspace-api.js')) })
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -26,4 +27,19 @@ it('preserves the launcher error code and message on failure', async () => {
   await expect(openProjectFolder('D:\\project')).rejects.toMatchObject({
     code: 'PROJECT_FOLDER_OPEN_FAILED', message: '无法启动系统文件管理器，请确认当前系统支持桌面操作。',
   })
+})
+
+it('passes picker cancellation through the authenticated request to fetch', async () => {
+  const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ runtimeId: 'runtime-1', token: 'token', websocketPath: '/api/runtime' }))
+    .mockImplementationOnce((_url, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true })
+    }))
+  vi.stubGlobal('fetch', fetcher)
+  const controller = new AbortController()
+  const selection = selectProjectFolder('D:\\project', controller.signal)
+  await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
+  const rejection = expect(selection).rejects.toMatchObject({ name: 'AbortError' })
+  controller.abort()
+  await rejection
+  expect(fetcher).toHaveBeenLastCalledWith('/api/projects/select-folder', expect.objectContaining({ signal: controller.signal, body: JSON.stringify({ cwd: 'D:\\project' }) }))
 })

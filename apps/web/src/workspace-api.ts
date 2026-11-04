@@ -162,8 +162,8 @@ export async function addProject(request: { kind: 'open'; cwd: string } | { kind
 }
 
 
-export async function selectProjectFolder(cwd?: string) {
-  const body = await configurationRequest<{ cwd: string | null }>('/api/projects/select-folder', { method: 'POST', body: JSON.stringify(cwd ? { cwd } : {}) })
+export async function selectProjectFolder(cwd?: string, signal?: AbortSignal) {
+  const body = await configurationRequest<{ cwd: string | null }>('/api/projects/select-folder', { method: 'POST', body: JSON.stringify(cwd ? { cwd } : {}), signal })
   return body.cwd
 }
 
