@@ -1,4 +1,4 @@
-import { useAttachmentDraft } from './attachment-draft.js'
+import { setDraftAttachments, useAttachmentDraft, useAttachmentStore } from './attachment-draft.js'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router'
@@ -14,7 +14,6 @@ import { stripAnsiLine } from './ansi-text.js'
 import { activeRuntimeTurn, isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { fetchProjects, fetchSessionHistory, fetchSessions, openProjectFolder } from './workspace-api.js'
-import { setDraftAttachments } from './attachment-draft.js'
 import { isRuntimeConnectionError } from './runtime-websocket-client.js'
 import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, projectName, projectSessionGroupKey, planModePolicy, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
 
@@ -49,8 +48,10 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     setControlFailure(message === undefined ? undefined : { sessionId, message })
   }
   const runningInputRequests = useRef(new Set<string>())
+  const queuedEdits = useRef(new Set<string>())
   const [runningInputSessions, setRunningInputSessions] = useState<string[]>([])
   const submittingInput = runningInputSessions.includes(selectedSessionId)
+  const editingQueuedInput = submittingInput && queuedEdits.current.has(selectedSessionId)
   const controlKey = selectedSessionId || draftProjectKey
   const [controlSessionId, setControlSessionId] = useState(controlKey)
   if (controlSessionId !== controlKey) {
@@ -124,6 +125,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
 
   const editDisabled = isActive || modelOperation.current?.sessionId === selectedSessionId || mutatingSessionId !== undefined || submittingInput || Boolean(currentRun?.pendingInputs?.length) || Boolean(runtimeDetails[selectedSessionId]?.isCompacting)
   function setComposerText(sessionId: string, text: string) {
+    if (queuedEdits.current.has(sessionId)) return
     const state = useWorkspaceStore.getState()
     const edit = state.messageEdits[sessionId]
     if (!edit) return state.setDraft(sessionId, text)
@@ -214,6 +216,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   }
 
   function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up', commandsChecked = false) {
+    if (queuedEdits.current.has(selectedSessionId)) return
     if (messageEdit) return void submitMessageEdit()
     if (attachmentDraft.items.length && (attachmentDraft.busy || prompt.trimStart().startsWith('/'))) {
       const error = attachmentDraft.busy ? '请等待附件上传完成，或移除失败的附件。' : '带附件时暂不支持命令，请先移除附件。'
@@ -282,6 +285,36 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     }
   }
 
+  async function removeQueued(inputId: string, restore: boolean) {
+    const sessionId = selectedSessionId
+    const state = useWorkspaceStore.getState()
+    const input = state.runs[sessionId]?.pendingInputs?.find((input) => input.id === inputId)
+    if (!sessionId || runningInputRequests.current.has(sessionId) || state.messageEdits[sessionId] || !input || input.mode !== 'follow_up' || input.submitting || input.id.startsWith('queue:') || input.id.startsWith('pending-input:')) return false
+    if (restore && (state.drafts[sessionId]?.length || useAttachmentStore.getState().drafts[sessionId]?.length)) {
+      setControlError('请先发送或清空当前草稿。', sessionId)
+      return false
+    }
+    runningInputRequests.current.add(sessionId)
+    if (restore) queuedEdits.current.add(sessionId)
+    setRunningInputSessions([...runningInputRequests.current])
+    setControlError(undefined)
+    try {
+      const removed = await sessionRuns.dropQueued(sessionId, inputId)
+      if (restore) {
+        setDraftAttachments(sessionId, removed.attachments ?? [], removed.error)
+        setDraft(sessionId, removed.message)
+      }
+      return restore && selectedSessionIdRef.current === sessionId
+    } catch (cause) {
+      setControlError(isRuntimeConnectionError(cause) ? '移除结果尚未确认，请查看最新队列后重试。' : cause instanceof Error ? cause.message : '移除失败，请重试。', sessionId)
+      return false
+    } finally {
+      queuedEdits.current.delete(sessionId)
+      runningInputRequests.current.delete(sessionId)
+      setRunningInputSessions([...runningInputRequests.current])
+    }
+  }
+
   async function steerQueued(inputId: string) {
     const sessionId = selectedSessionId
     if (status !== 'running' || runningInputRequests.current.has(sessionId)) return
@@ -341,7 +374,9 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     navigationOrder, setNavigationOrder, setProjectCollapsed, setDraft: setComposerText, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models: isDraft ? draftModels : models, thinkingLevels: isDraft ? draftLevels : thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus: isDraft ? draftSettingsStatus : thinkingStatus, thinkingError: isDraft ? draftSettingsError : thinkingError, thinkingFailure, currentThinkingLevel: isDraft ? draftThinking : runtimeDetails[selectedSessionId]?.thinkingLevel,
     sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, jumpError, cancelTurnJump, finishTurnJump,
-    selectSession, createBranch, checkBranch, startDraft, openProject, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    selectSession, createBranch, checkBranch, startDraft, openProject, removeProject, submitPrompt, steerQueued, retrySteering, submittingInput, editingQueuedInput,
+    editQueued: (inputId: string) => removeQueued(inputId, true), cancelQueued: (inputId: string) => removeQueued(inputId, false),
+    abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, requestTurnJump, openProjectFolder, changeModel, changeThinkingLevel,
     loadEarlier, retryHistory,
   }

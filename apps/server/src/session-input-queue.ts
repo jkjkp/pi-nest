@@ -141,7 +141,7 @@ export class SessionInputQueue {
     return {
       steering: nativeSteering.map((text) => this.attachments.displayPrompt(text, sessionId) ?? text),
       followUp: [...(this.inputQueue?.followUp ?? []).map((text) => this.attachments.displayPrompt(text, sessionId) ?? text), ...(this.queuedFollowUps ?? []).map((input) => input.message)],
-      ...((this.queuedFollowUps ?? []).some((input) => input.attachmentIds?.length || input.recoveryRequired) ? { inputs: this.queuedFollowUps?.map((input) => ({ ...input })) } : {}),
+      inputs: (this.queuedFollowUps ?? []).map((input) => ({ ...input })),
       ...(pendingSteering.length && nativeSteering.length ? { steeringInputs: nativeSteering.map((text, index) => {
         const saved = pendingSteering.find((input) => input.submissionId && text.includes(input.submissionId))
         return saved ? { ...saved } : { id: `native-steer:${index}`, message: this.attachments.displayPrompt(text, sessionId) ?? text }

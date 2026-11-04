@@ -1,6 +1,6 @@
 import type { PiRuntimeCommand, PiRuntimeStatistics, PiRuntimeEvent, RuntimeError, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel, RuntimeMessage, RuntimeCommandPayload } from '@pi-nest/contracts'
 import { createRuntimeBootstrap, runtimeBootstrap } from './runtime-bootstrap.js'
-import type { PiEditLastInput, PiEditStatus, PiHistoryChange, PiRuntimeExtensionUi } from '@pi-nest/contracts'
+import type { PiEditLastInput, PiEditStatus, PiHistoryChange, PiRuntimeExtensionUi, PiQueuedInput } from '@pi-nest/contracts'
 export type { PiRuntimeEvent, RuntimeError, RuntimeLifecycle, RuntimeFailureKind, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel } from '@pi-nest/contracts'
 
 type RuntimeSocket = Pick<WebSocket, 'close' | 'readyState' | 'send'> & { addEventListener: WebSocket['addEventListener'] }
@@ -186,7 +186,7 @@ export class RuntimeWebSocketClient {
   followUp(sessionId: string, message: string, input?: { attachmentIds: string[]; submissionId: string }) { return this.command({ type: 'follow_up', sessionId, message, ...input }) }
   steerQueued(sessionId: string, message: string, index: number, inputId?: string) { return this.command({ type: 'steer_queued', sessionId, message, index, ...(inputId ? { inputId } : {}) }) }
   resumeQueued(sessionId: string, inputId: string) { return this.command({ type: 'resume_queued', sessionId, inputId }) }
-  dropQueued(sessionId: string, inputId: string) { return this.command<{ message: string }>({ type: 'drop_queued', sessionId, inputId }) }
+  dropQueued(sessionId: string, inputId: string) { return this.command<PiQueuedInput>({ type: 'drop_queued', sessionId, inputId }) }
   setModel(sessionId: string, provider: string, modelId: string) { return this.command({ type: 'set_model', sessionId, modelId, provider }) }
   setThinkingLevel(sessionId: string, level: string) { return this.command({ type: 'set_thinking_level', sessionId, level }) }
   compact(sessionId: string, customInstructions?: string) { return this.command({ type: 'compact', sessionId, ...(customInstructions ? { customInstructions } : {}) }) }
@@ -270,7 +270,7 @@ export class RuntimeWebSocketClient {
     const pending = message.id ? this.pending.get(message.id) : undefined
     if (message.id) this.pending.delete(message.id)
     pending?.reject(Object.assign(new Error(message.message), { code: message.code }))
-    if (pending?.command !== 'get_session_stats' && pending?.command !== 'steer' && pending?.command !== 'follow_up' && pending?.command !== 'steer_queued' && pending?.command !== 'edit_last' && pending?.command !== 'get_edit_status') this.notify(message)
+    if (pending?.command !== 'get_session_stats' && pending?.command !== 'steer' && pending?.command !== 'follow_up' && pending?.command !== 'steer_queued' && pending?.command !== 'drop_queued' && pending?.command !== 'edit_last' && pending?.command !== 'get_edit_status') this.notify(message)
   }
 
   private handleEvent(message: { type: 'pi_event' } & PiRuntimeEvent) {

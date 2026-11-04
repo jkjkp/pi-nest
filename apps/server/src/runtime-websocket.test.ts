@@ -73,6 +73,22 @@ function runtime() {
 }
 
 describe('RuntimeWebSocketBroker', () => {
+  it('returns the removed queue record with attachment receipts for editing', async () => {
+    const inputId = crypto.randomUUID()
+    const attachment = { id: crypto.randomUUID(), name: 'input.txt', size: 4, kind: 'file', mediaType: 'text/plain' }
+    const input = { id: inputId, message: 'queued', attachmentIds: [attachment.id], attachments: [attachment], submissionId: inputId }
+    const registry = { ...runtime(), dropQueued: vi.fn(async () => input) }
+    const broker = createBroker(registry)
+    const client = socket()
+    broker.open(client)
+    await broker.message(client, JSON.stringify({ id: 'watch', type: 'watch', sessionId: nativeSession.id }))
+    await broker.message(client, JSON.stringify({ id: 'drop', type: 'drop_queued', sessionId: nativeSession.id, inputId }))
+    expect(registry.dropQueued).toHaveBeenCalledWith(nativeSession.id, inputId)
+    expect(client.sent).toContainEqual({ type: 'ack', command: 'drop_queued', id: 'drop', sessionId: nativeSession.id, data: input })
+    expect(registry.beginPrompt).not.toHaveBeenCalled()
+    broker.close(client)
+  })
+
   it('reports deletion that starts while a watch is being established', async () => {
     const registry = runtime()
     registry.watch.mockRejectedValueOnce(new PiSessionDeletionError('SESSION_DELETING', 409, '会话正在删除'))

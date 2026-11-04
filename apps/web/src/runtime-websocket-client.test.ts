@@ -51,14 +51,14 @@ it('replays history without overwriting drafts and still accepts a newer live ed
 })
 
 describe('RuntimeWebSocketClient', () => {
-  it('rejects an unsuccessful queue command without failing the current run', async () => {
+  it.each(['follow_up', 'drop_queued'] as const)('rejects an unsuccessful %s command without failing the current run', async (command) => {
     vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
     const socket = new FakeSocket()
     const factory = vi.fn(() => socket as never)
     const client = new RuntimeWebSocketClient({ fetchFn: vi.fn(() => Promise.resolve(new Response(JSON.stringify({ runtimeId: 'runtime-1', token: 'token', websocketPath: '/api/runtime' })))), socketFactory: factory })
     const errors = vi.fn()
     client.onError(errors)
-    const queue = client.followUp('session-a', 'later')
+    const queue = command === 'follow_up' ? client.followUp('session-a', 'later') : client.dropQueued('session-a', crypto.randomUUID())
     const rejection = expect(queue).rejects.toMatchObject({ code: 'SESSION_NOT_RUNNING' })
     await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce())
     socket.open()

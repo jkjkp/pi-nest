@@ -20,6 +20,7 @@ beforeEach(() => {
       selectedSessionId: 'a', selectedSession: { id: 'a' }, isDraft: false, draftProject: undefined,
       creatingDraft: false, prompt: 'next', currentRun: undefined, history: undefined,
       setDraft: vi.fn(), setDraftPrompt: vi.fn(), status: 'running', isActive: true, submittingInput: false,
+      editingQueuedInput: false, editQueued: vi.fn(async () => true), cancelQueued: vi.fn(async () => false),
       steerQueued: vi.fn(), planStatus: '', planPolicy: undefined, extensionStatus: '', planTurnId: undefined,
       retryHistory: vi.fn(), requestTurnJump: vi.fn(),
       attachmentDraft: { items: [], add: vi.fn(), busy: false } as unknown as Props['state']['attachmentDraft'],

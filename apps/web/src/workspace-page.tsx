@@ -42,7 +42,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
     navigationOrder, setNavigationOrder, setProjectCollapsed, setDraft, setDraftPrompt,
     mutatingSessionId, creatingDraft, draftError, controlError, models, thinkingLevels, thinkingOpen, setThinkingOpen, thinkingStatus, thinkingError, thinkingFailure, currentThinkingLevel,
     sessionsQuery, projectsQuery, historyQuery, history, historyError, planTurnId, turnIndexQuery, navigationNotice, retryNavigation, pendingJump, jumpError, cancelTurnJump, finishTurnJump,
-    startDraft, openProject, removeProject, steerQueued, retrySteering, submittingInput, abortPrompt, openModels, openThinking, handleRename, handleDelete,
+    startDraft, openProject, removeProject, steerQueued, retrySteering, submittingInput, editingQueuedInput, editQueued, cancelQueued, abortPrompt, openModels, openThinking, handleRename, handleDelete,
     readTurnPrompt, requestTurnJump, openProjectFolder, changeModel, changeThinkingLevel, loadEarlier, retryHistory,
   } = session
   const workspaceView = useWorkspaceStore((state) => state.workspaceView)
@@ -174,7 +174,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
       <WorkspaceLayout title={sessionTitle} titleTooltip={displaySession ? sessionDisplayName(displaySession) : undefined}
         navigation={navigation} containerRef={workspaceGrid} previewOpen={preview.open}
         preview={<WorkspaceFilePreview preview={preview} containerRef={workspaceGrid} />}>
-        <section onDragOver={(event) => { if (graphSelection) return; if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={(event) => { if (graphSelection) { event.preventDefault(); return } if (session.messageEdit && session.messageEdit.status !== 'editing') { event.preventDefault(); return } try { attachmentDrop(event, attachmentDraft.add) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '附件无法添加') } }} className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
+        <section onDragOver={(event) => { if (graphSelection) return; if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={(event) => { if (graphSelection) { event.preventDefault(); return } if (editingQueuedInput) { event.preventDefault(); return } if (session.messageEdit && session.messageEdit.status !== 'editing') { event.preventDefault(); return } try { attachmentDrop(event, attachmentDraft.add) } catch (cause) { setAttachmentError(cause instanceof Error ? cause.message : '附件无法添加') } }} className="relative flex min-h-0 min-w-0 flex-col [--composer-height:132px]">
           <header className="flex min-h-10 shrink-0 items-center gap-3 border-b bg-background/95 py-0.5 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:pl-4">
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {navigationCollapsed && <span data-navigation-restore className="hidden md:inline-flex"><NavigationToggle controls="workspace-navigation" expanded={false} onToggle={() => setNavigationCollapsed(false)} /></span>}
@@ -280,7 +280,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           {!isHome && <WorkspaceComposer
             state={{ creatingDraft, attachmentDraft, selectedSessionId, selectedSession, isDraft, draftProject, prompt: session.messageEdit ? ordinaryDraft : prompt, currentRun, history,
               messageEdit: session.messageEdit,
-              setDraft, setDraftPrompt, status, isActive, submittingInput, steerQueued, planStatus, planPolicy,
+              setDraft, setDraftPrompt, status, isActive, submittingInput, editingQueuedInput, editQueued, cancelQueued, steerQueued, planStatus, planPolicy,
               extensionStatus, planTurnId, retryHistory, requestTurnJump: navigateToTurn }}
             commands={commands} sessionRuns={sessionRuns} textareaRef={promptTextareaRef} setComposer={setComposer}
             onSubmit={submitPrompt} onAbort={() => { void abortPrompt() }} error={session.messageEdit ? undefined : attachmentError} onError={setAttachmentError}

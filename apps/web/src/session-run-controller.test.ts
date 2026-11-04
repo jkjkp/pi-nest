@@ -38,6 +38,7 @@ function runtimeMock() {
     getEditStatus: vi.fn().mockResolvedValue({ status: 'pending', submissionId: 'edit' }),
     steer: vi.fn().mockResolvedValue(undefined),
     steerQueued: vi.fn().mockResolvedValue(undefined),
+    dropQueued: vi.fn(),
     extensionUiResponse: vi.fn().mockResolvedValue(undefined),
     emit: (event: PiRuntimeEvent) => { for (const listener of events) listener(event) },
     fail: (error: { code?: string; message: string; sessionId?: string }) => { for (const listener of errors) listener(error) },
@@ -643,6 +644,31 @@ describe('session run controller', () => {
     runtime.emit({ event: { type: 'queue_update', steering: ['next'], followUp: ['later'] }, observedAt: 'now', runId: 'run-1', sequence: 2, sessionId: 'session-a' })
     expect(workspace.getState().runs['session-a']!.pendingInputs!.map((input) => input.message)).toEqual(['next', 'later'])
     await expect(controller.steerQueued('session-a', chosen.id)).rejects.toThrow('排队消息已发生变化')
+  })
+
+  it('uses server IDs for identical plain-text messages after reconnect and returns the removed record', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
+    const inputs = [{ id: 'first', message: 'same' }, { id: 'second', message: 'same' }]
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'active', revision: 1 }, inputQueue: { steering: [], followUp: ['same', 'same'], inputs } })
+    expect(workspace.getState().runs['session-a']?.pendingInputs?.map((input) => input.id)).toEqual(['first', 'second'])
+    await controller.steerQueued('session-a', 'second')
+    expect(runtime.steerQueued).toHaveBeenCalledWith('session-a', 'same', 1, 'second')
+    runtime.dropQueued.mockResolvedValueOnce(inputs[0])
+    expect(await controller.dropQueued('session-a', 'first')).toEqual(inputs[0])
+    expect(runtime.dropQueued).toHaveBeenCalledWith('session-a', 'first')
+    expect(workspace.getState().drafts['session-a']).toBeUndefined()
+  })
+
+  it('requests a fresh snapshot after rejected removal without hiding the message or changing the run', async () => {
+    const runtime = runtimeMock()
+    const controller = createSessionRunController({ state: workspace, invalidateHistory: vi.fn(), runtime: runtime as never })
+    runtime.snapshot({ sessionId: 'session-a', runtime: { lifecycle: 'active', revision: 1 }, activeTurn: { runId: 'run-1', prompt: 'current', startedAt: 'now' }, inputQueue: { steering: [], followUp: ['same'], inputs: [{ id: 'first', message: 'same' }] } })
+    runtime.dropQueued.mockRejectedValueOnce(new Error('already executing'))
+    await expect(controller.dropQueued('session-a', 'first')).rejects.toThrow('already executing')
+    expect(runtime.watch).toHaveBeenLastCalledWith('session-a', 'background', 0)
+    expect(workspace.getState().runs['session-a']?.pendingInputs?.map((input) => input.id)).toEqual(['first'])
+    expect(workspace.getState().runs['session-a']?.status).toBe('running')
   })
 
   it('uses authoritative queues for repeated text, aborted runs and reconnects', async () => {

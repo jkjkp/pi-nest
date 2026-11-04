@@ -22,8 +22,12 @@ function draftId(cwd: string) {
   if (!id) { id = crypto.randomUUID(); useAttachmentStore.setState((s) => ({ draftIds: { ...s.draftIds, [cwd]: id } })) }
   return id
 }
-export function setDraftAttachments(sessionId: string, refs: AttachmentRef[]) {
-  useAttachmentStore.getState().set(sessionId, refs.map((ref) => ({ id: ref.id, name: ref.name, size: ref.size, ref, status: 'ready' })))
+export function setDraftAttachments(sessionId: string, refs: AttachmentRef[], error?: string) {
+  useAttachmentStore.setState((state) => {
+    const submissions = { ...state.submissions }
+    delete submissions[sessionId]
+    return { submissions, drafts: { ...state.drafts, [sessionId]: refs.map((ref) => ({ id: ref.id, name: ref.name, size: ref.size, ref, status: error ? 'failed' : 'ready', ...(error ? { error } : {}) })) } }
+  })
 }
 
 export function useAttachmentDraft(sessionId: string, cwd?: string, draftKey?: string) {

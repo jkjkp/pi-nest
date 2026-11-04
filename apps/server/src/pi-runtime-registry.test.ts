@@ -399,7 +399,7 @@ describe('PiRuntimeRegistry', () => {
       host.emit({ type: 'queue_update', steering: ['change direction'], followUp: ['later', 'next'] })
       const snapshots: any[] = []
       const unwatch = await registry.watch(session.id, 'reconnected', 0, () => undefined, () => undefined, (snapshot) => snapshots.push(snapshot))
-      expect(snapshots.at(-1).inputQueue).toEqual({ steering: ['change direction'], followUp: ['later', 'next', 'later'] })
+      expect(snapshots.at(-1).inputQueue).toEqual({ steering: ['change direction'], followUp: ['later', 'next', 'later'], inputs: [{ id: expect.any(String), message: 'later' }] })
       unwatch()
     } finally { await registry.close() }
   })

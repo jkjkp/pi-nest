@@ -1,5 +1,5 @@
 import { piAssistantStopReason } from '@pi-nest/contracts/pi-events'
-import type { PiRuntimeCommand, AttachmentRef, PiEditLastInput, PiEditStatus, PiHistoryChange } from '@pi-nest/contracts'
+import type { PiRuntimeCommand, AttachmentRef, PiEditLastInput, PiEditStatus, PiHistoryChange, PiQueuedInput } from '@pi-nest/contracts'
 import { unstable_batchedUpdates } from 'react-dom'
 import { stripAnsiText } from './ansi-text.js'
 import { isRuntimeConnectionError, readExtensionUi, readHistoryChange, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
@@ -53,7 +53,7 @@ export type SessionRunController = {
   start: (options: StartSessionRunOptions) => boolean
   steer: (sessionId: string, message: string, input?: InputAttachments) => Promise<void>
   resumeQueued: (sessionId: string, inputId: string) => Promise<void>
-  dropQueued: (sessionId: string, inputId: string) => Promise<void>
+  dropQueued: (sessionId: string, inputId: string) => Promise<PiQueuedInput>
   steerQueued: (sessionId: string, inputId: string) => Promise<void>
   retrySteering: (sessionId: string, turnId: string) => Promise<void>
   stop: (sessionId: string) => Promise<boolean>
@@ -457,7 +457,9 @@ export function createSessionRunController({ invalidateHistory, replaceHistory, 
     const inputs = stateStore.getState().runs[sessionId]?.pendingInputs?.filter((input) => input.mode === 'follow_up') ?? []
     const index = inputs.findIndex((input) => input.id === inputId)
     if (index < 0 || inputs[index]!.submitting) throw new Error('排队消息已发生变化，请重试。')
-    return submitSteering(sessionId, inputs[index]!.message, () => runtime.steerQueued(sessionId, inputs[index]!.message, index, ...(inputs[index]!.submissionId ? [inputs[index]!.id] : [])), inputId, retryId, inputs[index]!.attachments?.length ? { attachments: inputs[index]!.attachments!, attachmentIds: inputs[index]!.attachments!.map((a) => a.id), submissionId: inputs[index]!.submissionId! } : undefined)
+    const input = inputs[index]!
+    const serverId = !input.id.startsWith('queue:') && !input.id.startsWith('pending-input:') ? input.id : undefined
+    return submitSteering(sessionId, input.message, () => runtime.steerQueued(sessionId, input.message, index, ...(serverId ? [serverId] : [])), inputId, retryId, input.attachments?.length ? { attachments: input.attachments, attachmentIds: input.attachments.map((a) => a.id), submissionId: input.submissionId! } : undefined)
   }
 
   return {
@@ -620,7 +622,12 @@ export function createSessionRunController({ invalidateHistory, replaceHistory, 
     },
     steer: (sessionId, message, input) => submitRunningInput(sessionId, message, 'steer', input),
     resumeQueued: async (sessionId, inputId) => { await runtime.watch(sessionId); await runtime.resumeQueued(sessionId, inputId) },
-    dropQueued: async (sessionId, inputId) => { await runtime.watch(sessionId); await runtime.dropQueued(sessionId, inputId) },
+    dropQueued: async (sessionId, inputId) => {
+      const role = sessionId === foregroundSessionId ? 'foreground' : 'background'
+      await runtime.watch(sessionId, role)
+      try { return await runtime.dropQueued(sessionId, inputId) }
+      catch (cause) { void runtime.watch(sessionId, role, 0).catch(() => undefined); throw cause }
+    },
     steerQueued,
     retrySteering: async (sessionId, turnId) => {
       const turn = stateStore.getState().runs[sessionId]?.turns.find((turn) => turn.id === turnId)

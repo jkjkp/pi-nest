@@ -1,4 +1,4 @@
-import { useEffect, useImperativeHandle, useState, type ReactNode, type RefObject } from 'react'
+import { useEffect, useImperativeHandle, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { ListChecks, ListCollapse, ListPlus, LoaderCircle, Puzzle, Send, Square, Terminal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -17,7 +17,7 @@ import type { useWorkspaceCommands } from './use-workspace-commands.js'
 
 type ComposerState = Pick<ReturnType<typeof useWorkspaceSession>,
   'creatingDraft' | 'attachmentDraft' | 'selectedSessionId' | 'selectedSession' | 'isDraft' | 'draftProject' | 'prompt' |
-  'currentRun' | 'history' | 'setDraft' | 'setDraftPrompt' | 'status' | 'isActive' | 'submittingInput' |
+  'currentRun' | 'history' | 'setDraft' | 'setDraftPrompt' | 'status' | 'isActive' | 'submittingInput' | 'editingQueuedInput' | 'editQueued' | 'cancelQueued' |
   'steerQueued' | 'planStatus' | 'planPolicy' | 'extensionStatus' | 'planTurnId' | 'retryHistory' | 'requestTurnJump'> & Partial<Pick<ReturnType<typeof useWorkspaceSession>, 'messageEdit'>>
 
 export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, setComposer, onSubmit, onAbort, controls, canQuery, settingsBusy, error, onError }: {
@@ -35,12 +35,19 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
   onError: (error: string | undefined) => void
 }) {
   const { creatingDraft, attachmentDraft, selectedSessionId, selectedSession, isDraft, draftProject, prompt, currentRun, history,
-    setDraft, setDraftPrompt, status, isActive, submittingInput, steerQueued, planStatus, planPolicy,
+    setDraft, setDraftPrompt, status, isActive, submittingInput, editingQueuedInput, editQueued, cancelQueued, steerQueued, planStatus, planPolicy,
     extensionStatus, planTurnId, retryHistory, requestTurnJump } = state
   const promptTextareaRef = useComposerTextarea(prompt)
   const edit = state.messageEdit
-  const editBusy = Boolean(edit)
+  const editBusy = Boolean(edit) || editingQueuedInput
+  const focusQueuedDraft = useRef<string | undefined>(undefined)
+  const [queuedFocusRequest, setQueuedFocusRequest] = useState(0)
   useImperativeHandle(textareaRef, () => promptTextareaRef.current!)
+  useEffect(() => {
+    if (!focusQueuedDraft.current || editBusy) return
+    if (focusQueuedDraft.current === selectedSessionId) promptTextareaRef.current?.focus()
+    focusQueuedDraft.current = undefined
+  }, [queuedFocusRequest, editBusy, selectedSessionId, promptTextareaRef])
   const promptHistory = useComposerHistory(
     selectedSessionId || (isDraft ? `draft:${draftProject?.key}` : ''),
     isDraft ? [] : timelineItems(history?.entries, currentRun?.turns ?? [], currentRun?.systemEvents ?? []),
@@ -64,13 +71,11 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
       <div className="conversation-stage">
         <div className="conversation-stage-content">
           <div className="pointer-events-auto"><ExtensionUiInline sessionId={selectedSessionId} planTurnId={planTurnId} onViewPlan={() => { if (planTurnId) void requestTurnJump(planTurnId, undefined, true) }} onRetryPlan={retryHistory} /></div>
-          <PendingInputs inputs={(currentRun?.pendingInputs ?? []).filter((input) => !currentRun?.turns.some((turn) => (turn.steering?.queuedInputId === input.id || input.submissionId && turn.submissionId === input.submissionId && turn.steering) && turn.steering?.status !== 'failed'))} key={selectedSessionId} onResume={(inputId) => { void sessionRuns.resumeQueued(selectedSessionId, inputId).catch((cause) => onError(cause.message)) }} onSteer={steerQueued} onDrop={(input) => {
-            void sessionRuns.dropQueued(selectedSessionId, input.id).catch((cause) => onError(cause.message))
-            // Restore the text into an empty composer so a failed attachment costs a re-upload, not a retype.
-            if (prompt.trim()) return
-            if (isDraft) setDraftPrompt(input.message)
-            else setDraft(selectedSessionId, input.message)
-          }} disabled={submittingInput || status !== 'running'} />
+          <PendingInputs inputs={(currentRun?.pendingInputs ?? []).filter((input) => !currentRun?.turns.some((turn) => (turn.steering?.queuedInputId === input.id || input.submissionId && turn.submissionId === input.submissionId && turn.steering) && turn.steering?.status !== 'failed'))} key={selectedSessionId}
+            onResume={(inputId) => { void sessionRuns.resumeQueued(selectedSessionId, inputId).catch((cause) => onError(cause.message)) }} onSteer={steerQueued}
+            onEdit={async (input) => { if (await editQueued(input.id)) { focusQueuedDraft.current = selectedSessionId; setQueuedFocusRequest((value) => value + 1) } }}
+            onDrop={(input) => { void cancelQueued(input.id) }}
+            disabled={submittingInput || Boolean(edit) || commands.busy} steerDisabled={status !== 'running'} editDisabled={prompt.length > 0 || attachmentDraft.items.length > 0} />
           {!edit && <ComposerAttachments draft={attachmentDraft} />}
           {error && <p role="alert" className="pointer-events-auto mb-2 text-xs text-destructive">{error}<Button variant="ghost" size="sm" onClick={() => onError(undefined)}>关闭</Button></p>}
           <CommandNotice notice={commands.notice} />
@@ -79,7 +84,7 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
         <ExtensionStatusNotice sessionId={selectedSessionId} />
         <label className="sr-only" htmlFor="prompt">{isDraft ? '输入新对话的第一条提示词' : '向当前 Pi 会话发送提示词'}</label>
         <CommandComposer
-          commandsEnabled={!edit}
+          commandsEnabled={!editBusy}
           onExecuteCommand={(value) => { if (attachmentDraft.items.length) onError('带附件时暂不支持命令，请先移除附件。'); else commands.submit(value) }}
           key={selectedSessionId || `draft:${draftProject?.key}`}
           sessionId={isDraft ? '' : selectedSessionId}
@@ -88,7 +93,7 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
           className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
           disabled={(!selectedSession && !isDraft) || creatingDraft || editBusy}
           id="prompt"
-          onPaste={(event) => { const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); try { attachmentDraft.add(files) } catch (cause) { onError(cause instanceof Error ? cause.message : '粘贴失败') } } }}
+          onPaste={(event) => { if (editBusy) { event.preventDefault(); return } const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); try { attachmentDraft.add(files) } catch (cause) { onError(cause instanceof Error ? cause.message : '粘贴失败') } } }}
           maxLength={20_000}
           onFocus={(event) => resizeComposerTextarea(event.currentTarget)}
           onValueChange={(value) => {
@@ -97,7 +102,7 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
             else if (selectedSessionId) setDraft(selectedSessionId, value)
           }}
           onKeyDown={(event) => {
-            if (edit) return
+            if (editBusy) return
             if (commands.busy && event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); return }
             if (!edit && promptHistory.onKeyDown(event)) return
             if (event.key !== 'Enter' || event.shiftKey || event.altKey || event.nativeEvent.isComposing) return
@@ -121,7 +126,7 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
             {status === 'aborting' && <span role="status" aria-label="正在停止" data-composer-tooltip="正在停止…" className="composer-aborting inline-flex h-9 shrink-0 items-center text-sm text-muted-foreground"><LoaderCircle aria-hidden="true" className="composer-control-icon hidden animate-spin" /><span className="composer-control-label">正在停止…</span></span>}
             {!edit && status === 'running' && (prompt.trim().length > 0 || attachmentDraft.items.length > 0) && <Button className="composer-queue rounded-full" disabled={submittingInput || commands.busy || attachmentDraft.busy} onClick={() => onSubmit()} aria-label={submittingInput ? '提交中' : parseComposerCommand(prompt) ? '执行命令' : '排队'} data-composer-tooltip={submittingInput ? '正在提交' : parseComposerCommand(prompt) ? '执行输入的命令' : '当前任务完成后执行'} type="button">{submittingInput ? <LoaderCircle aria-hidden="true" className="composer-control-icon hidden animate-spin" /> : parseComposerCommand(prompt) ? <Terminal aria-hidden="true" className="composer-control-icon hidden" /> : <ListPlus aria-hidden="true" className="composer-control-icon hidden" />}<span className="composer-control-label">{submittingInput ? '提交中…' : parseComposerCommand(prompt) ? '执行命令' : '排队'}</span></Button>}
             {!edit && !isActive && (
-              <Button aria-label="发送提示词" className="rounded-full" disabled={commands.busy || (!selectedSession && !isDraft) || creatingDraft || settingsBusy || attachmentDraft.busy || (prompt.trim().length === 0 && attachmentDraft.items.length === 0)} onClick={() => onSubmit()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
+              <Button aria-label="发送提示词" className="rounded-full" disabled={editBusy || commands.busy || (!selectedSession && !isDraft) || creatingDraft || settingsBusy || attachmentDraft.busy || (prompt.trim().length === 0 && attachmentDraft.items.length === 0)} onClick={() => onSubmit()} size="icon-lg" type="button"><Send aria-hidden="true" /></Button>
             )}
           </div>
           </div>
@@ -132,12 +137,35 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
   )
 }
 
-export function PendingInputs({ inputs, onSteer, onResume, onDrop, disabled = false }: { inputs: PendingInput[]; onResume?: (inputId: string) => void; onSteer?: (inputId: string) => void; onDrop?: (input: PendingInput) => void; disabled?: boolean }) {
+export function PendingInputs({ inputs, onSteer, onResume, onEdit, onDrop, disabled = false, editDisabled = false, steerDisabled = false }: {
+  inputs: PendingInput[]
+  onResume?: (inputId: string) => void
+  onSteer?: (inputId: string) => void
+  onEdit?: (input: PendingInput) => void
+  onDrop?: (input: PendingInput) => void
+  disabled?: boolean
+  editDisabled?: boolean
+  steerDisabled?: boolean
+}) {
   const [expanded, setExpanded] = useState(false)
   const pending = inputs.filter((input) => input.mode === 'follow_up' || input.mode === 'steer' && input.attachments?.length)
   if (pending.length === 0) return null
   return <section aria-label="待处理消息" aria-live="polite" className="pointer-events-auto mb-2 rounded-xl border bg-background/95 px-3 py-2 text-xs">
-    <ul className="max-h-32 space-y-1 overflow-y-auto">{(expanded ? pending : pending.slice(0, 2)).map((input) => <li className="flex min-w-0 items-start gap-2" key={input.id}><span className="shrink-0 text-muted-foreground">{input.submitting ? '正在提交' : input.mode === 'steer' ? '引导待生效' : input.error ? '需要处理' : '已排队'}</span><span className="min-w-0 flex-1"><span className={expanded ? 'block whitespace-pre-wrap break-words' : 'block truncate'} title={input.message}>{input.message}{input.attachments?.length ? ` · ${input.attachments.length} 个附件` : ''}</span>{input.error && <span className="mt-0.5 block text-destructive">{input.error}</span>}</span>{onDrop && input.error ? <Button className="h-auto shrink-0 px-2 py-1 text-xs" onClick={() => onDrop(input)} type="button" variant="outline">移除</Button> : input.recoveryRequired && onResume ? <Button type="button" size="sm" variant="outline" onClick={() => onResume(input.id)}>确认继续</Button> : input.mode === 'follow_up' && onSteer && <Button className="h-auto shrink-0 px-2 py-1 text-xs" disabled={disabled || input.submitting} onClick={() => onSteer(input.id)} type="button" variant="ghost">引导</Button>}</li>)}</ul>
+    <ul className="max-h-32 space-y-1 overflow-y-auto">{(expanded ? pending : pending.slice(0, 2)).map((input) => {
+      const editable = input.mode === 'follow_up' && !input.id.startsWith('queue:') && !input.id.startsWith('pending-input:')
+      const busy = disabled || input.submitting
+      return <li className="flex min-w-0 items-start gap-2" key={input.id}>
+        <span className="shrink-0 text-muted-foreground">{input.submitting ? '正在提交' : input.mode === 'steer' ? '引导待生效' : input.error ? '需要处理' : '已排队'}</span>
+        <span className="min-w-0 flex-1"><span className={expanded ? 'block whitespace-pre-wrap break-words' : 'block truncate'} title={input.message}>{input.message}{input.attachments?.length ? ` · ${input.attachments.length} 个附件` : ''}</span>{input.error && <span className="mt-0.5 block text-destructive">{input.error}</span>}</span>
+        <span className="flex shrink-0 flex-wrap justify-end gap-1">
+          {editable && onEdit && <Button className="h-auto px-2 py-1 text-xs disabled:pointer-events-auto" disabled={busy || editDisabled} title={editDisabled ? '请先发送或清空当前草稿' : '移回输入框重新编辑'} onClick={() => onEdit(input)} type="button" variant="ghost">编辑</Button>}
+          {editable && onDrop && <Button className="h-auto px-2 py-1 text-xs" disabled={busy} onClick={() => onDrop(input)} type="button" variant="ghost">取消</Button>}
+          {!input.error && (input.recoveryRequired && onResume
+            ? <Button className="h-auto px-2 py-1 text-xs" disabled={busy} onClick={() => onResume(input.id)} type="button" variant="outline">确认继续</Button>
+            : input.mode === 'follow_up' && onSteer && <Button className="h-auto px-2 py-1 text-xs" disabled={busy || steerDisabled} onClick={() => onSteer(input.id)} type="button" variant="ghost">引导</Button>)}
+        </span>
+      </li>
+    })}</ul>
     {pending.length > 2 && <Button className="mt-1 h-auto p-0 text-xs text-muted-foreground" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} type="button" variant="ghost">{expanded ? '收起' : `还有 ${pending.length - 2} 条`}</Button>}
   </section>
 }

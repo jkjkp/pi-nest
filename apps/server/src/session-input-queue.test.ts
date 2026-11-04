@@ -19,6 +19,19 @@ async function enqueue(id: string, message = 'same') {
   await queue.enqueue({ submissionId: id, message }, 'unused.jsonl', async () => undefined)
 }
 
+it('publishes stable identities for plain-text duplicates, including after recovery', async () => {
+  await enqueue('first')
+  await enqueue('second')
+  expect(queue.snapshot().inputs).toEqual([{ id: 'first', message: 'same' }, { id: 'second', message: 'same' }])
+  const restored = new SessionInputQueue('session', attachments)
+  expect(restored.snapshot().inputs).toEqual([
+    { id: 'first', message: 'same', recoveryRequired: true },
+    { id: 'second', message: 'same', recoveryRequired: true },
+  ])
+  restored.retire(restored.selectForDrop('second'))
+  expect(restored.snapshot().inputs.map((input) => input.id)).toEqual(['first'])
+})
+
 it('keeps legacy indices relative to the native queue and gives input IDs precedence', async () => {
   await enqueue('first')
   await enqueue('second')

@@ -30,7 +30,7 @@ const sessionRuns = {
   removeSessionNotification: () => undefined,
   queuePlanImplementation: (_sessionId: string, dialogId: string) => `plan-implementation:${dialogId}`,
   respondToExtension: async () => undefined,
-  resumeQueued: async () => undefined, dropQueued: async () => undefined, adopt: () => undefined,
+  resumeQueued: async () => undefined, dropQueued: async (_sessionId: string, inputId: string) => ({ id: inputId, message: 'queued' }), adopt: () => undefined,
   compact: async () => true,
   cancelCompact: async () => undefined,
   followUp: async () => undefined,
@@ -84,7 +84,7 @@ it('surfaces the failure reason and offers removal instead of a retry that canno
   ]} onDrop={() => undefined} onResume={() => undefined} onSteer={() => undefined} />)
   expect(markup).toContain('需要处理')
   expect(markup).toContain('附件已损坏，请重新上传。')
-  expect(markup).toContain('>移除</button>')
+  expect(markup).toContain('>取消</button>')
   expect(markup).not.toContain('确认继续')
   expect(markup).not.toContain('>引导</button>')
 })

@@ -122,7 +122,7 @@ export class RuntimeWebSocketBroker {
     if (command.data.type === 'drop_queued') {
       try {
         const input = await this.runtime.dropQueued(command.data.sessionId, command.data.inputId)
-        return this.ack(socket, command.data.id, command.data.type, command.data.sessionId, { message: input.message })
+        return this.ack(socket, command.data.id, command.data.type, command.data.sessionId, input)
       } catch (cause) { return this.error(socket, command.data.id, cause instanceof AttachmentError ? cause.code : 'QUEUE_DROP_FAILED', cause instanceof Error ? cause.message : '移除失败', command.data.sessionId) }
     }
 
