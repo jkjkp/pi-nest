@@ -157,9 +157,21 @@ it('explains unavailable statistics for each file without pretending they are ze
   expect(container.textContent).not.toContain('+0')
 })
 
-it('warns when workspace statistics are incomplete even when no changes were captured', async () => {
-  await act(() => root.render(<TurnFileSummary files={[]} state="complete" incomplete />))
-  expect(container.querySelector('[role="status"]')?.textContent).toContain('统计可能不完整')
+it.each([
+  ['complete', false], ['complete', true],
+  ['error', false], ['error', true],
+  ['aborted', false], ['aborted', true],
+] as const)('hides empty file summaries for %s (incomplete: %s)', async (state, incomplete) => {
+  await act(() => root.render(<TurnFileSummary files={[]} state={state} incomplete={incomplete} />))
+  expect(container.innerHTML).toBe('')
+})
+
+it.each(['complete', 'error', 'aborted'] as const)('keeps recorded files and the incomplete warning for %s', async (state) => {
+  const files = projectTurnFiles([tool('one', 'a.ts')], '/project')
+  await act(() => root.render(<TurnFileSummary files={files} state={state} incomplete />))
+  expect(container.querySelector('[data-turn-file-summary]')).not.toBeNull()
+  expect(container.querySelector('li')?.textContent).toContain('a.ts')
+  expect(container.textContent).toContain('统计可能不完整')
 })
 
 it.each([

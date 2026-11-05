@@ -273,7 +273,7 @@ const TurnItem = memo(function TurnItem({ messageEditor, onEdit, editDisabled, o
       {item.modelErrors?.map((error, index) => <ModelCallErrorNotice error={error} key={index} />)}
       {item.plan && <section aria-label="计划正文" id={`plan-${item.id}`} className="rounded-lg border bg-card p-4"><h2 className="mb-3 text-sm font-normal">计划已制定</h2><AssistantMarkdown source={item.plan.text} isStreaming={false} /></section>}
       <FinalAnswer branchLabel={branchAnswerLabel} onBranch={!branchDisabled && branchEntry && revision && onBranchAnswer ? () => onBranchAnswer(branchEntry.id, revision) : undefined} isRunning={isRunning} onStart={() => onFinalAnswerStart?.(item.id)} onStream={onFinalAnswerStream} parts={presentation.finalAnswer} turnId={item.id} />
-      {summaryState && (files.length > 0 || item.fileChangesIncomplete) && <TurnFileSummary files={files} state={summaryState} incomplete={item.fileChangesIncomplete} />}
+      {summaryState && files.length > 0 && <TurnFileSummary files={files} state={summaryState} incomplete={item.fileChangesIncomplete} />}
     </article>
   )
 })
