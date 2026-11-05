@@ -8,7 +8,7 @@ export function TurnFileSummary({ files, state, incomplete = false }: { files: T
   const unavailable = { binary: '二进制文件', too_large: '文件过大，未统计', unreadable: '文件不可读，未统计', unrecorded: '行数未记录', diff_limit: '差异过大，未统计' }
   const [expanded, setExpanded] = useState(false)
   const listId = useId()
-  if (!files.length && !incomplete) return null
+  if (files.length === 0) return null
   const visible = expanded ? files : files.slice(0, 3)
   return <section aria-label="本轮文件变更" className="mt-4 overflow-hidden rounded-xl border bg-card/50" data-turn-file-summary="" data-execution-toggle="">
     <header className="border-b px-4 py-3">

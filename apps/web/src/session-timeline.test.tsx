@@ -17,11 +17,21 @@ const history = {
 }
 
 describe('SessionTimeline', () => {
-  it('shows incomplete file statistics even when no changed files could be captured', () => {
-    const entries = [...history.entries, { id: 'stats', parentId: 'assistant-1', timestamp: '2026-09-22T00:00:04.000Z', type: 'custom', raw: { type: 'custom', customType: 'pi-nest-file-changes', data: { version: 1, turnId: 'user-1', files: [], incomplete: true } } }]
+  it.each([false, true])('hides empty persisted file summaries after history reload (incomplete: %s)', (incomplete) => {
+    const entries = [...history.entries, { id: 'stats', parentId: 'assistant-1', timestamp: '2026-09-22T00:00:04.000Z', type: 'custom', raw: { type: 'custom', customType: 'pi-nest-file-changes', data: { version: 1, turnId: 'user-1', files: [], incomplete } } }]
+    const markup = render(<SessionTimeline error={false} history={{ ...history, entries }} isLoading={false} onRetry={() => undefined} />)
+    expect(markup).toContain('answer')
+    expect(markup).not.toContain('统计可能不完整')
+    expect(markup).not.toContain('data-turn-file-summary')
+  })
+
+  it('shows persisted files with the incomplete warning after history reload', () => {
+    const entries = [...history.entries, { id: 'stats', parentId: 'assistant-1', timestamp: '2026-09-22T00:00:04.000Z', type: 'custom', raw: { type: 'custom', customType: 'pi-nest-file-changes', data: { version: 1, turnId: 'user-1', files: [{ version: 1, path: '/project/a.ts', sequence: 1, added: 1, removed: 0, changeType: 'created' }], incomplete: true } } }]
     const markup = render(<SessionTimeline error={false} history={{ ...history, entries }} isLoading={false} onRetry={() => undefined} />)
     expect(markup).toContain('统计可能不完整')
     expect(markup).toContain('data-turn-file-summary')
+    expect(markup).toContain('文件变更 · 1 个文件')
+    expect(markup).toContain('a.ts')
   })
 
   it('shows a loading state while history loads, then displays the loaded messages', () => {
