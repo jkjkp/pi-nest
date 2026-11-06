@@ -1,3 +1,4 @@
+import { seedWorkspaceProjects } from '../src/test-fixtures/workspace.js'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import type { PiEditLastInput, PiSessionHistoryResponse } from '@pi-nest/contracts'
@@ -33,9 +34,10 @@ export function sessionEditFixture() {
     return fetchOriginal(input, init)
   }
   client.setQueryData(['sessions'], [session])
-  client.setQueryData(['projects'], [])
+  seedWorkspaceProjects(client)
+  seedWorkspaceProjects(client)
   client.setQueryData(sessionHistoryQueryKey(session.id), { pages: [page], pageParams: [{}] })
-  useWorkspaceStore.setState({ messageEdits: {}, runs: {}, drafts: { [session.id]: '普通草稿保留' }, runtimeStates: {}, runtimeDetails: {}, watchStates: {}, sessionNotifications: {}, hiddenProjectCwds: {} })
+  useWorkspaceStore.setState({ messageEdits: {}, runs: {}, drafts: { [session.id]: '普通草稿保留' }, runtimeStates: {}, runtimeDetails: {}, watchStates: {}, sessionNotifications: {}, legacyHiddenProjectCwds: {} })
   const transport = runtimeFixture()
   const runtime = { ...transport, getCommands: async () => [], getRuntimeState: async () => ({ isCompacting: false, isStreaming: false }),
     editLast: async (_sessionId: string, input: PiEditLastInput) => {

@@ -35,7 +35,7 @@ export function createWorkspaceFileRoutes(security: RuntimeSecurity, projects: P
     const cwd = scope.kind === 'session' ? (await sessions.resolve(scope.id))?.cwd : scope.cwd
     if (!cwd) throw new PreviewError('找不到已授权项目。', 404)
     const root = await realpath(cwd)
-    if (scope.kind === 'project' && !projects.has(root) && !await sessions.hasWorkspace(cwd)) throw new PreviewError('找不到已授权项目。', 404)
+    if (scope.kind === 'project' && !await projects.authorize(root, sessions)) throw new PreviewError('找不到已授权项目。', 404)
     if (!(await stat(root)).isDirectory()) throw new PreviewError('项目目录不存在。', 404)
     return root
   }

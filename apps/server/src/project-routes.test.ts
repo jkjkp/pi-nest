@@ -1,3 +1,4 @@
+import { WorkspaceDatabase } from './workspace-database.js'
 import { AttachmentStore } from './attachment-store.js'
 import { selectProjectFolder } from './project-folder-picker.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -18,10 +19,10 @@ let directory: string
 let projects: ProjectRegistry
 beforeEach(() => {
   directory = realpathSync(mkdtempSync(join(tmpdir(), 'pi-nest-projects-')))
-  projects = new ProjectRegistry(join(directory, 'state', 'projects.json'))
+  projects = new ProjectRegistry(new WorkspaceDatabase(join(directory, 'state', 'projects.sqlite')))
   adapter.createPiSession.mockReset()
 })
-afterEach(() => { rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks() })
+afterEach(() => { projects.database.close(); rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks() })
 
 it('persists empty projects across registry instances and deduplicates real paths', () => {
   const cwd = join(directory, 'existing')
@@ -30,9 +31,9 @@ it('persists empty projects across registry instances and deduplicates real path
   const alias = join(directory, 'alias')
   symlinkSync(cwd, alias)
   expect(projects.open(alias)).toEqual(first)
-  expect(new ProjectRegistry(projects.path).list()).toEqual([first])
+  expect(new ProjectRegistry(new WorkspaceDatabase(projects.database.path)).list()).toEqual([first])
   expect(projects.has(cwd)).toBe(true)
-  expect(statSync(projects.path).mode & 0o777).toBe(0o600)
+  expect(statSync(projects.database.path).mode & 0o777).toBe(0o600)
   expect(adapter.createPiSession).not.toHaveBeenCalled()
 })
 
@@ -48,10 +49,11 @@ it('creates only a new direct child and never overwrites existing files or direc
 })
 
 it('does not overwrite a damaged registry or create a folder before detecting the damage', () => {
-  mkdirSync(join(directory, 'state'))
-  writeFileSync(projects.path, 'broken')
-  expect(() => projects.create(directory, 'new-project')).toThrow('项目登记文件')
-  expect(readFileSync(projects.path, 'utf8')).toBe('broken')
+  const legacy = join(directory, 'projects.json')
+  writeFileSync(legacy, 'broken')
+  projects = new ProjectRegistry(projects.database, legacy)
+  expect(() => projects.create(directory, 'new-project')).toThrow('项目数据库')
+  expect(readFileSync(legacy, 'utf8')).toBe('broken')
   expect(() => statSync(join(directory, 'new-project'))).toThrow()
 })
 

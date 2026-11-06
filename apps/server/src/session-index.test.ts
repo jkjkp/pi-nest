@@ -512,3 +512,35 @@ describe('PiSessionIndex', () => {
     }
   })
 })
+
+it('notifies project persistence on header discovery without reading conversation bodies', async () => {
+  const onDiscover = vi.fn()
+  const file = writeSession('discovered.jsonl', 'discovered')
+  const { index, counters } = createIndex({ onDiscover })
+  expect((await index.resolve('discovered'))?.id).toBe('discovered')
+  expect(onDiscover).toHaveBeenCalledExactlyOnceWith({ id: 'discovered', cwd: CWD, sessionFile: file, createdAt: CREATED })
+  expect(counters.summary).toBe(0)
+  unlinkSync(file)
+  expect(await index.resolve('discovered')).toBeUndefined()
+  expect(onDiscover).toHaveBeenCalledOnce()
+})
+
+it('initializes project bindings without waiting for conversation summaries', async () => {
+  const file = writeSession('startup.jsonl', 'startup')
+  let release!: () => void
+  const waiting = new Promise<void>((resolve) => { release = resolve })
+  const readSummary = vi.fn(async (path: string) => { await waiting; return readPiSessionSummary(path) })
+  const onDiscover = vi.fn()
+  const { index } = createIndex({ readSummary, onDiscover })
+  await index.initialize()
+  expect(onDiscover).toHaveBeenCalledExactlyOnceWith({ id: 'startup', cwd: CWD, sessionFile: file, createdAt: CREATED })
+  expect(readSummary).not.toHaveBeenCalled()
+  let finished = false
+  const listing = index.list().then((sessions) => { finished = true; return sessions })
+  try {
+    await vi.waitFor(() => expect(readSummary).toHaveBeenCalledOnce())
+    await index.initialize()
+    expect(finished).toBe(false)
+    expect((await index.resolve('startup'))?.id).toBe('startup')
+  } finally { release(); await listing }
+})

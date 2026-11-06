@@ -107,6 +107,8 @@ it('moves keyboard focus between the collapse button and the restore entry', asy
   await act(() => { collapse.focus(); collapse.click() })
   const restore = container.querySelector<HTMLButtonElement>('[data-navigation-restore] button')!
   expect(document.activeElement).toBe(restore)
+  expect(document.querySelector('[data-slot="tooltip-content"]')).toBeNull()
   await act(() => restore.click())
   expect(document.activeElement).toBe(collapse)
+  expect(document.querySelector('[data-slot="tooltip-content"]')).toBeNull()
 })

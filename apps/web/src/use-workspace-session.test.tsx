@@ -1,3 +1,4 @@
+import { seedWorkspaceProjects } from './test-fixtures/workspace.js'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
@@ -29,6 +30,7 @@ it('finishes each runtime control read before starting the next one', async () =
   } as unknown as SessionRunController
   const queryClient = new QueryClient()
   queryClient.setQueryData(['sessions'], [{ id: 'session-1', cwd: '/fixture' }])
+  seedWorkspaceProjects(queryClient)
   useWorkspaceStore.setState({ runs: {}, watchStates: {}, runtimeStates: {} })
   const probe: { workspace?: ReturnType<typeof useWorkspaceSession> } = {}
   function Probe() {
@@ -70,6 +72,7 @@ function thinkingProbe(prompt = '', active = false) {
   } as unknown as SessionRunController
   const queryClient = new QueryClient()
   queryClient.setQueryData(['sessions'], [{ id: 'session-1', cwd: '/fixture' }])
+  seedWorkspaceProjects(queryClient)
   let workspace!: ReturnType<typeof useWorkspaceSession>
   function Probe() {
     // oxlint-disable-next-line react/globals -- Capture the hook API for this isolated server-rendered test.
@@ -238,6 +241,7 @@ it('clears a steering draft immediately and preserves new typing while it is sen
 it('adds a native branch to the session cache and restores the selected message only as a child draft', async () => {
   const queryClient = new QueryClient()
   queryClient.setQueryData(['sessions'], [{ id: 'source', cwd: '/fixture', name: 'Original' }])
+  seedWorkspaceProjects(queryClient)
   useWorkspaceStore.setState({ drafts: { source: '/fork' }, runs: {}, runtimeStates: {}, watchStates: {} })
   const result = { session: { id: 'child', cwd: '/fixture' }, draft: '完整问题\n继续编辑' }
   vi.mocked(branchSession).mockResolvedValueOnce(result)
@@ -250,7 +254,7 @@ it('adds a native branch to the session cache and restores the selected message 
   renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=source']}><Probe /></MemoryRouter></QueryClientProvider>)
   await expect(probe.workspace!.createBranch({ kind: 'fork', entryId: 'u', revision: 'a'.repeat(64) })).resolves.toEqual(result)
   expect(branchSession).toHaveBeenCalledWith('source', { kind: 'fork', entryId: 'u', revision: 'a'.repeat(64), operationId: expect.stringMatching(/^[a-f0-9-]{36}$/) })
-  expect(queryClient.getQueryData(['sessions'])).toEqual([result.session, { id: 'source', cwd: '/fixture', name: 'Original' }])
+  expect(queryClient.getQueryData(['sessions'])).toEqual([result.session, { id: 'source', cwd: '/fixture', projectId: '/fixture', name: 'Original' }])
   expect(useWorkspaceStore.getState().drafts.child).toBe('完整问题\n继续编辑')
   expect(useWorkspaceStore.getState().drafts.source).toBe('/fork')
   queryClient.clear()
@@ -260,6 +264,7 @@ it('clones an idle background session while the selected session runs, blocks du
   vi.mocked(branchSession).mockReset()
   const queryClient = new QueryClient()
   queryClient.setQueryData(['sessions'], [{ id: 'source', cwd: '/fixture' }, { id: 'other', cwd: '/fixture' }])
+  seedWorkspaceProjects(queryClient)
   useWorkspaceStore.setState({ drafts: { source: '保留草稿', other: '未发送' }, sessionNotifications: {}, runs: { source: { status: 'running', turns: [], systemEvents: [], pendingInputs: [] } }, runtimeStates: {}, watchStates: {} })
   const probe: { workspace?: ReturnType<typeof useWorkspaceSession> } = {}
   function Probe() {
@@ -279,7 +284,7 @@ it('clones an idle background session while the selected session runs, blocks du
   const result = { session: { id: 'child', cwd: '/fixture', parentSessionId: 'other' }, draft: '' }
   vi.mocked(branchSession).mockResolvedValueOnce(result)
   await expect(probe.workspace!.createBranch({ kind: 'clone' }, 'other')).resolves.toEqual(result)
-  expect(queryClient.getQueryData(['sessions'])).toEqual([result.session, { id: 'source', cwd: '/fixture' }, { id: 'other', cwd: '/fixture' }])
+  expect(queryClient.getQueryData(['sessions'])).toEqual([result.session, { id: 'source', cwd: '/fixture', projectId: '/fixture' }, { id: 'other', cwd: '/fixture', projectId: '/fixture' }])
   expect(useWorkspaceStore.getState().drafts).toMatchObject({ source: '保留草稿', other: '未发送', child: '' })
   queryClient.clear()
 })
@@ -314,6 +319,7 @@ it('preserves edits made while an extension command is awaiting its receipt', as
 it('retains uncertain branch identity and protects an already edited child draft', async () => {
   const queryClient = new QueryClient()
   queryClient.setQueryData(['sessions'], [{ id: 'source', cwd: '/fixture' }])
+  seedWorkspaceProjects(queryClient)
   useWorkspaceStore.setState({ branchOperations: {}, branchStorage: { available: true }, drafts: { source: 'source draft', child: 'new child draft' }, runs: {}, runtimeStates: {}, watchStates: {}, sessionNotifications: {} })
   const probe: { workspace?: ReturnType<typeof useWorkspaceSession> } = {}
   function Probe() {

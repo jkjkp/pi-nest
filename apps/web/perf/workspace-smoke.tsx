@@ -1,3 +1,4 @@
+import { seedWorkspaceProjects } from '../src/test-fixtures/workspace.js'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router'
 import { WorkspacePage } from '../src/workspace-page.js'
@@ -11,14 +12,15 @@ import { TooltipProvider } from '../src/components/ui/tooltip.js'
 export function workspaceSmoke() {
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
   const sessions = [{ id: 'smoke-a', cwd: '/fixture', name: 'Smoke A' }, { id: 'smoke-b', cwd: '/fixture', name: 'Smoke B' }]
-  client.setQueryData(['projects'], [])
+  seedWorkspaceProjects(client)
   client.setQueryData(['sessions'], sessions)
+  seedWorkspaceProjects(client)
   const timestamp = new Date().toISOString()
   for (const session of sessions) {
     client.setQueryData(sessionHistoryQueryKey(session.id), { pages: [{ session, entries: [], revision: 'smoke', hasEarlier: false }], pageParams: [{}] })
     client.setQueryData(sessionTurnIndexQueryKey(session.id, 'smoke'), { entries: [], revision: 'smoke' })
   }
-  useWorkspaceStore.setState({ runs: {}, drafts: {}, sessionNotifications: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} }, hiddenProjectCwds: {}, collapsedProjectKeys: {}, runtimeStates: {}, runtimeDetails: {}, watchStates: {} })
+  useWorkspaceStore.setState({ runs: {}, drafts: {}, sessionNotifications: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} }, legacyHiddenProjectCwds: {}, collapsedProjectKeys: {}, runtimeStates: {}, runtimeDetails: {}, watchStates: {} })
   const runtime = runtimeFixture()
   const controller = createSessionRunController({ runtime: runtime as never, invalidateHistory: async () => {} })
   const sources: Record<string, string> = {}

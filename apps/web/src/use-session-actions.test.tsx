@@ -17,15 +17,16 @@ function fixture(sessions: PiSessionSummary[] = [{ id: 'one', cwd: '/w' }, { id:
   for (const id of ['one', 'two']) client.setQueryData(['session-graph', id], { sessions, branchStorage: { available: true } })
   const capture = vi.fn((_actions: ReturnType<typeof useSessionActions>) => null)
   const setSearchParams = vi.fn()
+  const refetchSessions = vi.fn(async () => {})
   function Probe() {
     return capture(useSessionActions({
       sessionRuns: { removeSessionNotification: vi.fn(), releaseForeground: vi.fn() } as unknown as SessionRunController,
       selectedSessionId: selected, selectedSessionIdRef: { current: selected }, modelOperation: { current: undefined }, sessions,
-      projects: [{ key: 'fixture', name: 'Fixture', sessions }], refetchSessions: vi.fn(async () => {}), setSearchParams,
+      projects: [{ key: 'fixture', name: 'Fixture', sessions }], refetchSessions, setSearchParams,
     }))
   }
   renderToStaticMarkup(<QueryClientProvider client={client}><Probe /></QueryClientProvider>)
-  return { client, actions: capture.mock.calls[0][0], setSearchParams }
+  return { client, actions: capture.mock.calls[0][0], setSearchParams, refetchSessions }
 }
 
 it('invalidates every cached tree after renaming through the shared action', async () => {
@@ -58,6 +59,30 @@ it('preserves the cached sessions and tree when deletion fails', async () => {
     expect(client.getQueryData(['sessions'])).toEqual([{ id: 'one', cwd: '/w' }, { id: 'two', cwd: '/w', parentSessionId: 'one' }])
     expect(client.getQueryState(['session-graph', 'one'])?.isInvalidated).toBe(false)
     expect(setSearchParams).not.toHaveBeenCalled()
+  } finally { client.clear() }
+})
+
+it('completes UI deletion when the file was deleted but metadata cleanup failed', async () => {
+  vi.mocked(deleteSession).mockRejectedValueOnce(Object.assign(new Error('会话文件已删除，但归属记录清理失败'), { code: 'SESSION_METADATA_CLEANUP_FAILED' }))
+  const { client, actions, setSearchParams, refetchSessions } = fixture()
+  try {
+    await actions.handleDelete('one')
+    expect(client.getQueryData(['sessions'])).toEqual([{ id: 'two', cwd: '/w', parentSessionId: 'one' }])
+    expect(client.getQueryState(['session-graph', 'one'])).toBeUndefined()
+    expect(setSearchParams).toHaveBeenCalledExactlyOnceWith({ session: 'two' })
+    expect(refetchSessions).toHaveBeenCalledOnce()
+  } finally { client.clear() }
+})
+
+it('preserves UI state when the database failed before the file was deleted', async () => {
+  const error = Object.assign(new Error('会话文件已保留'), { code: 'PROJECT_STORAGE_UNAVAILABLE' })
+  vi.mocked(deleteSession).mockRejectedValueOnce(error)
+  const { client, actions, setSearchParams, refetchSessions } = fixture()
+  try {
+    await expect(actions.handleDelete('one')).rejects.toBe(error)
+    expect(client.getQueryData<PiSessionSummary[]>(['sessions'])?.map((session) => session.id)).toEqual(['one', 'two'])
+    expect(setSearchParams).not.toHaveBeenCalled()
+    expect(refetchSessions).not.toHaveBeenCalled()
   } finally { client.clear() }
 })
 

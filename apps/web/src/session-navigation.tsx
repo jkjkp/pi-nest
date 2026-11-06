@@ -60,7 +60,7 @@ export function SessionNavigation({
   onProjectOrderChange: (projectOrder: string[]) => void
   onNewConversation: (project: ProjectSessionGroup) => void
   onAddProject: () => void
-  onRemoveProject: (project: ProjectSessionGroup) => void
+  onRemoveProject: (project: ProjectSessionGroup) => void | Promise<void>
   onRevealProject: (cwd: string) => Promise<void>
   onSessionOrderChange: (projectKey: string, sessionOrder: string[]) => void
   onToggleProject: (projectKey: string, collapsed: boolean) => void
@@ -76,6 +76,8 @@ export function SessionNavigation({
   const [renaming, setRenaming] = useState<PiSessionSummary>()
   const [deleting, setDeleting] = useState<PiSessionSummary>()
   const deleteTrigger = useRef<HTMLElement | null>(null)
+  const removingProjectRef = useRef(false)
+  const [removalPending, setRemovalPending] = useState(false)
   const [removingProject, setRemovingProject] = useState<ProjectSessionGroup>()
   const [actionError, setActionError] = useState<string>()
   const navigationView = useWorkspaceStore((state) => state.navigationView)
@@ -218,14 +220,20 @@ export function SessionNavigation({
       </ScrollArea>
       {renaming && <SessionRenameDialog key={renaming.id} session={renaming} onClose={() => setRenaming(undefined)} onRename={onRename} />}
       {deleting && <SessionDeleteDialog key={deleting.id} session={deleting} run={runs[deleting.id]} mutationSessionId={mutationSessionId} onDelete={onDelete} onClose={() => setDeleting(undefined)} onCloseAutoFocus={(event) => { event.preventDefault(); deleteTrigger.current?.focus() }} />}
-      <AlertDialog onOpenChange={(open) => !open && setRemovingProject(undefined)} open={Boolean(removingProject)}>
+      <AlertDialog onOpenChange={(open) => !open && !removalPending && setRemovingProject(undefined)} open={Boolean(removingProject)}>
         <AlertDialogContent>
           <AlertDialogTitle>从 Pi Nest 移除项目？</AlertDialogTitle>
-          <AlertDialogDescription>仅从此浏览器的项目列表隐藏“{removingProject?.name}”。不会删除目录、Pi 原生会话或正在运行的任务，之后可在“设置 → 项目管理”中恢复。</AlertDialogDescription>
+          <AlertDialogDescription>从所有浏览器的项目列表移除“{removingProject?.name}”。不会删除目录、Pi 原生会话或正在运行的任务，之后可在“设置 → 项目管理”中恢复。</AlertDialogDescription>
           {actionError && <p className="mt-3 text-sm text-destructive" role="alert">{actionError}</p>}
           <div className="mt-5 flex justify-end gap-2">
-            <AlertDialogCancel asChild><Button type="button" variant="secondary">取消</Button></AlertDialogCancel>
-            <Button onClick={() => { if (removingProject) onRemoveProject(removingProject); setRemovingProject(undefined) }} type="button" variant="destructive">移除项目</Button>
+            <AlertDialogCancel asChild><Button disabled={removalPending} type="button" variant="secondary">取消</Button></AlertDialogCancel>
+            <Button disabled={removalPending} onClick={async () => {
+              if (!removingProject || removingProjectRef.current) return
+              removingProjectRef.current = true; setRemovalPending(true); setActionError(undefined)
+              try { await onRemoveProject(removingProject); setRemovingProject(undefined) }
+              catch (cause) { setActionError(cause instanceof Error ? cause.message : '移除失败，请重试。') }
+              finally { removingProjectRef.current = false; setRemovalPending(false) }
+            }} type="button" variant="destructive">{removalPending ? '正在移除…' : '移除项目'}</Button>
           </div>
         </AlertDialogContent>
       </AlertDialog>

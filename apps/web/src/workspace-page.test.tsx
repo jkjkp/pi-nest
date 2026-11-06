@@ -1,3 +1,4 @@
+import { seedWorkspaceProjects } from './test-fixtures/workspace.js'
 import type { ComponentProps } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -57,6 +58,7 @@ it('offers default queueing and the steering shortcut while preserving the stop 
   useWorkspaceStore.setState({ drafts: { 'session-1': 'next task' }, runs: { 'session-1': { status: 'running', turns: [], systemEvents: [], pendingInputs: [] } }, runtimeStates: {}, watchStates: {} })
   const queryClient = new QueryClient()
   queryClient.setQueryData(['sessions'], [{ id: 'session-1', cwd: '/fixture' }])
+  seedWorkspaceProjects(queryClient)
   const markup = renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-1']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
   expect(markup).not.toContain('>引导</button>')
   expect(markup).toContain('aria-label="排队"')
@@ -91,9 +93,10 @@ it('surfaces the failure reason and offers removal instead of a retry that canno
 
 describe('WorkspacePage new conversation draft', () => {
   it('renders a project-bound draft without inventing a sidebar session', () => {
-    useWorkspaceStore.setState({ hiddenProjectCwds: {}, runs: {}, watchStates: {} })
+    useWorkspaceStore.setState({ legacyHiddenProjectCwds: {}, runs: {}, watchStates: {} })
     const queryClient = new QueryClient()
     queryClient.setQueryData(['sessions'], [{ cwd: '/work/pi-nest', firstMessage: '已有会话', id: 'session-1', updatedAt: '2026-09-24T00:00:00.000Z' }])
+  seedWorkspaceProjects(queryClient)
 
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
@@ -120,9 +123,10 @@ describe('WorkspacePage new conversation draft', () => {
 })
 
 it('keeps runtime loading feedback in the header instead of inserting a timeline paragraph', () => {
-  useWorkspaceStore.setState({ hiddenProjectCwds: {}, runs: {}, watchStates: {}, runtimeStates: { 'session-1': { lifecycle: 'loading', revision: 1 } }, runtimeDetails: {}, runtimeStatistics: {} })
+  useWorkspaceStore.setState({ legacyHiddenProjectCwds: {}, runs: {}, watchStates: {}, runtimeStates: { 'session-1': { lifecycle: 'loading', revision: 1 } }, runtimeDetails: {}, runtimeStatistics: {} })
   const queryClient = new QueryClient()
   queryClient.setQueryData(['sessions'], [{ cwd: '/work/pi-nest', id: 'session-1', name: 'Loading session' }])
+  seedWorkspaceProjects(queryClient)
   const markup = renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-1']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
   expect(markup).toContain('aria-label="正在加载 Pi 运行时"')
   expect(markup).not.toContain('>正在加载 Pi 运行时<')
@@ -130,9 +134,10 @@ it('keeps runtime loading feedback in the header instead of inserting a timeline
 })
 
 it('keeps the English Plan status as a detail trigger without displaying its internal widget', () => {
-  useWorkspaceStore.setState({ hiddenProjectCwds: {}, runs: {}, watchStates: {}, runtimeStates: {}, extensionStatuses: { 'session-1': { 'plan-mode': 'plan active ●', ponytail: 'ponytail: FULL' } }, extensionWidgets: { 'session-1': { 'plan-mode-plan': ['Plan mode: planning', 'Finish with plan_mode_complete when decision-ready.'], todos: ['Other extension progress'] } } })
+  useWorkspaceStore.setState({ legacyHiddenProjectCwds: {}, runs: {}, watchStates: {}, runtimeStates: {}, extensionStatuses: { 'session-1': { 'plan-mode': 'plan active ●', ponytail: 'ponytail: FULL' } }, extensionWidgets: { 'session-1': { 'plan-mode-plan': ['Plan mode: planning', 'Finish with plan_mode_complete when decision-ready.'], todos: ['Other extension progress'] } } })
   const queryClient = new QueryClient()
   queryClient.setQueryData(['sessions'], [{ cwd: '/work/pi-nest', id: 'session-1', name: 'Plan session' }])
+  seedWorkspaceProjects(queryClient)
   const markup = renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-1']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
   expect(markup).toContain('plan active ●')
   expect(markup).toContain('查看 Plan 模式详情')
@@ -145,22 +150,24 @@ it('keeps the English Plan status as a detail trigger without displaying its int
 
 it('allows command discovery when an idle watched session already has a model from its snapshot', () => {
   useWorkspaceStore.setState({
-    drafts: { 'session-1': '/p' }, runs: {}, hiddenProjectCwds: {},
+    drafts: { 'session-1': '/p' }, runs: {}, legacyHiddenProjectCwds: {},
     runtimeStates: { 'session-1': { lifecycle: 'idle', revision: 1 } },
     runtimeDetails: { 'session-1': { isCompacting: false, isStreaming: false, model: { provider: 'fixture', id: 'model' } } },
     watchStates: { 'session-1': 'ready' },
   })
   const queryClient = new QueryClient()
   queryClient.setQueryData(['sessions'], [{ id: 'session-1', cwd: '/fixture' }])
+  seedWorkspaceProjects(queryClient)
   renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-1']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
   expect(composer.canQuery).toBe(true)
   queryClient.clear()
 })
 
 it('keeps session information behind one dialog button without reserving a sidebar column', () => {
-  useWorkspaceStore.setState({ inspectorOpen: true, runs: {}, runtimeStates: {}, watchStates: {}, hiddenProjectCwds: {} })
+  useWorkspaceStore.setState({ inspectorOpen: true, runs: {}, runtimeStates: {}, watchStates: {}, legacyHiddenProjectCwds: {} })
   const queryClient = new QueryClient()
   queryClient.setQueryData(['sessions'], [{ id: 'session-info', cwd: '/fixture' }])
+  seedWorkspaceProjects(queryClient)
   const markup = renderToStaticMarkup(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/?session=session-info']}><WorkspacePage sessionRuns={sessionRuns} /></MemoryRouter></QueryClientProvider>)
   expect(markup.match(/aria-label="打开会话检查器"/g)).toHaveLength(1)
   expect(markup).toContain('--side-panel-width:0px')

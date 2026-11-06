@@ -1,3 +1,4 @@
+import { WorkspaceDatabase } from './workspace-database.js'
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,7 +24,7 @@ let store: AttachmentStore
 let app: Hono
 const security = new RuntimeSecurity()
 const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/octet-stream', 'x-pi-nest-file-name': encodeURIComponent('说明.html'), 'x-pi-nest-file-type': 'text/html', 'x-pi-nest-attachment-scope': encodeURIComponent(JSON.stringify({ kind: 'session', sessionId: 'a' })) }
-beforeEach(() => { directory = realpathSync(mkdtempSync(join(tmpdir(), 'pi-upload-api-'))); store = new AttachmentStore(directory); const sessionIndex = createSessionIndexFixture(['a', 'b'].map((id) => ({ id, cwd: directory, firstMessage: undefined, name: undefined, sessionFile: join(directory, `${id}.jsonl`), updatedAt: undefined }))); app = new Hono().route('/api/attachments', createAttachmentRoutes(store, security, new ProjectRegistry(join(directory, 'projects.json')), sessionIndex.index)) })
+beforeEach(() => { directory = realpathSync(mkdtempSync(join(tmpdir(), 'pi-upload-api-'))); store = new AttachmentStore(directory); const sessionIndex = createSessionIndexFixture(['a', 'b'].map((id) => ({ id, cwd: directory, firstMessage: undefined, name: undefined, sessionFile: join(directory, `${id}.jsonl`), updatedAt: undefined }))); app = new Hono().route('/api/attachments', createAttachmentRoutes(store, security, new ProjectRegistry(new WorkspaceDatabase(join(directory, 'projects.sqlite'))), sessionIndex.index)) })
 afterEach(() => { rmSync(directory, { recursive: true, force: true }); vi.restoreAllMocks() })
 
 function thumbnail(id: string, sessionId = 'a') {
@@ -145,7 +146,7 @@ it('uploads original bytes and forces HTML downloads without exposing disk paths
   expect((await app.request(`/api/attachments/${attachment.id}/content`, { method: 'POST', headers, body: JSON.stringify({ kind: 'session', sessionId: 'b' }) })).status).toBe(403)
 })
 it('accepts a registered draft without creating a session and rejects unknown projects', async () => {
-  new ProjectRegistry(join(directory, 'projects.json')).open(directory)
+  new ProjectRegistry(new WorkspaceDatabase(join(directory, 'projects.sqlite'))).open(directory)
   const draftId = randomUUID()
   const scope = { kind: 'draft', draftId, cwd: directory }
   const result = await app.request('/api/attachments', { method: 'POST', headers: { ...headers, 'x-pi-nest-attachment-scope': encodeURIComponent(JSON.stringify(scope)) }, body: 'file' })

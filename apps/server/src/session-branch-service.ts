@@ -1,3 +1,4 @@
+import type { ProjectRegistry } from './project-registry.js'
 import { createHash } from 'node:crypto'
 import { branchPiSession, branchPrefixHash, capturePiSessionHistory, readPiEditEntries, type PiPreparedBranch, type PiSessionBinding, type PiSessionBranchResult } from '@pi-nest/pi-adapter'
 import type { PiBranchOperation, PiBranchRelation, PiSessionBranchRequest, PiSessionBranchResponse } from '@pi-nest/contracts'
@@ -14,7 +15,7 @@ export function branchRequestHash(parent: string, request: PiSessionBranchReques
 }
 export class BranchOperationConflict extends Error {}
 export class SessionBranchService {
-  constructor(readonly store: SessionBranchStore, private readonly index: SessionIndex, private readonly attachments: AttachmentStore) {}
+  constructor(readonly store: SessionBranchStore, private readonly index: SessionIndex, private readonly attachments: AttachmentStore, private readonly projects?: ProjectRegistry) {}
   private projectDraft(content: unknown, parent: string, child: string, inherit = true) {
     if (inherit) this.attachments.inherit(content, parent, child)
     const projected = this.attachments.project({ role: 'user', content }, child) as { content?: unknown }
@@ -25,7 +26,8 @@ export class SessionBranchService {
   private result(created: PiSessionBranchResult, parent: string, operationId: string): PiSessionBranchResponse {
     const { id, cwd, createdAt, name, firstMessage } = created.session
     this.attachments.inherit(created.entries, parent, id)
-    return { session: { id, cwd, createdAt, updatedAt: createdAt, name, parentSessionId: parent,
+    const projectId = this.projects?.registerSession(created.session)
+    return { session: { id, projectId, cwd, createdAt, updatedAt: createdAt, name, parentSessionId: parent,
       firstMessage: this.attachments.displayPrompt(firstMessage, id), branch: branchRelation(this.store.operation(operationId)!) },
       operationId, ...(created.draftContent !== undefined ? this.projectDraft(created.draftContent, parent, id) : { draft: created.draft }) }
   }
@@ -40,6 +42,7 @@ export class SessionBranchService {
             parent_session_id: source.id, source_entry_id: value.sourceEntryId, inherited_leaf_id: value.inheritedLeafId, inherited_hash: value.inheritedHash,
             fork_mode: value.mode, source_revision: value.sourceRevision, cwd: source.cwd!, created_at: value.createdAt, state: 'pending', error_code: null })
           prepared = value
+          this.projects?.registerSession({ id: value.childSessionId, cwd: source.cwd })
         } }, beforeShutdown)
       published = true
       this.index.register(created.session, { ...created.session, firstMessage: created.session.firstMessage, name: created.session.name, updatedAt: created.session.createdAt, parentSessionPath: source.sessionFile })
@@ -48,7 +51,10 @@ export class SessionBranchService {
       result.session.branch!.state = 'ready'
       return result
     } catch (cause) {
-      if (prepared && !published) this.store.setState(request.operationId, 'failed', 'BRANCH_NOT_PUBLISHED')
+      if (prepared && !published) {
+        this.store.setState(request.operationId, 'failed', 'BRANCH_NOT_PUBLISHED')
+        this.projects?.forgetSession(prepared.childSessionId)
+      }
       if (published) return { operationId: request.operationId, state: 'pending' as const }
       throw cause
     }
@@ -62,7 +68,8 @@ export class SessionBranchService {
     const child = await this.index.resolve(row.child_session_id)
     if (!child || child.cwd !== row.cwd) return { ...status, state: 'attention', code: 'BRANCH_FILE_UNAVAILABLE' }
     const summary = this.index.cachedSummary(child.id)
-    const result: PiSessionBranchResponse = { operationId: id, session: { id: child.id, cwd: child.cwd, name: summary?.name, firstMessage: this.attachments.displayPrompt(summary?.firstMessage, child.id), createdAt: row.created_at, updatedAt: summary?.updatedAt, parentSessionId: parent, branch: branchRelation(row) }, draft: '' }
+    const projectId = this.projects?.sync([child]).get(child.id)
+    const result: PiSessionBranchResponse = { operationId: id, session: { id: child.id, projectId, cwd: child.cwd, name: summary?.name, firstMessage: this.attachments.displayPrompt(summary?.firstMessage, child.id), createdAt: row.created_at, updatedAt: summary?.updatedAt, parentSessionId: parent, branch: branchRelation(row) }, draft: '' }
     if (row.fork_mode === 'edit') {
       try {
         const source = await this.index.resolve(parent)

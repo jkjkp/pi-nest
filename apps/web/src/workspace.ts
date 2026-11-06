@@ -6,6 +6,7 @@ import { stripAnsiLine } from './ansi-text.js'
 export type { PiSessionSummary } from '@pi-nest/contracts'
 
 export type ProjectSessionGroup = {
+  id?: string
   createdAt?: string
   cwd?: string
   key: string
@@ -46,26 +47,21 @@ function createdAtValue(createdAt?: string) {
   return Number.isNaN(value) ? Number.NEGATIVE_INFINITY : value
 }
 
-export function groupSessionsByProject(sessions: PiSessionSummary[], projectCreatedAt: Record<string, string> = {}, registeredProjects: PiProject[] = []): ProjectSessionGroup[] {
-  const groups = new Map<string, ProjectSessionGroup>()
-  for (const project of registeredProjects) {
-    const key = projectSessionGroupKey(project.cwd)
-    groups.set(key, { ...project, key, name: projectName(project.cwd), sessions: [] })
-  }
-  for (const session of sessions) {
-    const key = projectSessionGroupKey(session.cwd)
-    const existing = groups.get(key)
-    if (existing) existing.sessions.push(session)
-    else groups.set(key, { cwd: session.cwd, key, name: session.cwd ? projectName(session.cwd) : '工作目录不可用', sessions: [session] })
-  }
+export function projectKey(project: Pick<PiProject, 'id'>) { return `project:${project.id}` }
 
-  return [...groups.values()]
-    .map((group) => {
-      const sorted = [...group.sessions].sort((left, right) => createdAtValue(right.createdAt) - createdAtValue(left.createdAt) || left.id.localeCompare(right.id))
-      const earliest = sorted.filter((session) => Number.isFinite(createdAtValue(session.createdAt))).at(-1)?.createdAt
-      return { ...group, createdAt: projectCreatedAt[group.key] ?? group.createdAt ?? earliest, sessions: sorted }
-    })
-    .sort((left, right) => createdAtValue(right.createdAt) - createdAtValue(left.createdAt) || left.key.localeCompare(right.key))
+export function groupSessionsByProject(sessions: PiSessionSummary[], projectCreatedAt: Record<string, string> = {}, registeredProjects: PiProject[] = []): ProjectSessionGroup[] {
+  const byProject = new Map<string, PiSessionSummary[]>()
+  for (const session of sessions) {
+    if (!session.projectId) continue
+    const group = byProject.get(session.projectId) ?? []
+    group.push(session)
+    byProject.set(session.projectId, group)
+  }
+  return registeredProjects.filter((project) => !project.removedAt).map((project) => {
+    const key = projectKey(project)
+    const sorted = (byProject.get(project.id) ?? []).sort((left, right) => createdAtValue(right.createdAt) - createdAtValue(left.createdAt) || left.id.localeCompare(right.id))
+    return { ...project, key, name: projectName(project.cwd), createdAt: projectCreatedAt[key] ?? project.createdAt, sessions: sorted }
+  }).sort((left, right) => createdAtValue(right.createdAt) - createdAtValue(left.createdAt) || left.key.localeCompare(right.key))
 }
 
 export function filterProjectsByQuery(projects: ProjectSessionGroup[], value: string) {

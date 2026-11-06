@@ -1,3 +1,4 @@
+import { WorkspaceDatabase } from './workspace-database.js'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,7 +14,7 @@ vi.mock('@pi-nest/pi-adapter', () => ({ ...api, PiConfigurationConflict: class e
 const security = new RuntimeSecurity('http://localhost:5173')
 const finish = vi.fn()
 const beginGlobalSettingsUpdate = vi.fn(() => finish as typeof finish | undefined)
-const emptyProjects = () => new ProjectRegistry(join(tmpdir(), 'pi-nest-config-tests', `${randomUUID()}.json`))
+const emptyProjects = () => new ProjectRegistry(new WorkspaceDatabase(join(tmpdir(), 'pi-nest-config-tests', `${randomUUID()}.json`)))
 const knownSession = { id: 'known', cwd: '/trusted', firstMessage: undefined, name: undefined, sessionFile: '/native/known.jsonl', updatedAt: undefined }
 const sessionIndex = () => createSessionIndexFixture([knownSession]).index
 const routes = (sessions = sessionIndex(), projects = emptyProjects()) => createConfigurationRoutes({ beginGlobalSettingsUpdate } as unknown as PiRuntimeRegistry, security, projects, sessions)
@@ -77,7 +78,7 @@ it('validates discovery requests and never persists or reloads runtimes when lis
 })
 
 it('reads draft configuration only for known projects and rejects ambiguous targets', async () => {
-  const projects = { has: vi.fn((cwd: string) => cwd === '/registered') }
+  const projects = { authorize: vi.fn(async (cwd: string) => cwd === '/registered' || cwd === '/trusted') }
   const route = createConfigurationRoutes({} as PiRuntimeRegistry, security, projects as unknown as ProjectRegistry, sessionIndex())
   expect((await route.request('/?project=%2Fregistered', { headers })).status).toBe(200)
   expect(api.readPiConfiguration).toHaveBeenLastCalledWith('/registered')

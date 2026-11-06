@@ -1,3 +1,4 @@
+import { seedWorkspaceProjects } from '../src/test-fixtures/workspace.js'
 import './style.css'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -98,7 +99,8 @@ window.fetch = async (input, init) => {
 }
 const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
 client.setQueryData(['sessions'], sessions); client.setQueryData(['projects'], [])
-useWorkspaceStore.setState({ workspaceView: 'tree', navigationView: 'tree', branchStorage: { available: true }, branchOperations: {}, drafts: { [selected]: '保留的当前分支草稿', 'fixture-1': '目标会话已有草稿' }, runs: {}, sessionNotifications: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} }, filePreviews: {}, messageEdits: {}, hiddenProjectCwds: {}, collapsedProjectKeys: {}, runtimeStates: {}, runtimeDetails: {}, watchStates: {} })
+  seedWorkspaceProjects(client)
+useWorkspaceStore.setState({ workspaceView: 'tree', navigationView: 'tree', branchStorage: { available: true }, branchOperations: {}, drafts: { [selected]: '保留的当前分支草稿', 'fixture-1': '目标会话已有草稿' }, runs: {}, sessionNotifications: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} }, filePreviews: {}, messageEdits: {}, legacyHiddenProjectCwds: {}, collapsedProjectKeys: {}, runtimeStates: {}, runtimeDetails: {}, watchStates: {} })
 const runtime = runtimeFixture()
 const controller = createSessionRunController({ runtime: runtime as never, invalidateHistory: async () => {} })
 const paintObserver = new MutationObserver(() => {

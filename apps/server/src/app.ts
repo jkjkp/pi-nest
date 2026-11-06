@@ -4,6 +4,7 @@ import { createWorkspaceFileRoutes } from './workspace-files.js'
 import { createAttachmentRoutes } from './attachment-routes.js'
 import { createSessionFilePreviewRoutes } from './session-file-preview.js'
 import { serveWebRelease } from './web-release.js'
+import { workspaceSnapshot } from './workspace-snapshot.js'
 import { Hono } from 'hono'
 import { configurationSecurity, createConfigurationRoutes } from './configuration-routes.js'
 
@@ -28,7 +29,14 @@ export function createApp(
     .use('/api/sessions/:sessionId/settings', configurationSecurity(security))
     .route('/api/attachments', createAttachmentRoutes(runtime.attachments, security, projects, sessions))
     .route('/api/workspace-files', createWorkspaceFileRoutes(security, projects, sessions))
-    .route('/api/projects', createProjectRoutes(projects, security))
+    .route('/api/projects', createProjectRoutes(projects, security, sessions))
+    .use('/api/workspace', configurationSecurity(security))
+    .get('/api/workspace', async (context) => {
+      try {
+        context.header('Cache-Control', 'no-store')
+        return context.json(await workspaceSnapshot(projects, sessions, branches, runtime.attachments))
+      } catch { return context.json({ error: '项目数据库或会话索引不可用，请重试。', code: 'PROJECT_STORAGE_UNAVAILABLE' }, 503) }
+    })
     .route('/api', createSessionFilePreviewRoutes(security, sessions))
     .route('/api', createSessionGraphRoutes(runtime, security, sessions, branches))
     .route('/api', createSessionRoutes(runtime, projects, security, sessions, branches))
@@ -39,5 +47,3 @@ export function createApp(
 
 export const runtime = new PiRuntimeRegistry()
 export const runtimeSecurity = new RuntimeSecurity()
-export const sessionIndex = new PiSessionIndex()
-export const app = createApp(runtime, runtimeSecurity, undefined, sessionIndex)

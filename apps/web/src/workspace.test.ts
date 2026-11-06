@@ -1,7 +1,7 @@
+import { fixtureProject, groupFixtureSessions as groupSessionsByProject } from './test-fixtures/workspace.js'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  groupSessionsByProject,
   extensionStatusLine,
   extensionWidgetText,
   planModePolicy,
@@ -82,10 +82,9 @@ describe('workspace presentation helpers', () => {
     ])
 
     expect(groups).toMatchObject([
-      { key: 'cwd:/elsewhere/alpha', name: 'alpha', sessions: [{ id: 'other-alpha' }] },
-      { key: 'cwd:/work/alpha', name: 'alpha', sessions: [{ id: 'alpha-new' }, { id: 'alpha-old' }] },
-      { key: 'cwd:/work/beta', name: 'beta', sessions: [{ id: 'beta-invalid' }] },
-      { key: 'cwd:unavailable', name: '工作目录不可用', sessions: [{ id: 'unknown' }] },
+      { key: 'project:/elsewhere/alpha', name: 'alpha', sessions: [{ id: 'other-alpha' }] },
+      { key: 'project:/work/alpha', name: 'alpha', sessions: [{ id: 'alpha-new' }, { id: 'alpha-old' }] },
+      { key: 'project:/work/beta', name: 'beta', sessions: [{ id: 'beta-invalid' }] },
     ])
     expect(projectSessionGroupKey()).toBe('cwd:unavailable')
   })
@@ -101,14 +100,11 @@ describe('workspace presentation helpers', () => {
     expect(useWorkspaceStore.getState().collapsedProjectKeys[projectKey]).toBe(true)
   })
 
-  it('hides projects only in persisted browser navigation preferences', () => {
-    useWorkspaceStore.setState({ hiddenProjectCwds: {} })
-    const store = useWorkspaceStore.getState()
-
-    store.hideProject('/work/alpha')
-    expect(useWorkspaceStore.getState().hiddenProjectCwds).toEqual({ '/work/alpha': true })
-    store.restoreProject('/work/alpha')
-    expect(useWorkspaceStore.getState().hiddenProjectCwds).toEqual({})
+  it('keeps legacy visibility only as migration input and can clear it', () => {
+    useWorkspaceStore.setState({ legacyHiddenProjectCwds: { '/work/alpha': true } })
+    useWorkspaceStore.getState().clearLegacyProjectVisibility()
+    expect(useWorkspaceStore.getState().legacyHiddenProjectCwds).toEqual({})
+    expect(useWorkspaceStore.getState()).not.toHaveProperty('hideProject')
   })
 
   it('keeps initial desktop panel widths in UI-only state', () => {
@@ -180,25 +176,25 @@ describe('workspace presentation helpers', () => {
 
   it('reconciles legacy manual order while prepending newly discovered items', () => {
     const source = [
-      { key: 'cwd:/alpha', sessions: [{ id: 'new' }, { id: 'saved' }] },
-      { key: 'cwd:/beta', sessions: [{ id: 'beta' }] },
+      { key: 'project:/alpha', sessions: [{ id: 'new' }, { id: 'saved' }] },
+      { key: 'project:/beta', sessions: [{ id: 'beta' }] },
     ]
     const order = reconcileNavigationOrder(
       {
-        projectOrder: ['cwd:/beta', 'cwd:/gone'],
-        sessionOrderByProject: { 'cwd:/alpha': ['saved', 'gone'] },
+        projectOrder: ['project:/beta', 'project:/gone'],
+        sessionOrderByProject: { 'project:/alpha': ['saved', 'gone'] },
       },
       source,
     )
 
     expect(order).toEqual({
-      projectOrder: ['cwd:/alpha', 'cwd:/beta'],
-      sessionOrderByProject: { 'cwd:/alpha': ['new', 'saved'] },
+      projectOrder: ['project:/alpha', 'project:/beta'],
+      sessionOrderByProject: { 'project:/alpha': ['new', 'saved'] },
       projectCreatedAt: {},
     })
     expect(applyNavigationOrder(source, order)).toEqual([
-      { key: 'cwd:/alpha', sessions: [{ id: 'new' }, { id: 'saved' }] },
-      { key: 'cwd:/beta', sessions: [{ id: 'beta' }] },
+      { key: 'project:/alpha', sessions: [{ id: 'new' }, { id: 'saved' }] },
+      { key: 'project:/beta', sessions: [{ id: 'beta' }] },
     ])
   })
 
@@ -263,11 +259,11 @@ it('hides only the Plan widget and moves its tool policy to status details', () 
 
 
 it('merges registered empty projects with native session directories without duplicates', () => {
-  const registered = [{ cwd: '/empty', createdAt: '2026-10-17T00:00:00Z' }, { cwd: '/existing', createdAt: '2026-10-16T00:00:00Z' }]
+  const registered = [fixtureProject('/empty', '2026-10-17T00:00:00Z'), fixtureProject('/existing', '2026-10-16T00:00:00Z')]
   const groups = groupSessionsByProject([{ id: 'one', cwd: '/existing' }], {}, registered)
   expect(groups).toHaveLength(2)
   expect(groups.find((project) => project.cwd === '/empty')).toMatchObject({ name: 'empty', sessions: [] })
-  expect(groups.find((project) => project.cwd === '/existing')?.sessions).toEqual([{ id: 'one', cwd: '/existing' }])
+  expect(groups.find((project) => project.cwd === '/existing')?.sessions).toMatchObject([{ id: 'one', cwd: '/existing' }])
 })
 
 it('persists file-preview width as a browser preference and rejects invalid sizes', () => {
@@ -281,4 +277,14 @@ it('persists file-preview width as a browser preference and rejects invalid size
     store.setInspectorWidth(Infinity)
     expect(useWorkspaceStore.getState().inspectorWidth).toBe(300)
   } finally { store.setInspectorWidth(300) }
+})
+
+it('only renders server projects and groups by persisted relation rather than matching directory text', async () => {
+  const { groupSessionsByProject: group } = await import('./workspace.js')
+  const project = fixtureProject('/registered')
+  const sessions = [{ id: 'unregistered', cwd: '/other' }, { id: 'wrong-relation', cwd: '/registered', projectId: 'different' }, { id: 'right', cwd: '/alias', projectId: project.id }]
+  expect(group(sessions, {}, [])).toEqual([])
+  expect(group(sessions, {}, [project])).toMatchObject([{ id: project.id, sessions: [{ id: 'right' }] }])
+  expect(group([], {}, [project])).toMatchObject([{ id: project.id, sessions: [] }])
+  expect(group(sessions, {}, [{ ...project, removedAt: '2026-11-05T00:00:00Z' }])).toEqual([])
 })

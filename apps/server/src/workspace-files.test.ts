@@ -1,3 +1,4 @@
+import { WorkspaceDatabase } from './workspace-database.js'
 import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises'
 import { join, win32, posix } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -18,7 +19,7 @@ async function fixture() {
   await writeFile(join(dir, 'secret'), 'private')
   await symlink(join(dir, 'secret'), join(root, 'escape'))
   const security = new RuntimeSecurity()
-  const projects = new ProjectRegistry(join(dir, 'projects.json')); projects.open(root)
+  const projects = new ProjectRegistry(new WorkspaceDatabase(join(dir, 'projects.sqlite'))); projects.open(root)
   const sessions = createSessionIndexFixture([{ id: 's', name: 'Test', firstMessage: '', updatedAt: new Date().toISOString(), cwd: root, sessionFile: join(dir, 's.jsonl') }]).index
   const app = new Hono().route('/api/workspace-files', createWorkspaceFileRoutes(security, projects, sessions))
   const headers = { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }
@@ -83,7 +84,7 @@ it('authorizes a registered project through its filesystem alias without any ses
   const { root, dir } = await fixture()
   const alias = join(dir, 'project-alias'); await symlink(root, alias)
   const security = new RuntimeSecurity()
-  const projects = new ProjectRegistry(join(dir, 'only-projects.json')); projects.open(root)
+  const projects = new ProjectRegistry(new WorkspaceDatabase(join(dir, 'only-projects.sqlite'))); projects.open(root)
   const app = new Hono().route('/files', createWorkspaceFileRoutes(security, projects, createSessionIndexFixture([]).index))
   const response = await app.request('/files/list', { method: 'POST', headers: { origin: security.origin, 'x-pi-nest-token': security.token, 'content-type': 'application/json' }, body: JSON.stringify({ scope: { kind: 'project', cwd: alias }, path: '' }) })
   expect(response.status).toBe(200)

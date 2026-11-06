@@ -1,3 +1,4 @@
+import { seedWorkspaceProjects } from './test-fixtures/workspace.js'
 // @vitest-environment happy-dom
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -88,15 +89,16 @@ it('keeps execution hooks stable through waiting, thinking, tool use, completion
 it('updates the mounted workspace across streaming phases and session switches without hook errors', async () => {
   const log = vi.spyOn(console, 'error')
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
-  client.setQueryData(['projects'], [])
+  seedWorkspaceProjects(client)
   const timestamp = new Date().toISOString()
   const sessions = [{ id: 'one', cwd: '/fixture', name: 'One' }, { id: 'two', cwd: '/fixture', name: 'Two' }]
   client.setQueryData(['sessions'], sessions)
+  seedWorkspaceProjects(client)
   for (const session of sessions) {
     client.setQueryData(sessionHistoryQueryKey(session.id), { pages: [{ session, entries: [], revision: 'fixture', hasEarlier: false }], pageParams: [{}] })
     client.setQueryData(sessionTurnIndexQueryKey(session.id, 'fixture'), { entries: [], revision: 'fixture' })
   }
-  useWorkspaceStore.setState({ runs: {}, drafts: { one: 'unsent' }, hiddenProjectCwds: {}, collapsedProjectKeys: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} }, runtimeStates: { one: { lifecycle: 'idle', revision: 1 }, two: { lifecycle: 'idle', revision: 1 } }, watchStates: { one: 'ready', two: 'ready' }, runtimeDetails: { one: { model: { id: 'test', provider: 'fixture' } } as PiRuntimeState, two: { model: { id: 'test', provider: 'fixture' } } as PiRuntimeState } })
+  useWorkspaceStore.setState({ runs: {}, drafts: { one: 'unsent' }, legacyHiddenProjectCwds: {}, collapsedProjectKeys: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} }, runtimeStates: { one: { lifecycle: 'idle', revision: 1 }, two: { lifecycle: 'idle', revision: 1 } }, watchStates: { one: 'ready', two: 'ready' }, runtimeDetails: { one: { model: { id: 'test', provider: 'fixture' } } as PiRuntimeState, two: { model: { id: 'test', provider: 'fixture' } } as PiRuntimeState } })
   const controller = { openSession: vi.fn(), releaseForeground: vi.fn(), getCommands: vi.fn(async () => []), start: vi.fn(), stop: vi.fn(async () => true) } as unknown as SessionRunController
   try {
     await act(() => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/?session=one']}><WorkspacePage sessionRuns={controller} /></MemoryRouter></QueryClientProvider>))

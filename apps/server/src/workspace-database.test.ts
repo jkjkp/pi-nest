@@ -1,15 +1,15 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, expect, it } from 'vitest'
 import { WorkspaceDatabase } from './workspace-database.js'
 const directory = mkdtempSync(join(tmpdir(), 'pi-nest-db-'))
 afterEach(() => rmSync(directory, { recursive: true, force: true }))
-it('initializes, persists and reopens v1 without touching other data', () => {
+it('initializes, persists and reopens v3 without touching other data', () => {
   const path = join(directory, 'data', 'workspace.sqlite')
   const db = new WorkspaceDatabase(path)
   expect(db.health.available).toBe(true)
-  expect(db.connection!.pragma('user_version', { simple: true })).toBe(1)
+  expect(db.connection!.pragma('user_version', { simple: true })).toBe(3)
   expect(db.connection!.pragma('journal_mode', { simple: true })).toBe('wal')
   db.connection!.exec("CREATE TABLE proof(value TEXT); INSERT INTO proof VALUES ('saved')")
   db.close()
@@ -47,4 +47,26 @@ it('bounds a competing writer and reports the locked database without modifying 
     first.connection!.exec('ROLLBACK')
     expect(first.connection!.prepare('SELECT count(*) AS total FROM session_branches').get()).toEqual({ total: 0 })
   } finally { first.close(); second.close() }
+})
+
+it('backs up and upgrades v1 while retaining branches and enforcing project foreign keys', async () => {
+  const { default: Database } = await import('better-sqlite3')
+  const { readdirSync } = await import('node:fs')
+  const path = join(directory, 'v1.sqlite')
+  mkdirSync(directory, { recursive: true })
+  const original = new Database(path)
+  original.exec("CREATE TABLE session_branches (proof TEXT); INSERT INTO session_branches VALUES ('branch-kept'); PRAGMA user_version=1")
+  original.close()
+  const upgraded = new WorkspaceDatabase(path)
+  try {
+    expect(upgraded.health.available).toBe(true)
+    expect(upgraded.connection!.pragma('user_version', { simple: true })).toBe(3)
+    expect(upgraded.connection!.prepare('SELECT * FROM session_branches').get()).toEqual({ proof: 'branch-kept' })
+    expect(() => upgraded.connection!.prepare('INSERT INTO project_sessions (session_id,project_id) VALUES (?,?)').run('session', 'missing-project')).toThrow(/FOREIGN KEY/)
+    const backup = readdirSync(directory).find((file) => file.startsWith('v1.sqlite.v1.') && file.endsWith('.backup'))!
+    const previous = new Database(join(directory, backup), { readonly: true })
+    expect(previous.pragma('user_version', { simple: true })).toBe(1)
+    expect(previous.prepare('SELECT * FROM session_branches').get()).toEqual({ proof: 'branch-kept' })
+    previous.close()
+  } finally { upgraded.close() }
 })

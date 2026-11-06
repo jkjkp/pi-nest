@@ -1,3 +1,4 @@
+import { fixtureProject, seedWorkspaceProjects } from './test-fixtures/workspace.js'
 // @vitest-environment happy-dom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -7,10 +8,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { WorkspacePage } from './workspace-page.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import type { SessionRunController } from './session-run-controller.js'
-import { addProject, createSession, selectProjectFolder } from './workspace-api.js'
+import { addProject, createSession, fetchProjectMigration, migrateProjectVisibility, fetchProjects, selectProjectFolder } from './workspace-api.js'
 import { sessionHistoryQueryKey } from './history.js'
 
-vi.mock('./workspace-api.js', async (original) => ({ ...await original<typeof import('./workspace-api.js')>(), addProject: vi.fn(), selectProjectFolder: vi.fn(), createSession: vi.fn(), fetchPiConfiguration: vi.fn(async () => ({ models: [], settings: { effective: {} } })), fetchSessionHistory: vi.fn(async (id: string) => ({ session: { id }, entries: [], hasEarlier: false, revision: 'fixture' })), fetchSessionTurnIndex: vi.fn(async () => ({ entries: [], revision: 'fixture' })) }))
+vi.mock('./workspace-api.js', async (original) => ({ ...await original<typeof import('./workspace-api.js')>(), addProject: vi.fn(), fetchProjects: vi.fn(), fetchProjectMigration: vi.fn(), migrateProjectVisibility: vi.fn(), selectProjectFolder: vi.fn(), createSession: vi.fn(), fetchPiConfiguration: vi.fn(async () => ({ models: [], settings: { effective: {} } })), fetchSessionHistory: vi.fn(async (id: string) => ({ session: { id }, entries: [], hasEarlier: false, revision: 'fixture' })), fetchSessionTurnIndex: vi.fn(async () => ({ entries: [], revision: 'fixture' })) }))
 let container: HTMLDivElement
 let root: Root
 let client: QueryClient
@@ -22,9 +23,10 @@ beforeEach(() => {
   vi.mocked(selectProjectFolder).mockReset().mockResolvedValue(null)
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(['sessions'], [native])
-  client.setQueryData(['projects'], [])
+  seedWorkspaceProjects(client)
+  vi.mocked(fetchProjects).mockImplementation(async () => client.getQueryData(['projects']) ?? [])
   client.setQueryData(sessionHistoryQueryKey('old'), { pages: [{ session: native, entries: [], hasEarlier: false, revision: 'fixture' }], pageParams: [{}] })
-  useWorkspaceStore.setState({ runs: {}, drafts: {}, hiddenProjectCwds: {}, collapsedProjectKeys: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} }, watchStates: {}, runtimeStates: {}, runtimeDetails: {} })
+  useWorkspaceStore.setState({ runs: {}, drafts: {}, legacyHiddenProjectCwds: {}, collapsedProjectKeys: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} }, watchStates: {}, runtimeStates: {}, runtimeDetails: {} })
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
 })
 afterEach(async () => { await act(() => root.unmount()); client.clear(); container.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
@@ -54,8 +56,21 @@ it('keeps the root on the project home even when historical conversations exist'
   expect(controller.openSession).toHaveBeenCalledWith('old')
 })
 
+it('silently migrates legacy hidden projects without adding a viewport notice', async () => {
+  useWorkspaceStore.setState({ legacyHiddenProjectCwds: { '/old-hidden': true } })
+  vi.mocked(fetchProjectMigration).mockResolvedValueOnce({ pending: true })
+  vi.mocked(migrateProjectVisibility).mockResolvedValueOnce(undefined)
+  await mount('/?session=old')
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)) })
+  expect(migrateProjectVisibility).toHaveBeenCalledExactlyOnceWith(['/old-hidden'])
+  expect(useWorkspaceStore.getState().legacyHiddenProjectCwds).toEqual({})
+  expect(container.querySelector('[aria-label="迁移旧项目状态"]')).toBeNull()
+  expect(container.textContent).not.toContain('同步为已移除')
+  expect(container.querySelector('[data-slot="composer"]')?.closest('main')).not.toBeNull()
+})
+
 it.each(['open', 'create'] as const)('adds an empty project via %s without creating a Pi session until the first message', async (kind) => {
-  vi.mocked(addProject).mockResolvedValue({ cwd: '/projects/new-project', createdAt: '2026-10-17T00:00:00Z' })
+  vi.mocked(addProject).mockResolvedValue(fixtureProject('/projects/new-project', '2026-10-17T00:00:00Z'))
   await mount()
   await click(kind === 'open' ? '打开项目' : '新建项目')
   const dialog = document.querySelector('[role="dialog"]')!
@@ -64,7 +79,7 @@ it.each(['open', 'create'] as const)('adds an empty project via %s without creat
   if (kind === 'create') await fill(inputs[1]!, 'new-project')
   await act(() => dialog.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
   expect(addProject).toHaveBeenCalledWith(kind === 'open' ? { kind, cwd: '/projects/new-project' } : { kind, parent: '/projects', name: 'new-project' })
-  expect(container.querySelector('[data-route]')?.textContent).toBe('/?draftProject=cwd%3A%2Fprojects%2Fnew-project')
+  expect(container.querySelector('[data-route]')?.textContent).toBe('/?draftProject=project%3A%2Fprojects%2Fnew-project')
   expect(container.textContent).toContain('在 new-project 开始新对话')
   expect(createSession).not.toHaveBeenCalled()
   vi.mocked(createSession).mockResolvedValue({ id: 'new-session', cwd: '/projects/new-project' })
@@ -83,7 +98,7 @@ it('shows folder errors without navigating or adding a fake project', async () =
   await act(() => dialog.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
   expect(dialog.textContent).toContain('文件夹不存在')
   expect(container.querySelector('[data-route]')?.textContent).toBe('/')
-  expect(client.getQueryData(['projects'])).toEqual([])
+  expect(client.getQueryData(['projects'])).toEqual([fixtureProject('/existing')])
 })
 
 
@@ -100,8 +115,8 @@ it('cancels the project dialog without submitting or navigating', async () => {
 
 it('creates a project from the sidebar source folder and restores a previously hidden project', async () => {
   const cwd = '/projects/new-project'
-  useWorkspaceStore.setState({ hiddenProjectCwds: { [cwd]: true } })
-  vi.mocked(addProject).mockResolvedValue({ cwd, createdAt: '2026-10-18T00:00:00Z' })
+  // The server restores the existing project when the same directory is added again.
+  vi.mocked(addProject).mockResolvedValue(fixtureProject(cwd, '2026-10-18T00:00:00Z'))
   await mount('/?session=old')
   expect(container.querySelector('a[href="/"]')).toBeNull()
   expect(container.textContent).not.toContain('已移除项目')
@@ -116,8 +131,8 @@ it('creates a project from the sidebar source folder and restores a previously h
   expect(addProject).not.toHaveBeenCalled()
   await click('创建项目')
   expect(addProject).toHaveBeenCalledExactlyOnceWith({ kind: 'open', cwd })
-  expect(useWorkspaceStore.getState().hiddenProjectCwds[cwd]).toBeUndefined()
-  expect(container.querySelector('[data-route]')?.textContent).toBe('/?draftProject=cwd%3A%2Fprojects%2Fnew-project')
+  expect(client.getQueryData(['projects'])).toContainEqual(fixtureProject(cwd, '2026-10-18T00:00:00Z'))
+  expect(container.querySelector('[data-route]')?.textContent).toBe('/?draftProject=project%3A%2Fprojects%2Fnew-project')
   expect(document.querySelector('[role="dialog"]')).toBeNull()
   expect(createSession).not.toHaveBeenCalled()
 })
@@ -148,12 +163,12 @@ it('preserves the chosen source and current conversation when project creation f
   expect(dialog.textContent).toContain('文件夹不存在')
   expect(dialog.textContent).toContain('/missing')
   expect(container.querySelector('[data-route]')?.textContent).toBe('/?session=old')
-  expect(client.getQueryData(['projects'])).toEqual([])
+  expect(client.getQueryData(['projects'])).toEqual([fixtureProject('/existing')])
 })
 
 
 it('replaces the single source using the native picker and submits only the final directory', async () => {
-  vi.mocked(addProject).mockResolvedValue({ cwd: '/second', createdAt: '2026-10-18T00:00:00Z' })
+  vi.mocked(addProject).mockResolvedValue(fixtureProject('/second', '2026-10-18T00:00:00Z'))
   vi.mocked(selectProjectFolder).mockResolvedValueOnce('/first').mockResolvedValueOnce('/second')
   await mount()
   await act(() => container.querySelector<HTMLButtonElement>('[aria-label="创建项目"]')!.click())
@@ -171,7 +186,7 @@ it('replaces the single source using the native picker and submits only the fina
 })
 
 it('keeps the previous source when the native picker is cancelled and permits closing while it is open', async () => {
-  vi.mocked(addProject).mockResolvedValue({ cwd: '/first', createdAt: '2026-10-18T00:00:00Z' })
+  vi.mocked(addProject).mockResolvedValue(fixtureProject('/first', '2026-10-18T00:00:00Z'))
   let finish!: (cwd: string | null) => void
   vi.mocked(selectProjectFolder).mockResolvedValueOnce('/first').mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
   await mount()
@@ -234,7 +249,7 @@ it('cancels a selection, retries in the same dialog and keeps the new selection 
 })
 
 it('can register a manually entered server path without opening the native picker', async () => {
-  vi.mocked(addProject).mockResolvedValue({ cwd: 'D:\\中文 project', createdAt: '2026-11-05T00:00:00Z' })
+  vi.mocked(addProject).mockResolvedValue(fixtureProject('D:\\中文 project', '2026-11-05T00:00:00Z'))
   await mount()
   await act(() => container.querySelector<HTMLButtonElement>('[aria-label="创建项目"]')!.click())
   await fill(document.querySelector<HTMLInputElement>('[role="dialog"] input')!, '  D:\\中文 project  ')
@@ -260,7 +275,7 @@ it('aborts a stalled selection at the frontend deadline and restores the manual 
 
 
 it('opens a handled first-session command without adopting an optimistic answer', async () => {
-  client.setQueryData(['projects'], [{ cwd: '/projects/control', createdAt: '2026-10-17T00:00:00Z' }])
+  client.setQueryData(['projects'], [fixtureProject('/projects/control', '2026-10-17T00:00:00Z')])
   vi.mocked(createSession).mockResolvedValue({ id: 'control-session', cwd: '/projects/control', disposition: 'handled' })
   await mount('/?draftProject=cwd%3A%2Fprojects%2Fcontrol')
   await fill(container.querySelector<HTMLTextAreaElement>('textarea')!, '/ponytail off')
