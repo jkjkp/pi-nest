@@ -24,7 +24,7 @@ export function MessageEditor({ edit, attachments, disabled, error, onError, onC
   return <section aria-label="编辑用户消息" className="w-full min-w-0 rounded-2xl bg-muted p-4 text-foreground">
     <fieldset disabled={busy} className="min-w-0"><ComposerAttachments draft={attachments} /></fieldset>
     <Textarea ref={textarea} aria-label="编辑消息内容" value={edit.text} disabled={busy} maxLength={20_000} rows={2}
-      className="min-h-16 resize-none border-0 bg-transparent px-0 py-0 text-[15px] leading-[26px] shadow-none focus-visible:ring-0 dark:bg-transparent dark:disabled:bg-transparent"
+      className="min-h-16 resize-none border-0 bg-transparent px-0 py-0 text-[length:calc(15px*var(--font-scale))] leading-[calc(26px*var(--font-scale))] shadow-none focus-visible:ring-0 dark:bg-transparent dark:disabled:bg-transparent"
       onChange={(event) => onChange(event.target.value)}
       onPaste={(event) => {
         const files = [...event.clipboardData.files]

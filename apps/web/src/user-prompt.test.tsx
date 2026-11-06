@@ -157,7 +157,7 @@ it('keeps the prompt toggle transparent in both states with a small directional 
       expect(toggle.classList.contains(style)).toBe(true)
     }
     expect(toggle.querySelector('span')?.classList.contains('text-xs')).toBe(true)
-    expect(toggle.querySelector('svg')?.classList.contains('size-[1em]')).toBe(true)
+    expect(toggle.querySelector('svg')?.classList.contains('size-3')).toBe(true)
   }
   transparent()
   expect(toggle.textContent).toBe('显示更多')

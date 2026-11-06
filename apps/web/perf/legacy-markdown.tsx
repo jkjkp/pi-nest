@@ -33,7 +33,7 @@ function MarkdownPre({ children }: ComponentProps<'pre'>) {
   const code = String(child.props.children ?? '').replace(/\n$/, '')
   const lang = language(child.props.className)
   if (lang === 'mermaid') return isStreaming
-    ? <pre className="my-4 max-h-96 overflow-auto rounded-md bg-code-background p-3 font-mono text-[13px] leading-[22px]"><code>{code}</code></pre>
+    ? <pre className="my-4 max-h-96 overflow-auto rounded-md bg-code-background p-3 font-mono text-[length:calc(13px*var(--font-scale))] leading-[calc(22px*var(--font-scale))]"><code>{code}</code></pre>
     : <MermaidDiagram source={code} />
   return <MarkdownCodeBlock code={code} language={lang} isStreaming={isStreaming} />
 }
@@ -49,11 +49,11 @@ const markdownComponents: Components = {
   a: MarkdownLink,
   blockquote: ({ children }) => <blockquote className="my-4 border-l-2 border-border pl-4 text-muted-foreground">{children}</blockquote>,
   code: ({ children }) => <code className="rounded bg-muted px-1 py-0 text-[0.9em]">{children}</code>,
-  h1: ({ children }) => <h1 className="mt-6 mb-4 text-[22px] leading-normal font-normal first:mt-0">{children}</h1>,
+  h1: ({ children }) => <h1 className="mt-6 mb-4 text-[length:calc(22px*var(--font-scale))] leading-normal font-normal first:mt-0">{children}</h1>,
   h2: ({ children }) => <h2 className="mt-6 mb-4 text-xl leading-normal font-normal first:mt-0">{children}</h2>,
   h3: ({ children }) => <h3 className="mt-5 mb-3 text-lg leading-normal font-normal first:mt-0">{children}</h3>,
   h4: ({ children }) => <h4 className="mt-4 mb-2 text-base font-normal first:mt-0">{children}</h4>,
-  h5: ({ children }) => <h5 className="mt-4 mb-2 text-[15px] font-normal first:mt-0">{children}</h5>,
+  h5: ({ children }) => <h5 className="mt-4 mb-2 text-[length:calc(15px*var(--font-scale))] font-normal first:mt-0">{children}</h5>,
   h6: ({ children }) => <h6 className="mt-3 mb-2 text-sm font-normal text-muted-foreground first:mt-0">{children}</h6>,
   em: ({ children }) => <em className="italic">{children}</em>,
   del: ({ children }) => <del className="line-through">{children}</del>,
@@ -63,7 +63,7 @@ const markdownComponents: Components = {
   p: ({ children }) => <p className="my-4 first:mt-0 last:mb-0">{children}</p>,
   pre: MarkdownPre,
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-  table: ({ children }) => <div className="my-4 overflow-x-auto rounded-md border"><table className="w-full border-collapse text-sm leading-6">{children}</table></div>,
+  table: ({ children }) => <div className="my-4 overflow-x-auto rounded-md border"><table className="w-full border-collapse text-sm leading-[calc(24px*var(--font-scale))]">{children}</table></div>,
   td: ({ children }) => <td className="border-t px-3 py-2 align-top">{children}</td>,
   th: ({ children }) => <th className="border-b bg-muted/60 px-3 py-2 text-left font-normal">{children}</th>,
   ul: ({ children, className }) => <ul className={`my-4 list-disc space-y-1.5 pl-6 ${className ?? ''}`}>{children}</ul>,
@@ -72,7 +72,7 @@ const markdownComponents: Components = {
 export const LegacyMarkdown = memo(function LegacyMarkdown({ isStreaming, source, onOpenLocalLink }: { isStreaming: boolean; source: string; onOpenLocalLink?: (href: string) => void }) {
   return (
     <LocalLinkContext value={onOpenLocalLink}><StreamingContext.Provider value={isStreaming}>
-      <div className="min-w-0 text-[15px] leading-[26px] font-normal [overflow-wrap:anywhere] [&_li>p]:my-2 [&_li>:first-child]:mt-0 [&_li>:last-child]:mb-0 [&_.contains-task-list]:list-none [&_.contains-task-list]:pl-2">
+      <div className="min-w-0 text-[length:calc(15px*var(--font-scale))] leading-[calc(26px*var(--font-scale))] font-normal [overflow-wrap:anywhere] [&_li>p]:my-2 [&_li>:first-child]:mt-0 [&_li>:last-child]:mb-0 [&_.contains-task-list]:list-none [&_.contains-task-list]:pl-2">
         <ReactMarkdown allowedElements={allowedElements} components={markdownComponents} remarkPlugins={[remarkGfm]} skipHtml unwrapDisallowed urlTransform={(url) => safeUrl(url) ?? (onOpenLocalLink && url && !/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(url) ? url : undefined)}>
           {source}
         </ReactMarkdown>

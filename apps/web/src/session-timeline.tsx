@@ -354,10 +354,10 @@ function UserPrompt({ prompt, startedAt, onEdit, editDisabled = false }: { promp
     }} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setTouchRevealed(false) }}>
       {prompt && <div className="ml-auto w-fit max-w-full rounded-[10px] bg-[var(--user-prompt-background)] px-4 py-3 text-[var(--user-prompt-foreground)]">
         <div className={`relative ${expanded ? '' : 'max-h-56 overflow-hidden'}`} ref={content}>
-          <pre className="whitespace-pre-wrap break-words font-sans text-[15px] leading-[26px]">{prompt}</pre>
+          <pre className="whitespace-pre-wrap break-words font-sans text-[length:calc(15px*var(--font-scale))] leading-[calc(26px*var(--font-scale))]">{prompt}</pre>
           {!expanded && hasOverflow && <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[var(--user-prompt-background)] to-transparent" />}
         </div>
-        {hasOverflow && <Button aria-expanded={expanded} className="mt-1.5 min-h-7 h-auto rounded-sm border-0 bg-transparent px-0 py-1 text-inherit opacity-80 shadow-none underline-offset-4 hover:bg-transparent hover:text-inherit hover:opacity-100 hover:underline aria-expanded:bg-transparent aria-expanded:text-inherit focus-visible:ring-1 focus-visible:ring-white/60 dark:hover:bg-transparent" onClick={() => setExpanded(!expanded)} size="sm" type="button" variant="ghost"><span className="inline-flex items-center gap-1 text-xs">{expanded ? '收起' : '显示更多'}<ChevronDown aria-hidden="true" className={`size-[1em] ${expanded ? 'rotate-180' : ''}`} /></span></Button>}
+        {hasOverflow && <Button aria-expanded={expanded} className="mt-1.5 min-h-7 h-auto rounded-sm border-0 bg-transparent px-0 py-1 text-inherit opacity-80 shadow-none underline-offset-4 hover:bg-transparent hover:text-inherit hover:opacity-100 hover:underline aria-expanded:bg-transparent aria-expanded:text-inherit focus-visible:ring-1 focus-visible:ring-white/60 dark:hover:bg-transparent" onClick={() => setExpanded(!expanded)} size="sm" type="button" variant="ghost"><span className="inline-flex items-center gap-1 text-xs">{expanded ? '收起' : '显示更多'}<ChevronDown aria-hidden="true" className={`size-3 ${expanded ? 'rotate-180' : ''}`} /></span></Button>}
       </div>}
       <div className="user-prompt-actions flex h-8 items-center justify-end gap-2 text-[15px] text-muted-foreground" role="group" aria-label="用户消息操作">
         <time className="truncate text-xs" dateTime={startedAt}>{formatUpdatedAt(startedAt)}</time>

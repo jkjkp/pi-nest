@@ -137,7 +137,7 @@ function DiagramViewer({ diagram, source, initialSource, camera, onChange }: { d
       </div>
     </div>
     <DialogDescription>滚轮缩放、拖动画布查看；可输入 1%–1600%，按 Esc 关闭。</DialogDescription>
-    {showSource ? <pre className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted p-4 text-xs leading-6"><code>{source}</code></pre> : <DiagramCanvas camera={camera} diagram={diagram} expanded onChange={onChange} />}
+    {showSource ? <pre className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted p-4 text-xs leading-[calc(24px*var(--font-scale))]"><code>{source}</code></pre> : <DiagramCanvas camera={camera} diagram={diagram} expanded onChange={onChange} />}
     <div className="flex shrink-0 items-center gap-1">
       <Button aria-pressed={!showSource} onClick={() => setShowSource(false)} size="sm" type="button" variant={showSource ? 'ghost' : 'secondary'}>图表</Button>
       <Button aria-pressed={showSource} onClick={() => setShowSource(true)} size="sm" type="button" variant={showSource ? 'secondary' : 'ghost'}>源码</Button>
@@ -177,7 +177,7 @@ export function MermaidDiagram({ source }: { source: string }) {
     return () => { cancelled = true }
   }, [dark, id, source])
 
-  if (source.length > maxSourceLength || current?.error) return <div className="my-3"><pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs leading-6"><code>{source}</code></pre><p className="mt-2 text-sm text-destructive">{current?.error ?? '图表源码超过 32 KiB 上限。'}</p></div>
+  if (source.length > maxSourceLength || current?.error) return <div className="my-3"><pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs leading-[calc(24px*var(--font-scale))]"><code>{source}</code></pre><p className="mt-2 text-sm text-destructive">{current?.error ?? '图表源码超过 32 KiB 上限。'}</p></div>
   const diagram = current?.diagram
   const show = (source: boolean) => { setInitialSource(source); setOpen(true) }
   return <figure className="my-3 rounded-md border bg-card p-3">

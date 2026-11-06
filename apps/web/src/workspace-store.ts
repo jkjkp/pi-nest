@@ -1,4 +1,5 @@
 import { clampSidebarWidth } from './sidebar-width.js'
+import { normalizeBodyFontSize } from './typography.js'
 import { create, type StateCreator } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 
@@ -24,6 +25,8 @@ type SessionNotification = { pendingRunId?: string; completedRunId?: string; rea
 
 // Keep runtime, queue and notification writes in SessionRunController so recovery shares the live event path.
 type WorkspaceState = {
+  bodyFontSize: number
+  setBodyFontSize: (size: number) => void
   workspaceView: 'chat' | 'tree'
   setWorkspaceView: (view: 'chat' | 'tree') => void
   branchStorage: { available: boolean }
@@ -103,6 +106,8 @@ type WorkspaceState = {
 }
 
 export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
+  bodyFontSize: 15,
+  setBodyFontSize: (size) => set({ bodyFontSize: normalizeBodyFontSize(size) }),
   filePreviews: {},
   fileReadingPositions: {},
   openFilePreview: (sessionId, path, line, searchRoot, workspace) => set((state) => {
@@ -422,11 +427,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist(createWorkspaceState,
     {
       name: 'pi-nest-navigation-order',
-      partialize: (state) => ({ workspaceView: state.workspaceView, branchOperations: state.branchOperations, filePreviews: state.filePreviews, fileReadingPositions: state.fileReadingPositions, navigationWidth: state.navigationWidth, navigationCollapsed: state.navigationCollapsed, graphSplitRatio: state.graphSplitRatio, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, legacyHiddenProjectCwds: state.legacyHiddenProjectCwds, navigationOrder: state.navigationOrder }),
+      partialize: (state) => ({ bodyFontSize: state.bodyFontSize, workspaceView: state.workspaceView, branchOperations: state.branchOperations, filePreviews: state.filePreviews, fileReadingPositions: state.fileReadingPositions, navigationWidth: state.navigationWidth, navigationCollapsed: state.navigationCollapsed, graphSplitRatio: state.graphSplitRatio, navigationView: state.navigationView, collapsedSessionIds: state.collapsedSessionIds, inspectorWidth: state.inspectorWidth, sessionNotifications: state.sessionNotifications, legacyHiddenProjectCwds: state.legacyHiddenProjectCwds, navigationOrder: state.navigationOrder }),
       merge: (persisted, current) => {
         const saved = persisted && typeof persisted === 'object' ? persisted as Partial<WorkspaceState> & { hiddenProjectCwds?: Record<string, true> } : {}
         const { hiddenProjectCwds, ...preferences } = saved
-        return { ...current, ...preferences, legacyHiddenProjectCwds: saved.legacyHiddenProjectCwds ?? hiddenProjectCwds ?? {}, graphSplitRatio: typeof saved.graphSplitRatio === 'number' && Number.isFinite(saved.graphSplitRatio) ? Math.max(0, Math.min(1, saved.graphSplitRatio)) : current.graphSplitRatio, filePreviews: restoreFilePanels(saved.filePreviews), fileReadingPositions: restoreFilePositions(saved.fileReadingPositions) }
+        return { ...current, ...preferences, bodyFontSize: normalizeBodyFontSize(saved.bodyFontSize), legacyHiddenProjectCwds: saved.legacyHiddenProjectCwds ?? hiddenProjectCwds ?? {}, graphSplitRatio: typeof saved.graphSplitRatio === 'number' && Number.isFinite(saved.graphSplitRatio) ? Math.max(0, Math.min(1, saved.graphSplitRatio)) : current.graphSplitRatio, filePreviews: restoreFilePanels(saved.filePreviews), fileReadingPositions: restoreFilePositions(saved.fileReadingPositions) }
       },
       storage: createJSONStorage(() => (typeof window === 'undefined' ? unavailableStorage : window.localStorage)),
     },
