@@ -1,3 +1,4 @@
+import { fixtureProject } from './test-fixtures/workspace.js'
 // @vitest-environment happy-dom
 import { act, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -27,9 +28,9 @@ function Probe() {
 afterEach(async () => { await act(() => root.render(null)); client.clear(); vi.clearAllMocks(); vi.unstubAllGlobals() })
 async function mount() {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  useWorkspaceStore.setState({ runs: {}, drafts: {}, hiddenProjectCwds: {}, collapsedProjectKeys: {}, watchStates: {}, runtimeStates: {}, runtimeDetails: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} } })
+  useWorkspaceStore.setState({ runs: {}, drafts: {}, legacyHiddenProjectCwds: {}, collapsedProjectKeys: {}, watchStates: {}, runtimeStates: {}, runtimeDetails: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} } })
   client.setQueryData(['sessions'], [])
-  client.setQueryData(['projects'], [{ cwd: '/a' }, { cwd: '/b' }])
+  client.setQueryData(['projects'], [fixtureProject('/a'), fixtureProject('/b')])
   for (const cwd of ['/a', '/b']) client.setQueryData(['draft-configuration', cwd], { models, settings: { effective: { defaultProvider: 'test', defaultModel: 'reasoning', defaultThinkingLevel: 'high' } } })
   await act(() => root.render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/?draftProject=cwd%3A%2Fa']}><Probe /></MemoryRouter></QueryClientProvider>))
 }

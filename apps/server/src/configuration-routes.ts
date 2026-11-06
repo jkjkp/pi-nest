@@ -31,7 +31,7 @@ export function createConfigurationRoutes(runtime: PiRuntimeRegistry, security: 
       try {
         const project = context.req.query('project')
         if (project && context.req.query('session')) return context.json({ error: '请选择项目或会话之一' }, 400)
-        if (project && !(await sessions.hasWorkspace(project)) && !projects.has(project)) return context.json({ error: '找不到项目' }, 404)
+        if (project && !await projects.authorize(project, sessions)) return context.json({ error: '找不到项目' }, 404)
         const cwd = project || await cwdFor(context.req.query('session'))
         if (!cwd) return context.json({ error: '找不到项目会话' }, 404)
         return context.json(await readPiConfiguration(cwd))

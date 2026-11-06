@@ -1,3 +1,4 @@
+import { seedWorkspaceProjects } from './test-fixtures/workspace.js'
 // @vitest-environment happy-dom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -34,8 +35,9 @@ beforeEach(() => {
   vi.mocked(fetchSessionTurnIndex).mockReset().mockResolvedValue({ entries: [], revision: 'old' })
   client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
   client.setQueryData(['sessions'], [session])
+  seedWorkspaceProjects(client)
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-  useWorkspaceStore.setState({ drafts: { one: 'draft' }, runs: {}, runtimeDetails: { one: { isStreaming: false, isCompacting: false, model: { provider: 'fixture', id: 'model' } } }, runtimeStates: { one: { lifecycle: 'idle', revision: 1 } }, watchStates: { one: 'ready' }, hiddenProjectCwds: {}, collapsedProjectKeys: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} } })
+  useWorkspaceStore.setState({ drafts: { one: 'draft' }, runs: {}, runtimeDetails: { one: { isStreaming: false, isCompacting: false, model: { provider: 'fixture', id: 'model' } } }, runtimeStates: { one: { lifecycle: 'idle', revision: 1 } }, watchStates: { one: 'ready' }, legacyHiddenProjectCwds: {}, collapsedProjectKeys: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} } })
 })
 afterEach(async () => { await act(() => root.unmount()); client.clear(); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 function Probe() {

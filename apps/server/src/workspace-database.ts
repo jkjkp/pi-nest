@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3'
 import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 export class WorkspaceDatabase {
   connection?: Database.Database
@@ -12,9 +13,15 @@ export class WorkspaceDatabase {
       db = new Database(path, { timeout: 1000 })
       if (path !== ':memory:') chmodSync(path, 0o600)
       const version = db.pragma('user_version', { simple: true }) as number
-      if (version > 1) throw new Error('数据库版本高于当前程序支持的版本')
+      if (version > 3) throw new Error('数据库版本高于当前程序支持的版本')
       db.pragma('journal_mode = WAL')
       db.pragma('synchronous = FULL')
+      db.pragma('foreign_keys = ON')
+      if (version > 0 && version < 3 && path !== ':memory:') {
+        const backup = `${path}.v${version}.${randomUUID()}.backup`
+        db.prepare('VACUUM INTO ?').run(backup)
+        chmodSync(backup, 0o600)
+      }
       if (version === 0) db.transaction(() => {
         db!.exec(`CREATE TABLE session_branches (
           operation_id TEXT PRIMARY KEY,
@@ -35,6 +42,27 @@ export class WorkspaceDatabase {
         CREATE INDEX branch_parent ON session_branches(parent_session_id);
         CREATE INDEX branch_state ON session_branches(state);
         PRAGMA user_version = 1;`)
+      })()
+      if (version < 2) db.transaction(() => {
+        db!.exec(`CREATE TABLE projects (
+          id TEXT PRIMARY KEY,
+          cwd TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL,
+          removed_at TEXT
+        );
+        CREATE TABLE project_sessions (
+          session_id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT
+        );
+        CREATE INDEX project_sessions_project ON project_sessions(project_id);
+        CREATE TABLE workspace_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
+        PRAGMA user_version = 2;`)
+      })()
+      if (version < 3) db.transaction(() => {
+        db!.exec(`ALTER TABLE projects ADD COLUMN directory_resolved INTEGER NOT NULL DEFAULT 1 CHECK(directory_resolved IN (0,1));
+        ALTER TABLE project_sessions ADD COLUMN cwd TEXT;
+        CREATE INDEX project_sessions_cwd ON project_sessions(cwd);
+        PRAGMA user_version = 3;`)
       })()
       this.connection = db
       this.health = { available: true }

@@ -1,5 +1,5 @@
 import { useWorkspaceStore } from './workspace-store.js'
-import type { PiProject, PiSessionInitialSettings, PiSessionBranchRequest, PiSessionBranchResponse, PiRuntimeSettings, PiSettingsSnapshot, PiSessionsResponse } from '@pi-nest/contracts'
+import type { PiProject, PiWorkspaceSnapshot, PiSessionInitialSettings, PiSessionBranchRequest, PiSessionBranchResponse, PiRuntimeSettings, PiSettingsSnapshot, PiSessionsResponse } from '@pi-nest/contracts'
 import { historyPageSize, type PiSessionHistoryResponse, type PiSessionTurnIndex } from './history.js'
 import type { PiSessionSummary } from './workspace.js'
 import { runtimeBootstrap } from './runtime-bootstrap.js'
@@ -152,9 +152,18 @@ export function fetchSessionGraph(sessionId: string, signal?: AbortSignal) {
   return configurationRequest<import('@pi-nest/contracts').PiSessionGraph>(`${sessionUrl(sessionId)}/graph`, { signal })
 }
 export async function fetchProjects() {
-  const body = await configurationRequest<{ projects: PiProject[] }>('/api/projects')
+  const body = await configurationRequest<PiWorkspaceSnapshot>('/api/workspace')
   return body.projects
 }
+
+export async function fetchRemovedProjects() {
+  const body = await configurationRequest<{ projects: PiProject[] }>('/api/projects?state=removed')
+  return body.projects
+}
+export function removeProject(id: string) { return configurationRequest<void>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }) }
+export function restoreProject(id: string) { return configurationRequest<void>(`/api/projects/${encodeURIComponent(id)}/restore`, { method: 'POST' }) }
+export function fetchProjectMigration() { return configurationRequest<{ pending: boolean }>('/api/projects/migration') }
+export function migrateProjectVisibility(paths: string[]) { return configurationRequest<void>('/api/projects/migration', { method: 'POST', body: JSON.stringify({ paths }) }) }
 
 export async function addProject(request: { kind: 'open'; cwd: string } | { kind: 'create'; parent: string; name: string }) {
   const body = await configurationRequest<{ project: PiProject }>('/api/projects', { method: 'POST', body: JSON.stringify(request) })

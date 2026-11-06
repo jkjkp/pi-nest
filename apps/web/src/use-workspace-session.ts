@@ -7,15 +7,15 @@ import { useSessionModels } from './use-session-models.js'
 import { useSessionActions } from './use-session-actions.js'
 import { useWorkspaceDraft } from './use-workspace-draft.js'
 import { timelineItems } from './timeline-model.js'
-import { applyNavigationOrder, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
+import { applyNavigationOrder, migrateProjectNavigation, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import type { PiProject } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
 import { stripAnsiLine } from './ansi-text.js'
 import { activeRuntimeTurn, isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
-import { fetchProjects, fetchSessionHistory, fetchSessions, openProjectFolder } from './workspace-api.js'
+import { fetchProjects, fetchSessionHistory, fetchSessions, removeProject as removeSavedProject, openProjectFolder } from './workspace-api.js'
 import { isRuntimeConnectionError } from './runtime-websocket-client.js'
-import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, projectName, projectSessionGroupKey, planModePolicy, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
+import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, projectName, projectKey, projectSessionGroupKey, planModePolicy, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
 
 const emptyProjects: PiProject[] = []
 const emptySessions: Awaited<ReturnType<typeof fetchSessions>> = []
@@ -25,22 +25,20 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const queryClient = useQueryClient()
   const selectedSessionId = searchParams.get('session') ?? ''
   const draftProjectKey = searchParams.get('draftProject') ?? ''
+  const draftProjectKeyRef = useRef(draftProjectKey)
   const drafts = useWorkspaceStore((state) => state.drafts)
   const messageEdit = useWorkspaceStore((state) => state.messageEdits[selectedSessionId])
   const extensionStatuses = useWorkspaceStore((state) => state.extensionStatuses)
   const extensionWidgets = useWorkspaceStore((state) => state.extensionWidgets)
   const collapsedProjectKeys = useWorkspaceStore((state) => state.collapsedProjectKeys)
-  const hiddenProjectCwds = useWorkspaceStore((state) => state.hiddenProjectCwds)
   const runs = useWorkspaceStore((state) => state.runs)
   const runtimeDetails = useWorkspaceStore((state) => state.runtimeDetails)
   const runtimeStates = useWorkspaceStore((state) => state.runtimeStates)
   const setDraft = useWorkspaceStore((state) => state.setDraft)
   const navigationOrder = useWorkspaceStore((state) => state.navigationOrder)
-  const hideProject = useWorkspaceStore((state) => state.hideProject)
   const setNavigationOpen = useWorkspaceStore((state) => state.setNavigationOpen)
   const setNavigationOrder = useWorkspaceStore((state) => state.setNavigationOrder)
   const setProjectCollapsed = useWorkspaceStore((state) => state.setProjectCollapsed)
-  const restoreProject = useWorkspaceStore((state) => state.restoreProject)
   const [controlFailure, setControlFailure] = useState<{ sessionId: string; message: string }>()
   const controlError = controlFailure?.sessionId === selectedSessionId ? controlFailure.message : undefined
   function setControlError(message: string | undefined, sessionId = selectedSessionId) {
@@ -63,6 +61,12 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   useEffect(() => { ++editRead.current }, [selectedSessionId])
   const sessionsQuery = useQuery({ queryKey: ['sessions'], queryFn: fetchSessions })
   const projectsQuery = useQuery({ queryKey: ['projects'], queryFn: fetchProjects, retry: false })
+  const previousSessions = useRef(sessionsQuery.data)
+  useEffect(() => {
+    if (previousSessions.current === sessionsQuery.data) return
+    previousSessions.current = sessionsQuery.data
+    if (sessionsQuery.isSuccess) void queryClient.invalidateQueries({ queryKey: ['projects'] })
+  }, [sessionsQuery.data, sessionsQuery.isSuccess, queryClient])
   const sessions = sessionsQuery.data ?? emptySessions
   const selectedSession = sessions.find((session) => session.id === selectedSessionId)
   const sessionResolution = !selectedSessionId ? 'none' : selectedSession ? 'ready' : sessionsQuery.isPending ? 'restoring' : sessionsQuery.isError ? 'error' : 'missing'
@@ -81,21 +85,30 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId
-  }, [selectedSessionId, queryClient])
+    draftProjectKeyRef.current = draftProjectKey
+  }, [selectedSessionId, draftProjectKey, queryClient])
 
   const sourceProjects = useMemo(() => groupSessionsByProject(sessions, navigationOrder.projectCreatedAt, projectsQuery.data ?? emptyProjects), [sessions, navigationOrder.projectCreatedAt, projectsQuery.data])
   const orderedProjects = useMemo(() => applyNavigationOrder(sourceProjects, navigationOrder), [navigationOrder, sourceProjects])
-  const projects = useMemo(() => orderedProjects.filter((project) => !project.cwd || !hiddenProjectCwds[project.cwd]), [hiddenProjectCwds, orderedProjects])
-  const draftProject = !selectedSessionId ? projects.find((project) => project.key === draftProjectKey) : undefined
+  const projects = orderedProjects
+  const draftProject = !selectedSessionId ? projects.find((project) => project.key === draftProjectKey || projectSessionGroupKey(project.cwd) === draftProjectKey) : undefined
+  useEffect(() => {
+    if (draftProject && draftProject.key !== draftProjectKey) setSearchParams({ draftProject: draftProject.key }, { replace: true })
+  }, [draftProject, draftProjectKey, setSearchParams])
   const attachmentDraft = useAttachmentDraft(selectedSessionId, draftProject?.cwd, messageEdit ? `edit:${selectedSessionId}` : undefined)
   const isDraft = Boolean(draftProject)
 
   useEffect(() => {
     // An unloaded list must not erase the persisted drag order on startup.
     if (!sessionsQuery.isSuccess || !projectsQuery.isSuccess) return
-    const reconciled = reconcileNavigationOrder(navigationOrder, sourceProjects)
+    const migrated = migrateProjectNavigation(navigationOrder, projectsQuery.data ?? emptyProjects)
+    for (const project of sourceProjects) {
+      const collapsed = collapsedProjectKeys[projectSessionGroupKey(project.cwd)]
+      if (collapsed !== undefined && collapsedProjectKeys[project.key] === undefined) setProjectCollapsed(project.key, collapsed)
+    }
+    const reconciled = reconcileNavigationOrder(migrated, sourceProjects)
     if (!navigationOrdersEqual(navigationOrder, reconciled)) setNavigationOrder(reconciled)
-  }, [navigationOrder, setNavigationOrder, sourceProjects, sessionsQuery.isSuccess, projectsQuery.isSuccess])
+  }, [navigationOrder, setNavigationOrder, sourceProjects, sessionsQuery.isSuccess, projectsQuery.isSuccess, projectsQuery.data, collapsedProjectKeys, setProjectCollapsed])
 
   useEffect(() => {
     if (!selectedSessionId) return
@@ -187,7 +200,8 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
 
   function selectSession(sessionId: string) {
     const session = queryClient.getQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'])?.find((session) => session.id === sessionId)
-    if (session) setProjectCollapsed(projectSessionGroupKey(session.cwd), false)
+    const project = projects.find((item) => item.id === session?.projectId)
+    if (project) setProjectCollapsed(project.key, false)
     setDraftPrompt('')
     setDraftError(undefined)
     setSearchParams({ session: sessionId })
@@ -203,16 +217,21 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     setNavigationOpen(false)
   }
 
-  function openProject(project: PiProject) {
+  async function openProject(project: PiProject) {
+    await queryClient.cancelQueries({ queryKey: ['projects'], exact: true })
     queryClient.setQueryData<PiProject[]>(['projects'], (saved = []) => [...saved.filter((item) => item.cwd !== project.cwd), project])
-    restoreProject(project.cwd)
-    startDraft({ ...project, key: projectSessionGroupKey(project.cwd), name: projectName(project.cwd), sessions: [] })
+    startDraft({ ...project, key: projectKey(project), name: projectName(project.cwd), sessions: [] })
+    void queryClient.invalidateQueries({ queryKey: ['projects'] })
   }
 
-  function removeProject(project: ProjectSessionGroup) {
-    if (!project.cwd) return
-    hideProject(project.cwd)
-    if (draftProject?.cwd === project.cwd || selectedSession?.cwd === project.cwd) setSearchParams({})
+  async function removeProject(project: ProjectSessionGroup) {
+    if (!project.id) throw new Error('项目标识不可用，请重新加载。')
+    await removeSavedProject(project.id)
+    await queryClient.cancelQueries({ queryKey: ['projects'], exact: true })
+    queryClient.setQueryData<PiProject[]>(['projects'], (saved = []) => saved.filter((item) => item.id !== project.id))
+    const currentSession = queryClient.getQueryData<Awaited<ReturnType<typeof fetchSessions>>>(['sessions'])?.find((item) => item.id === selectedSessionIdRef.current)
+    if (currentSession?.projectId === project.id || !selectedSessionIdRef.current && [project.key, projectSessionGroupKey(project.cwd)].includes(draftProjectKeyRef.current)) setSearchParams({})
+    void queryClient.invalidateQueries({ queryKey: ['projects'] })
   }
 
   function submitPrompt(mode: 'follow_up' | 'steer' = 'follow_up', commandsChecked = false) {

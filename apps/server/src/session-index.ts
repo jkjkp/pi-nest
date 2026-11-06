@@ -30,6 +30,7 @@ const HEADER_CONCURRENCY = 16
 
 export type PiSessionIndexOptions = {
   directory?: string
+  onDiscover?: (session: PiSessionBinding & { createdAt?: string }) => void
   discovery?: (directory: string) => Promise<PiSessionDiscovery>
   readHeader?: (file: string) => Promise<PiSessionFileRead | undefined>
   readSummary?: (file: string) => Promise<PiSessionSummaryRead | undefined>
@@ -92,6 +93,7 @@ function isoTime(value: string | undefined) {
  * - Directory reconciliation and per-file body reads are shared between callers.
  */
 export class PiSessionIndex implements SessionIndex {
+  private readonly onDiscover?: PiSessionIndexOptions['onDiscover']
   private readonly options: RequiredOptions
   private readonly discovery: (directory: string) => Promise<PiSessionDiscovery>
   private readonly readHeaderFile: (file: string) => Promise<PiSessionFileRead | undefined>
@@ -114,6 +116,7 @@ export class PiSessionIndex implements SessionIndex {
   private debounce: NodeJS.Timeout | undefined
 
   constructor(options: PiSessionIndexOptions = {}) {
+    this.onDiscover = options.onDiscover
     this.explicitDirectory = options.directory
     this.discovery = options.discovery ?? ((directory) => discoverPiSessionFiles(directory))
     this.readHeaderFile = options.readHeader ?? ((file) => readPiSessionHeader(file))
@@ -285,6 +288,7 @@ export class PiSessionIndex implements SessionIndex {
       stale: true,
       version: 0,
     }
+    this.onDiscover?.({ ...state.binding, createdAt: isoTime(header.timestamp) })
     this.byFile.set(file, state)
     this.claimId(state)
     this.countWorkspace(state.binding.cwd, 1)
@@ -452,6 +456,8 @@ export class PiSessionIndex implements SessionIndex {
     if (!state || !summary) return undefined
     return summary.id === state.binding.id && (summary.cwd || undefined) === state.binding.cwd ? summary : undefined
   }
+
+  initialize() { return this.ensureReconciled() }
 
   async list(): Promise<PiSessionSummary[]> {
     await this.ensureReconciled()

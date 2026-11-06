@@ -101,7 +101,10 @@ export function useSessionActions({ sessionRuns, selectedSessionId, selectedSess
   async function handleDelete(sessionId: string) {
     setMutatingSessionId(sessionId)
     try {
-      await deleteSession(sessionId)
+      try { await deleteSession(sessionId) }
+      catch (cause) {
+        if ((cause as { code?: string } | null)?.code !== 'SESSION_METADATA_CLEANUP_FAILED') throw cause
+      }
       const related = relatedGraphs(sessionId)
       await queryClient.cancelQueries(related)
       const graphs = queryClient.getQueriesData<PiSessionGraph>(related)

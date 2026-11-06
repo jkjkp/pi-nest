@@ -9,6 +9,7 @@ import { WorkspaceComposer } from './workspace-composer.js'
 import { WorkspaceFilePreview, WorkspaceFilePreviewToggle } from './workspace-file-preview.js'
 import { attachmentDrop } from './attachment-draft.js'
 import { OpenToolFile } from './tool-file-context.js'
+import { ProjectVisibilityMigration } from './project-visibility-migration.js'
 import { ProjectDialog } from './project-dialog.js'
 import { ProjectHome } from './project-home.js'
 import { SessionForkDialog } from './session-fork-dialog.js'
@@ -137,8 +138,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const navigation = (
     <WorkspaceNavigation
       collapsedProjectKeys={collapsedProjectKeys}
-      error={sessionsQuery.error}
-      isLoading={sessionsQuery.isPending}
+      error={projectsQuery.error ?? sessionsQuery.error}
+      isLoading={sessionsQuery.isPending || projectsQuery.isPending}
       mutationSessionId={mutatingSessionId}
       onClone={cloneSession}
       onDelete={handleDelete}
@@ -171,6 +172,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
         if (isActive || ['loading', 'switching'].includes(modelStatus) || ['loading', 'switching'].includes(thinkingStatus)) throw new Error('请等待当前会话操作结束。')
         await handleRename(id, name)
       }} />}
+      <ProjectVisibilityMigration />
       <WorkspaceLayout title={sessionTitle} titleTooltip={displaySession ? sessionDisplayName(displaySession) : undefined}
         navigation={navigation} containerRef={workspaceGrid} previewOpen={preview.open}
         preview={<WorkspaceFilePreview preview={preview} containerRef={workspaceGrid} />}>

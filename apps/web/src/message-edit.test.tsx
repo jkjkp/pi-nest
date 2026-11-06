@@ -1,3 +1,4 @@
+import { seedWorkspaceProjects } from './test-fixtures/workspace.js'
 // @vitest-environment happy-dom
 import { act, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -23,7 +24,8 @@ it.each([false, true])('isolates edit and ordinary drafts, and queries a lost AC
   vi.mocked(fetchSessionHistory).mockResolvedValue(page)
   vi.mocked(fetchSessionTurnIndex).mockResolvedValue({ revision: page.revision, entries: [{ id: 'user', index: 1, promptPreview: 'Original', startedAt: timestamp }] })
   client.setQueryData(['sessions'], [page.session])
-  client.setQueryData(['projects'], [])
+  seedWorkspaceProjects(client)
+  seedWorkspaceProjects(client)
   client.setQueryData(sessionHistoryQueryKey('session-1'), { pages: [page], pageParams: [{}] })
   useWorkspaceStore.setState({ runs: {}, drafts: { 'session-1': 'Unsent ordinary draft' }, messageEdits: {}, runtimeStates: {}, runtimeDetails: {}, watchStates: {} })
   const controller = { openSession: vi.fn(), releaseForeground: vi.fn(), editLast: vi.fn(), getEditStatus: vi.fn() } as unknown as SessionRunController

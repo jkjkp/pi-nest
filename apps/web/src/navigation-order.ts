@@ -53,3 +53,13 @@ export function applyNavigationOrder<T extends NavigationOrderSource>(source: T[
       }
     })
 }
+
+export function migrateProjectNavigation(order: NavigationOrder, projects: { id: string; cwd: string }[]): NavigationOrder {
+  const keys = new Map(projects.map((project) => [`cwd:${project.cwd}`, `project:${project.id}`]))
+  const key = (value: string) => keys.get(value) ?? value
+  return {
+    projectOrder: order.projectOrder.map(key),
+    sessionOrderByProject: Object.fromEntries(Object.entries(order.sessionOrderByProject).map(([value, ids]) => [key(value), ids])),
+    projectCreatedAt: Object.fromEntries(Object.entries(order.projectCreatedAt ?? {}).map(([value, time]) => [key(value), time])),
+  }
+}

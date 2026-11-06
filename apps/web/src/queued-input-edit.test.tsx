@@ -1,3 +1,4 @@
+import { seedWorkspaceProjects } from './test-fixtures/workspace.js'
 // @vitest-environment happy-dom
 import { act, createRef, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -33,7 +34,8 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   const sessions = [{ id: 'a', cwd: '/fixture' }, { id: 'b', cwd: '/fixture' }]
   client.setQueryData(['sessions'], sessions)
-  client.setQueryData(['projects'], [])
+  seedWorkspaceProjects(client)
+  seedWorkspaceProjects(client)
   vi.mocked(fetchSessions).mockResolvedValue(sessions)
   vi.mocked(fetchProjects).mockResolvedValue([])
   vi.mocked(fetchSessionHistory).mockResolvedValue({ session: sessions[0]!, entries: [], revision: 'a'.repeat(64), hasEarlier: false })

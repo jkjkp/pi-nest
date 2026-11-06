@@ -3,7 +3,7 @@ import { WorkspaceDatabase } from './workspace-database.js'
 import { SessionBranchStore } from './session-branch-store.js'
 import { SessionBranchService, BranchOperationConflict } from './session-branch-service.js'
 import { configurationSecurity } from './configuration-routes.js'
-import { resolveSessionLineage } from './session-lineage.js'
+import { workspaceSnapshot } from './workspace-snapshot.js'
 import { AttachmentError, type PreparedInput } from './attachment-store.js'
 import { HistorySnapshotExpired } from './session-history-snapshots.js'
 import { runtimeSettingsSchema } from './configuration-schema.js'
@@ -24,7 +24,7 @@ import {
 import { Hono } from 'hono'
 import { z } from 'zod'
 
-import { ProjectRegistry } from './project-registry.js'
+import { ProjectRegistry, ProjectStorageError } from './project-registry.js'
 import { RuntimeSecurity } from './runtime-security.js'
 import { PiRuntimeRegistry, PiSessionDeletionError } from './pi-runtime-registry.js'
 import type { SessionIndex } from './session-index.js'
@@ -81,16 +81,12 @@ async function resolveSession(sessions: SessionIndex, sessionId: string): Promis
 }
 
 async function resolveWorkspace(cwd: string, projects: ProjectRegistry, sessions: SessionIndex) {
-  try {
-    if (await sessions.hasWorkspace(cwd)) return 'native'
-    return projects.has(cwd) ? 'registered' : false
-  } catch {
-    return undefined
-  }
+  try { return await projects.authorize(cwd, sessions) }
+  catch { return undefined }
 }
 
 export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects = new ProjectRegistry(), security = new RuntimeSecurity(), index: SessionIndex, branches = new SessionBranchStore(new WorkspaceDatabase(':memory:'))) {
-  const branchService = new SessionBranchService(branches, index, runtime.attachments)
+  const branchService = new SessionBranchService(branches, index, runtime.attachments, projects)
   return new Hono()
     .use('/sessions/:sessionId/branch-operations/*', configurationSecurity(security))
     .get('/sessions/:sessionId/branch-operations/:operationId', async (context) => {
@@ -103,25 +99,19 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
     })
     .get('/sessions', async (context) => {
       try {
-        const sessions = resolveSessionLineage(await index.list(), branches.relations())
-
-        return context.json({
-          sessions: sessions.map(({ id, cwd, name, firstMessage, createdAt, updatedAt, parentSessionId, parentSessionMissing, branch }) => ({ id, cwd, name, firstMessage: runtime.attachments.displayPrompt(firstMessage, id), createdAt, updatedAt, parentSessionId, parentSessionMissing, branch })),
-          branchStorage: { available: branches.health.available },
-        } satisfies PiSessionsResponse)
+        const snapshot = await workspaceSnapshot(projects, index, branches, runtime.attachments)
+        return context.json({ sessions: snapshot.sessions, branchStorage: snapshot.branchStorage } satisfies PiSessionsResponse)
       } catch {
         return context.json({ error: 'Failed to list Pi sessions' }, 500)
       }
     })
-    .post('/sessions', async (context) => {
+    .post('/sessions', configurationSecurity(security), async (context) => {
       const parsed = createSessionSchema.safeParse(await context.req.json().catch(() => undefined))
       if (!parsed.success || !parsed.data.prompt && !parsed.data.attachmentIds?.length) return context.json({ error: 'Invalid session creation request' }, 400)
 
       const workspace = await resolveWorkspace(parsed.data.cwd, projects, index)
-      if (workspace === undefined) return context.json({ error: 'Failed to resolve Pi workspace' }, 500)
+      if (workspace === undefined) return context.json({ error: '项目数据库或目录不可用。', code: 'PROJECT_STORAGE_UNAVAILABLE' }, 503)
       if (!workspace) return context.json({ error: 'Pi workspace not found' }, 404)
-      if (workspace === 'registered' && !security.acceptsOrigin(context.req.header('origin'))) return context.json({ error: '项目访问被拒绝' }, 403)
-      if (workspace === 'registered' && !security.acceptsToken(context.req.header('x-pi-nest-token'))) return context.json({ error: '项目访问被拒绝', code: 'RUNTIME_TOKEN_INVALID' }, 403)
 
       const input = { message: parsed.data.prompt, ...(parsed.data.attachmentIds ? { attachmentIds: parsed.data.attachmentIds, submissionId: parsed.data.submissionId } : {}) }
       const draftScope = `draft:${parsed.data.draftId}:${parsed.data.cwd}`
@@ -136,6 +126,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
         if (input.attachmentIds?.length) prepared = await runtime.attachments.prepare(draftScope, input)
         const result = await runtime.attachments.deliver(draftScope, input, async () => {
           created = createPiSession(parsed.data.cwd)
+          const projectId = projects.registerSession(created)
           const firstMessage = parsed.data.prompt.replace(/\s+/g, ' ').trim() || '附件对话'
           const updatedAt = new Date().toISOString()
           // Register immediately; the first list refresh reads the small new file.
@@ -164,6 +155,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
               cwd: created.cwd,
               firstMessage: disposition === 'handled' ? undefined : firstMessage,
               id: created.id,
+              projectId,
               updatedAt,
             },
           }
@@ -177,6 +169,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
             await runtime.deleteSession(created.id)
             await deletePiSession({ expectedCwd: created.cwd, expectedSessionId: created.id, sessionFile: created.sessionFile })
             index.forget(created.sessionFile)
+            projects.forgetSession(created.id)
           } catch (cause) { console.error('Failed to roll back Pi session initialization; session retained', { sessionId: created.id, cause }) }
         }
         if (cause instanceof AttachmentError) return context.json({ error: cause.message, code: cause.code }, cause.status)
@@ -222,6 +215,7 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
             fallbackName: runtime.attachments.displayPrompt(source?.firstMessage, resolved.session.id) ?? '未命名会话',
           }
         }
+        if (!await resolveWorkspace(resolved.session.cwd!, projects, index)) return context.json({ error: '项目已移除或不可用，请先添加项目。', code: 'PROJECT_UNAVAILABLE' }, 409)
         const result = branchService.create(resolved.session, request, beforeShutdown, naming)
         return context.json(result, 'state' in result ? 202 : 201)
       } catch (cause) {
@@ -232,14 +226,12 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
         return context.json({ error: '创建分支会话失败，请重试。' }, 500)
       } finally { finish?.() }
     })
-    .post('/projects/reveal', async (context) => {
+    .post('/projects/reveal', configurationSecurity(security), async (context) => {
       const parsed = projectCwdSchema.safeParse(await context.req.json().catch(() => undefined))
       if (!parsed.success) return context.json({ error: 'Invalid Pi workspace request' }, 400)
       const workspace = await resolveWorkspace(parsed.data.cwd, projects, index)
-      if (workspace === undefined) return context.json({ error: 'Failed to resolve Pi workspace' }, 500)
+      if (workspace === undefined) return context.json({ error: '项目数据库或目录不可用。', code: 'PROJECT_STORAGE_UNAVAILABLE' }, 503)
       if (!workspace) return context.json({ error: 'Pi workspace not found' }, 404)
-      if (workspace === 'registered' && !security.acceptsOrigin(context.req.header('origin'))) return context.json({ error: '项目访问被拒绝' }, 403)
-      if (workspace === 'registered' && !security.acceptsToken(context.req.header('x-pi-nest-token'))) return context.json({ error: '项目访问被拒绝', code: 'RUNTIME_TOKEN_INVALID' }, 403)
       try {
         await revealPiWorkspace(parsed.data.cwd)
         return context.json({ requested: true })
@@ -365,15 +357,22 @@ export function createSessionRoutes(runtime = new PiRuntimeRegistry(), projects 
       const resolved = await resolveSession(index, sessionId)
       if (resolved.kind === 'failed') return context.json({ error: 'Failed to resolve Pi session' }, 500)
       if (resolved.kind === 'missing') return context.json({ error: 'Pi session not found' }, 404)
+      let fileDeleted = false
       try {
-        await runtime.deleteIdleSession(sessionId, () => deletePiSession({
-          expectedCwd: resolved.session.cwd,
-          expectedSessionId: resolved.session.id,
-          sessionFile: resolved.session.sessionFile,
-        }))
+        projects.sync([resolved.session])
+        await runtime.deleteIdleSession(sessionId, async () => {
+          await deletePiSession({
+            expectedCwd: resolved.session.cwd,
+            expectedSessionId: resolved.session.id,
+            sessionFile: resolved.session.sessionFile,
+          })
+          fileDeleted = true
+        })
         index.forget(resolved.session.sessionFile)
+        projects.forgetSession(sessionId)
         return context.body(null, 204)
       } catch (cause) {
+        if (cause instanceof ProjectStorageError || (cause as { code?: string }).code?.startsWith('SQLITE_')) return context.json({ error: fileDeleted ? '会话文件已删除，但归属记录清理失败，请重新加载。' : '项目数据库不可用，会话文件已保留。', code: fileDeleted ? 'SESSION_METADATA_CLEANUP_FAILED' : 'PROJECT_STORAGE_UNAVAILABLE' }, 503)
         if (cause instanceof PiSessionDeletionError) return context.json({ error: cause.message, code: cause.code }, cause.status)
         console.error('Failed to delete Pi session', { sessionId, cause })
         return context.json({ error: '删除会话失败，请稍后重试。', code: 'SESSION_DELETE_FAILED' }, 500)

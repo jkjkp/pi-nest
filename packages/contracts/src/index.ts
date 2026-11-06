@@ -7,7 +7,8 @@ export type PiQueuedInput = AttachmentInput & { id: string; attachments?: Attach
 
 export type PiSessionFilePreview = { path: string; content: string }
 
-export type PiProject = { cwd: string; createdAt: string }
+export type PiProject = { id: string; cwd: string; createdAt: string; removedAt: string | null }
+export type PiWorkspaceSnapshot = PiSessionsResponse & { projects: PiProject[] }
 
 export type PiRuntimeEvent = {
   event: Record<string, unknown>
@@ -73,6 +74,7 @@ export type PiRuntimeCommand = { name: string; description?: string; source: 'ex
 export type PiBranchRelation = { operationId: string; parentSessionId: string; sourceEntryId: string | null; inheritedLeafId: string | null; mode: 'edit' | 'continue' | 'clone'; state: 'pending' | 'ready' | 'attention'; issue?: 'conflict' | 'missing' | 'cycle' }
 export type PiBranchStorage = { available: boolean; error?: string }
 export type PiSessionSummary = {
+  projectId?: string
   branch?: PiBranchRelation
   parentSessionId?: string
   parentSessionMissing?: boolean

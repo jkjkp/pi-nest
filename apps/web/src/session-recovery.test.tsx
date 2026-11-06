@@ -1,3 +1,4 @@
+import { seedWorkspaceProjects } from './test-fixtures/workspace.js'
 // @vitest-environment happy-dom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -35,7 +36,7 @@ beforeEach(() => {
   vi.mocked(controller.openSession).mockClear()
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   container = document.createElement('div'); document.body.append(container); root = createRoot(container)
-  useWorkspaceStore.setState({ drafts: { one: '未发送草稿' }, runs: { one: { status: 'running', turns: [], systemEvents: [], pendingInputs: [] } }, runtimeDetails: { one: { isCompacting: false, isStreaming: true, model: { provider: 'fixture', id: 'model' } } }, runtimeStates: { one: { lifecycle: 'active', revision: 1 } }, watchStates: { one: 'ready' }, hiddenProjectCwds: {}, collapsedProjectKeys: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} } })
+  useWorkspaceStore.setState({ drafts: { one: '未发送草稿' }, runs: { one: { status: 'running', turns: [], systemEvents: [], pendingInputs: [] } }, runtimeDetails: { one: { isCompacting: false, isStreaming: true, model: { provider: 'fixture', id: 'model' } } }, runtimeStates: { one: { lifecycle: 'active', revision: 1 } }, watchStates: { one: 'ready' }, legacyHiddenProjectCwds: {}, collapsedProjectKeys: {}, navigationOrder: { projectOrder: [], sessionOrderByProject: {} } })
 })
 afterEach(async () => { await act(() => root.unmount()); client.clear(); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 function LocationProbe() { return <output data-testid="route">{useLocation().search}</output> }
@@ -87,6 +88,7 @@ it('shows recovery rather than an unselected workspace before any data arrives',
 it.each([true, false])('changes selection after confirmed deletion (another session exists: %s)', async (hasOther) => {
   const other = { id: 'other', cwd: '/fixture', name: 'Next' }
   client.setQueryData(['sessions'], hasOther ? [one, other] : [one])
+  seedWorkspaceProjects(client)
   vi.mocked(fetchSessions).mockResolvedValue(hasOther ? [other] : [])
   vi.mocked(deleteSession).mockResolvedValue(undefined)
   let workspace!: ReturnType<typeof useWorkspaceSession>
@@ -105,6 +107,7 @@ it.each([true, false])('changes selection after confirmed deletion (another sess
 it.each(['resolve', 'reject'])('ignores an old model request after switching sessions (%s)', async (outcome) => {
   const other = { id: 'other', cwd: '/fixture', name: 'Next' }
   client.setQueryData(['sessions'], [one, other])
+  seedWorkspaceProjects(client)
   const model = { provider: 'fixture', id: 'other-model' }
   useWorkspaceStore.setState({ runs: {}, runtimeDetails: {
     one: { isCompacting: false, isStreaming: false, model: { provider: 'fixture', id: 'one-model' } },

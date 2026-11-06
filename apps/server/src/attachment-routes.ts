@@ -28,7 +28,7 @@ export function createAttachmentRoutes(store: AttachmentStore, security: Runtime
     if (!parsed.success) throw new AttachmentError('附件范围无效。')
     const scope = parsed.data
     if (scope.kind === 'draft') {
-      if (!projects.has(scope.cwd) && !(await sessions.hasWorkspace(scope.cwd))) throw new AttachmentError('项目未登记。', 403)
+      if (!await projects.authorize(scope.cwd, sessions)) throw new AttachmentError('项目未登记。', 403)
       return `draft:${scope.draftId}:${scope.cwd}`
     }
     if (!(await sessions.resolve(scope.sessionId))) throw new AttachmentError('会话不存在。', 404)
