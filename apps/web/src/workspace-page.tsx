@@ -181,7 +181,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
             <div className="flex min-w-0 flex-1 items-center gap-2">
               {navigationCollapsed && <span data-navigation-restore className="hidden md:inline-flex"><NavigationToggle controls="workspace-navigation" expanded={false} onToggle={() => setNavigationCollapsed(false)} /></span>}
               {(selectedSession || draftProject) && <Folder aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
-              <h1 className="min-w-0 truncate text-[13px] leading-5 font-normal" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
+              <h1 className="min-w-0 truncate text-[length:calc(13px*var(--font-scale))] leading-[calc(20px*var(--font-scale))] font-normal" title={displaySession ? sessionDisplayName(displaySession) : undefined}>{sessionTitle}</h1>
               {selectedSession && <span className="inline-flex size-4 shrink-0" role={runtimeLoading ? 'status' : undefined} aria-label={runtimeLoading ? '正在加载 Pi 运行时' : undefined}>{runtimeLoading && <LoaderCircle aria-hidden="true" className="size-4 animate-spin text-muted-foreground" />}</span>}
             </div>
             {selectedSessionId && <div role="group" aria-label="页面模式" className="flex shrink-0 gap-1">

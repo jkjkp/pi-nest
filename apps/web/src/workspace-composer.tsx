@@ -90,7 +90,7 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
           sessionId={isDraft ? '' : selectedSessionId}
           sessionRuns={sessionRuns}
           canQuery={canQuery}
-          className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[16px] leading-7 shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
+          className="min-h-0! shrink-0 resize-none border-0 bg-transparent px-0 py-0 text-[length:calc(16px*var(--font-scale))] leading-[calc(28px*var(--font-scale))] shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
           disabled={(!selectedSession && !isDraft) || creatingDraft || editBusy}
           id="prompt"
           onPaste={(event) => { if (editBusy) { event.preventDefault(); return } const files = [...event.clipboardData.files]; if (files.length) { event.preventDefault(); try { attachmentDraft.add(files) } catch (cause) { onError(cause instanceof Error ? cause.message : '粘贴失败') } } }}
@@ -113,7 +113,7 @@ export function WorkspaceComposer({ state, commands, sessionRuns, textareaRef, s
           placeholder={isDraft ? '随心输入…' : status === 'running' ? 'Enter 排队，Ctrl + Enter 引导，Shift + Enter 换行' : 'Enter 发送，Shift + Enter 换行'}
           textareaRef={promptTextareaRef}
           rows={1}
-          style={{ lineHeight: '1.75rem' }}
+          style={{ lineHeight: 'calc(1.75rem * var(--font-scale))' }}
           value={prompt}
         />
         <div className="composer-toolbar flex min-h-9 shrink-0 flex-nowrap items-center gap-2">

@@ -46,7 +46,7 @@ export function SessionStatistics({ details, onRetry, open: controlledOpen, onOp
         <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" strokeWidth="2" className="opacity-20" />
         {known && <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" strokeWidth="2" pathLength="100" strokeDasharray={`${progress} 100`} transform="rotate(-90 16 16)" />}
       </svg>
-      <span aria-hidden="true" className="absolute inset-0 flex items-center justify-center text-[8px] tabular-nums">{known ? `${Math.round(percent)}%` : '—'}</span>
+      <span aria-hidden="true" className="absolute inset-0 flex items-center justify-center text-[length:calc(8px*var(--font-scale))] tabular-nums">{known ? `${Math.round(percent)}%` : '—'}</span>
     </Button></Popover.Trigger>
     <Popover.Portal><Popover.Content ref={content} onPointerEnter={enter} onPointerLeave={leave} onFocusCapture={() => clearTimeout(timer.current)} onBlurCapture={leave} onOpenAutoFocus={(event) => event.preventDefault()} onCloseAutoFocus={(event) => event.preventDefault()} side="top" align="end" sideOffset={8} collisionPadding={12} className="z-50 w-72 max-w-[calc(100vw-24px)] rounded-xl border bg-popover p-3 text-sm text-popover-foreground shadow-lg">
       <h2 className="font-normal">会话用量与上下文</h2>

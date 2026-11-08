@@ -9,6 +9,7 @@ import { sessionHistoryQueryKey } from './history.js'
 import { RuntimeWebSocketClient } from './runtime-websocket-client.js'
 import { createSessionRunController } from './session-run-controller.js'
 import { replaceSessionHistory } from './history-view.js'
+import { useWorkspaceStore } from './workspace-store.js'
 
 function bootstrap() {
   const queryClient = new QueryClient()
@@ -33,6 +34,8 @@ if (import.meta.hot) {
   import.meta.hot.accept(['./runtime-websocket-client.js', './session-run-controller.js'], () => import.meta.hot?.invalidate())
 }
 
+// Apply the saved size before child layout effects measure the composer and timeline.
+document.documentElement.style.setProperty('--font-scale', String(useWorkspaceStore.getState().bodyFontSize / 15))
 root.render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>

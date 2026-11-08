@@ -64,9 +64,9 @@ export function FilePreviewText({ content, path, line, navigation, positionKey, 
       {reading.mode === 'reading' ? <AssistantMarkdown source={content} isStreaming={false} onOpenLocalLink={(href) => {
         const link = localMarkdownLink(path, href)
         if (link) onOpenFile?.(link.path, link.line)
-      }} /> : <pre className="w-max min-w-full font-mono text-xs leading-6">{lines.slice(start, start + 200).map((text, index) => {
+      }} /> : <pre className="w-max min-w-full font-mono text-xs leading-[calc(24px*var(--font-scale))]">{lines.slice(start, start + 200).map((text, index) => {
         const number = firstLine + start + index
-        return <span key={number} ref={number === absoluteTarget ? selected : undefined} className={`block min-h-6 ${number === absoluteTarget ? 'bg-accent' : ''}`}><span className="mr-4 inline-block w-10 select-none text-right text-muted-foreground" aria-hidden="true">{number}</span>{text}</span>
+        return <span key={number} ref={number === absoluteTarget ? selected : undefined} className={`block min-h-[calc(24px*var(--font-scale))] ${number === absoluteTarget ? 'bg-accent' : ''}`}><span className="mr-4 inline-block w-10 select-none text-right text-muted-foreground" aria-hidden="true">{number}</span>{text}</span>
       })}</pre>}
     </div>}
     {reading.mode === 'source' && content !== '' && <footer className="flex shrink-0 flex-wrap items-center justify-between gap-1 border-t p-2 text-xs text-muted-foreground"><Button type="button" size="sm" variant="ghost" disabled={pageInfo?.loading || pageInfo?.changed || start === 0 && (!pageInfo || pageInfo.cursor.offset === 0)} onClick={() => start === 0 && pageInfo ? pageInfo.onPrevious() : page(Math.max(0, start - 200))}>{pageInfo?.startsMidLine && lines.length === 1 ? '上一片段' : '前 200 行'}</Button><span>{firstLine + start}–{firstLine - 1 + Math.min(lines.length, start + 200)} / {pageInfo && !pageInfo.eof ? '尚未读完' : pageInfo?.lastLine ?? lines.length}</span><Button type="button" size="sm" variant="ghost" disabled={pageInfo?.loading || pageInfo?.changed || start + 200 >= lines.length && !pageInfo?.nextCursor} onClick={() => start + 200 >= lines.length && pageInfo ? pageInfo.onNext() : page(start + 200)}>{pageInfo?.endsMidLine && lines.length === 1 ? '下一片段' : '后 200 行'}</Button></footer>}

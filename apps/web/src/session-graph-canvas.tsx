@@ -116,7 +116,7 @@ export function SessionGraphCanvas({ nodes, selectedSessionId, selectedNodeId, o
             className="session-graph-node flex size-full flex-col gap-1 rounded-lg border-2 bg-card p-3 text-left text-xs shadow-sm hover:bg-muted focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground"
             onClick={() => onSelect(node)}>
             <span className="flex h-[18px] w-full min-w-0 items-center gap-2 pr-6">
-              <span className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[11px] leading-[14px] ${state === 'current' ? 'bg-ring/15 text-foreground' : state === 'preview' ? 'bg-warning/15 text-foreground' : 'text-muted-foreground'}`}>
+              <span className={`inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[length:calc(11px*var(--font-scale))] leading-[calc(14px*var(--font-scale))] ${state === 'current' ? 'bg-ring/15 text-foreground' : state === 'preview' ? 'bg-warning/15 text-foreground' : 'text-muted-foreground'}`}>
                 {state === 'preview' && <Eye aria-hidden="true" className="size-3" />}
                 {state === 'current' ? '当前会话' : state === 'preview' ? '只读预览' : '独立会话'}
               </span>

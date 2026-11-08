@@ -63,7 +63,7 @@ export function TurnExecution({ item, isRunning, presentation, runMessage, runSt
 }
 
 function Activity({ activity }: { activity: TurnActivity }) {
-  if (activity.kind === 'thinking' || activity.kind === 'narration') return <p className="whitespace-pre-wrap break-words leading-6 text-muted-foreground">{activity.text}</p>
+  if (activity.kind === 'thinking' || activity.kind === 'narration') return <p className="whitespace-pre-wrap break-words leading-[calc(24px*var(--font-scale))] text-muted-foreground">{activity.text}</p>
   if (activity.kind === 'tool' && activity.result) return <ToolResultCard result={activity.result} label={activity.label} duration={activity.duration === undefined ? undefined : formatActivityDuration(activity.duration)} />
   if (activity.kind === 'tool') return <ActivityLine icon={<Wrench aria-hidden="true" className="size-4" />} label={activity.label} status={`${activity.status}${activity.duration === undefined ? '' : ` · ${formatActivityDuration(activity.duration)}`}`} />
   if (activity.kind === 'bash') return <BashActivity activity={activity} />
@@ -73,7 +73,7 @@ function Activity({ activity }: { activity: TurnActivity }) {
 }
 
 function ActivityLine({ icon, label, status }: { icon: ReactNode; label: string; status?: string }) {
-  return <div className="flex items-start gap-2"><span className="mt-0.5 text-muted-foreground">{icon}</span><div className="min-w-0"><p className="break-words leading-5">{label}</p>{status && <p className="text-xs text-muted-foreground">{status}</p>}</div></div>
+  return <div className="flex items-start gap-2"><span className="mt-0.5 text-muted-foreground">{icon}</span><div className="min-w-0"><p className="break-words leading-[calc(20px*var(--font-scale))]">{label}</p>{status && <p className="text-xs text-muted-foreground">{status}</p>}</div></div>
 }
 
 function BashActivity({ activity }: { activity: Extract<TurnActivity, { kind: 'bash' }> }) {

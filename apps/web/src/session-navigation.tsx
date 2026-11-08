@@ -131,7 +131,7 @@ export function SessionNavigation({
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b">
         <div className="flex h-14 items-center gap-2 px-5">
-          <h2 className="min-w-0 flex-1 truncate text-xl leading-7 font-semibold tracking-tight">Pi Nest</h2>
+          <h2 className="min-w-0 flex-1 truncate text-xl leading-[calc(28px*var(--font-scale))] font-semibold tracking-tight">Pi Nest</h2>
           <div className="ml-auto flex shrink-0">
             <NavigationToggle controls="workspace-navigation" expanded={!navigationCollapsed} onToggle={() => setNavigationCollapsed(!navigationCollapsed)} className="hidden md:inline-flex" />
             <NavigationToggle controls="workspace-navigation-mobile" expanded={navigationOpen} onToggle={() => setNavigationOpen(!navigationOpen)} className="md:hidden" />

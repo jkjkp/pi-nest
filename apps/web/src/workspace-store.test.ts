@@ -33,10 +33,12 @@ it('keeps notification persistence and excludes live runtime state from a fresh 
   first.getState().setRuntimeState('shared', { lifecycle: 'active', revision: 2 })
   first.getState().setDraft('shared', 'temporary')
   first.getState().setGraphSplitRatio(0.6)
+  first.getState().setBodyFontSize(20)
   const persisted = JSON.parse(saved.get('pi-nest-navigation-order')!)
   expect(persisted.version).toBe(0)
   expect(persisted.state.sessionNotifications.shared).toEqual({ completedRunId: 'run' })
   expect(persisted.state.graphSplitRatio).toBe(0.6)
+  expect(persisted.state.bodyFontSize).toBe(20)
   expect(persisted.state).not.toHaveProperty('runtimeStates')
   expect(persisted.state).not.toHaveProperty('drafts')
   vi.resetModules()
@@ -46,9 +48,29 @@ it('keeps notification persistence and excludes live runtime state from a fresh 
   expect(restarted.getState().runtimeStates).toEqual({})
   expect(restarted.getState().drafts).toEqual({})
   expect(restarted.getState().graphSplitRatio).toBe(0.6)
+  expect(restarted.getState().bodyFontSize).toBe(20)
   saved.set('pi-nest-navigation-order', JSON.stringify({ state: { graphSplitRatio: 'invalid' }, version: 0 }))
   vi.resetModules()
   const invalid = (await import('./workspace-store.js')).useWorkspaceStore
   await invalid.persist.rehydrate()
   expect(invalid.getState().graphSplitRatio).toBe(0.45)
+  expect(invalid.getState().bodyFontSize).toBe(15)
+  for (const bodyFontSize of [null, '20', 17, 200, {}, []]) {
+    saved.set('pi-nest-navigation-order', JSON.stringify({ state: { bodyFontSize }, version: 0 }))
+    await invalid.persist.rehydrate()
+    expect(invalid.getState().bodyFontSize).toBe(15)
+  }
+})
+
+it('accepts supported body font sizes and resets invalid values to the default', () => {
+  const store = createStore(createWorkspaceState)
+  expect(store.getState().bodyFontSize).toBe(15)
+  for (const size of [14, 15, 16, 18, 20]) {
+    store.getState().setBodyFontSize(size)
+    expect(store.getState().bodyFontSize).toBe(size)
+  }
+  for (const size of [0, 17, 21, NaN, Infinity]) {
+    store.getState().setBodyFontSize(size)
+    expect(store.getState().bodyFontSize).toBe(15)
+  }
 })

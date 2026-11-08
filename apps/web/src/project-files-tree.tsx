@@ -52,7 +52,7 @@ function Directory({ scope, cacheKey, path, depth, expanded, toggle, onOpenFile 
       const open = expanded.includes(entry.path)
       const Icon = directory ? Folder : entry.kind === 'link' ? Link : File
       return <div key={entry.path}>
-        <button type="button" className="flex min-h-8 w-full items-center gap-2 rounded-md py-1 pr-3 text-left text-[13px] hover:bg-muted disabled:opacity-50" style={{ paddingLeft: 12 + depth * 16 }} title={entry.kind === 'link' ? `${entry.path}（符号链接不在文件树中展开）` : entry.path} aria-expanded={directory ? open : undefined} disabled={entry.kind === 'link' || entry.kind === 'other'} onClick={() => directory ? toggle(entry.path) : onOpenFile(entry.path)}>
+        <button type="button" className="flex min-h-8 w-full items-center gap-2 rounded-md py-1 pr-3 text-left text-[length:calc(13px*var(--font-scale))] hover:bg-muted disabled:opacity-50" style={{ paddingLeft: 12 + depth * 16 }} title={entry.kind === 'link' ? `${entry.path}（符号链接不在文件树中展开）` : entry.path} aria-expanded={directory ? open : undefined} disabled={entry.kind === 'link' || entry.kind === 'other'} onClick={() => directory ? toggle(entry.path) : onOpenFile(entry.path)}>
           <ChevronRight aria-hidden className={`size-3 shrink-0 ${directory ? open ? 'rotate-90' : '' : 'invisible'}`} /><Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" /><span className="truncate">{entry.name}</span>
         </button>
         {directory && open && <Directory scope={scope} cacheKey={cacheKey} path={entry.path} depth={depth + 1} expanded={expanded} toggle={toggle} onOpenFile={onOpenFile} />}
