@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type KeyboardEvent, type RefObject } from 'react'
+import { isComposerCaretAtRowBoundary } from './composer-textarea.js'
 
 type Message = { id: string; prompt?: string }
 export type ComposerHistoryPosition = { id: string; draft: string; recalled: string }
@@ -40,8 +41,9 @@ export function useComposerHistory(sessionKey: string, messages: Message[], valu
     if (input.selectionStart !== input.selectionEnd) return false
     const position = state.current.position
     const up = event.key === 'ArrowUp'
-    if (up ? input.selectionStart !== 0 && !(position && input.selectionStart === value.length) : input.selectionStart !== value.length) return false
-    const next = moveComposerHistory(messages, position, value, up ? 'up' : 'down')
+    const direction = up ? 'up' : 'down'
+    if ((!up && !position) || !isComposerCaretAtRowBoundary(input, value, direction)) return false
+    const next = moveComposerHistory(messages, position, value, direction)
     if (!next) {
       if (position && up) event.preventDefault()
       return Boolean(position && up)

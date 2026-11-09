@@ -42,11 +42,11 @@ describe('composer message history', () => {
 })
 
 describe('composer history keyboard integration', () => {
-  function setup() {
-    let value = '草稿'
+  function setup(latest = 'latest', draft = '草稿') {
+    let value = draft
     const input = { selectionStart: 0, selectionEnd: 0, setSelectionRange: vi.fn() }
     const textarea = { current: input as unknown as HTMLTextAreaElement }
-    const messages = [{ id: 'a', prompt: 'older' }, { id: 'b', prompt: 'latest' }]
+    const messages = [{ id: 'a', prompt: 'older' }, { id: 'b', prompt: latest }]
     function Render(session = 'one') {
       return useComposerHistory(session, messages, value, (next) => { value = next }, textarea)
     }
@@ -64,7 +64,7 @@ describe('composer history keyboard integration', () => {
   }
 
   it('guards composition, modifiers, selections and ordinary cursor movement', () => {
-    const context = setup()
+    const context = setup('latest', '上\n中\n下')
     const browser = context.render()
     for (const overrides of [{ nativeEvent: { isComposing: true } }, { ctrlKey: true }, { altKey: true }, { metaKey: true }, { shiftKey: true }]) {
       const event = context.key('ArrowUp', overrides)
@@ -73,9 +73,34 @@ describe('composer history keyboard integration', () => {
     }
     context.input.selectionEnd = 1
     expect(browser.onKeyDown(context.key('ArrowUp'))).toBe(false)
-    context.input.selectionStart = context.input.selectionEnd = 1
+    context.input.selectionStart = context.input.selectionEnd = 3
     expect(browser.onKeyDown(context.key('ArrowUp'))).toBe(false)
     expect(browser.onKeyDown(context.key('ArrowDown'))).toBe(false)
+    expect(context.value()).toBe('上\n中\n下')
+  })
+
+  it('lets the caret cross the lines of a recalled prompt before changing history', () => {
+    const latest = '第一行\n第二行\n第三行\n第四行'
+    const context = setup(latest)
+    expect(context.render().onKeyDown(context.key('ArrowUp'))).toBe(true)
+    let browser = context.render()
+    expect(context.input.setSelectionRange).toHaveBeenLastCalledWith(latest.length, latest.length)
+    for (const caret of [latest.length, 11, 7]) {
+      context.input.selectionStart = context.input.selectionEnd = caret
+      const event = context.key('ArrowUp')
+      expect(browser.onKeyDown(event)).toBe(false)
+      expect(event.preventDefault).not.toHaveBeenCalled()
+      expect(context.value()).toBe(latest)
+    }
+    context.input.selectionStart = context.input.selectionEnd = 1
+    expect(browser.onKeyDown(context.key('ArrowUp'))).toBe(true)
+    expect(context.value()).toBe('older')
+    expect(context.render().onKeyDown(context.key('ArrowDown'))).toBe(true)
+    browser = context.render()
+    context.input.selectionStart = context.input.selectionEnd = 7
+    expect(browser.onKeyDown(context.key('ArrowDown'))).toBe(false)
+    context.input.selectionStart = context.input.selectionEnd = latest.length - 1
+    expect(browser.onKeyDown(context.key('ArrowDown'))).toBe(true)
     expect(context.value()).toBe('草稿')
   })
 
