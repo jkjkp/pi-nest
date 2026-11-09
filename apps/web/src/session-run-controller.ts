@@ -1,9 +1,8 @@
-import { piAssistantStopReason } from '@pi-nest/contracts/pi-events'
 import type { PiRuntimeCommand, AttachmentRef, PiEditLastInput, PiEditStatus, PiHistoryChange, PiQueuedInput } from '@pi-nest/contracts'
 import { unstable_batchedUpdates } from 'react-dom'
-import { stripAnsiText } from './ansi-text.js'
-import { isRuntimeConnectionError, readExtensionUi, readHistoryChange, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
-import { activeRuntimeTurn, nativeUserMessage, reconcilePendingInputs, type PromptStatus, type RuntimeTurn } from './session-run-model.js'
+import { isRuntimeConnectionError, RuntimeWebSocketClient, type PiRuntimeEvent, type PiRuntimeModel, type PiRuntimeState } from './runtime-websocket-client.js'
+import { isStreamingUpdate, readManualCompaction, readSessionRunSignal, runtimeInputEcho } from './session-run-event.js'
+import { activeRuntimeTurn, reconcilePendingInputs, type PromptStatus, type RuntimeTurn } from './session-run-model.js'
 import { useWorkspaceStore, type RuntimeStatisticsState } from './workspace-store.js'
 
 export type SessionRunState = Pick<ReturnType<typeof useWorkspaceStore.getState>,
@@ -57,19 +56,6 @@ export type SessionRunController = {
   steerQueued: (sessionId: string, inputId: string) => Promise<void>
   retrySteering: (sessionId: string, turnId: string) => Promise<void>
   stop: (sessionId: string) => Promise<boolean>
-}
-
-function startsExecution(event: PiRuntimeEvent) {
-  const type = event.event.type
-  if (type === 'agent_start' || type === 'turn_start' || type === 'message_update' || (typeof type === 'string' && type.startsWith('tool_execution_'))) return true
-  if (type !== 'message') return false
-  const message = event.event.message
-  return Boolean(message && typeof message === 'object' && !Array.isArray(message) && ['assistant', 'toolResult'].includes((message as Record<string, unknown>).role as string))
-}
-
-function isExtensionDialog(event: PiRuntimeEvent) {
-  const request = event.event
-  return request.type === 'extension_ui_request' && ['select', 'confirm', 'input', 'editor'].includes(request.method as string)
 }
 
 export function createSessionRunController({ invalidateHistory, replaceHistory, runtime, state: stateStore = useWorkspaceStore }: SessionRunControllerOptions): SessionRunController {
@@ -191,7 +177,7 @@ export function createSessionRunController({ invalidateHistory, replaceHistory, 
     clearAwaitingAgentCheck(sessionId)
     activeRuns.delete(sessionId)
     store.completeLatestRunTurn(sessionId, new Date().toISOString())
-    const unconfirmedAttachments = store.runs[sessionId]?.turns.some((turn) => turn.attachments?.length && !turn.events.some((event) => nativeUserMessage(event)))
+    const unconfirmedAttachments = store.runs[sessionId]?.turns.some((turn) => turn.attachments?.length && !turn.events.some((event) => runtimeInputEcho(event)))
     if (unconfirmedAttachments) store.updateRun(sessionId, { attachmentWarning: 'Pi 已处理输入，但未观察到附件用户消息；请检查扩展是否接管。' })
     store.updateRun(sessionId, { status: stopReason === 'error' ? 'error' : stopReason === 'aborted' ? 'aborted' : 'complete', stopReason })
     // The reading view acknowledges completion after the reply is visible.
@@ -229,34 +215,31 @@ export function createSessionRunController({ invalidateHistory, replaceHistory, 
 
   const handlePiEvent = (event: PiRuntimeEvent) => {
     const store = stateStore.getState()
-    const raw = event.event
-    if (raw.type === 'history_changed') {
-      const change = readHistoryChange(raw.change)
-      if (change && change.sequence === event.sequence) {
-        applyHistoryChange(event.sessionId, change)
-        const projection = readExtensionUi(raw.extensionUi)
-        if (projection) stateStore.getState().replaceExtensionUi(event.sessionId, projection)
+    const signal = readSessionRunSignal(event)
+    if (signal?.kind === 'history_replaced') {
+      if (signal.change) {
+        applyHistoryChange(event.sessionId, signal.change)
+        if (signal.projection) stateStore.getState().replaceExtensionUi(event.sessionId, signal.projection)
       }
       return
     }
-    if (raw.type === 'queue_update' && Array.isArray(raw.steering) && raw.steering.every((message) => typeof message === 'string') && Array.isArray(raw.followUp) && raw.followUp.every((message) => typeof message === 'string')) {
+    if (signal?.kind === 'queue_snapshot') {
       queueSyncedSessions.add(event.sessionId)
-      store.updateRun(event.sessionId, { pendingInputs: reconcilePendingInputs(store.runs[event.sessionId]?.pendingInputs ?? [], { steering: raw.steering, followUp: raw.followUp, ...(Array.isArray(raw.inputs) ? { inputs: raw.inputs as import('@pi-nest/contracts').PiQueuedInput[] } : {}), ...(Array.isArray(raw.steeringInputs) ? { steeringInputs: raw.steeringInputs as import('@pi-nest/contracts').PiQueuedInput[] } : {}) }, String(event.sequence)) })
+      store.updateRun(event.sessionId, { pendingInputs: reconcilePendingInputs(store.runs[event.sessionId]?.pendingInputs ?? [], signal.queue, String(event.sequence)) })
     }
-    if (raw.type === 'thinking_level_changed' && typeof raw.level === 'string' && runtime.shouldApplyExtensionUi(event)) {
+    if (signal?.kind === 'thinking_level' && runtime.shouldApplyExtensionUi(event)) {
       const details = store.runtimeDetails[event.sessionId]
-      store.setRuntimeDetails(event.sessionId, { ...(details ?? { isCompacting: false, isStreaming: store.runtimeStates[event.sessionId]?.lifecycle === 'active' }), thinkingLevel: raw.level })
+      store.setRuntimeDetails(event.sessionId, { ...(details ?? { isCompacting: false, isStreaming: store.runtimeStates[event.sessionId]?.lifecycle === 'active' }), thinkingLevel: signal.level })
     }
-    if (raw.type === 'extension_ui_request') {
-      if (runtime.shouldApplyExtensionUi(event)) {
-        if (raw.method === 'set_editor_text' && typeof raw.text === 'string' && !store.messageEdits[event.sessionId]) store.setDraft(event.sessionId, stripAnsiText(raw.text))
-        if (raw.method === 'setStatus' && typeof raw.statusKey === 'string' && raw.statusKey) store.setExtensionStatus(event.sessionId, raw.statusKey, typeof raw.statusText === 'string' ? raw.statusText : undefined)
-        if (raw.method === 'setWidget' && typeof raw.widgetKey === 'string' && raw.widgetKey) store.setExtensionWidget(event.sessionId, raw.widgetKey, Array.isArray(raw.widgetLines) && raw.widgetLines.every((line) => typeof line === 'string') ? raw.widgetLines : undefined)
-      }
+    if (signal?.kind === 'extension_projection' && runtime.shouldApplyExtensionUi(event)) {
+      const { projection } = signal
+      if (projection.kind === 'draft' && !store.messageEdits[event.sessionId]) store.setDraft(event.sessionId, projection.text)
+      if (projection.kind === 'status') store.setExtensionStatus(event.sessionId, projection.key, projection.text)
+      if (projection.kind === 'widget') store.setExtensionWidget(event.sessionId, projection.key, projection.lines)
     }
-    if (raw.type === 'auto_compaction_end' && runtime.shouldApplyExtensionUi(event)) void requestStatistics(event.sessionId, true)
+    if (signal?.kind === 'automatic_compaction_finished' && runtime.shouldApplyExtensionUi(event)) void requestStatistics(event.sessionId, true)
     let activeRun = activeRuns.get(event.sessionId)
-    if (!activeRun && event.event.type === 'agent_start' && event.runId && store.sessionNotifications[event.sessionId]?.completedRunId !== event.runId) {
+    if (!activeRun && signal?.kind === 'run_started' && event.runId && store.sessionNotifications[event.sessionId]?.completedRunId !== event.runId) {
       clearAwaitingAgentCheck(event.sessionId)
       activeRun = { awaitingRunId: false, runId: event.runId, stopReason: undefined }
       activeRuns.set(event.sessionId, activeRun)
@@ -267,19 +250,18 @@ export function createSessionRunController({ invalidateHistory, replaceHistory, 
     if (activeRun.awaitingRunId || (activeRun.runId !== undefined && event.runId !== activeRun.runId)) return
     if (activeRun.runId === undefined && event.runId !== undefined) activeRun.runId = event.runId
     if (activeRun.runId) store.trackPendingRun(event.sessionId, activeRun.runId)
-    if (startsExecution(event)) {
+    if (signal?.kind === 'run_started' || signal?.kind === 'execution_activity') {
       clearAwaitingAgentCheck(event.sessionId)
       if (Number.isFinite(Date.parse(event.observedAt))) stateStore.getState().markRunExecutionStarted(event.sessionId, event.observedAt)
       stateStore.getState().updateRun(event.sessionId, { status: 'running', waitingMessage: undefined })
     }
-    if (isExtensionDialog(event)) stateStore.getState().updateRun(event.sessionId, { status: 'awaiting_input', waitingMessage: undefined })
-    if (raw.type === 'extension_ui_resolved' && store.runs[event.sessionId]?.status === 'awaiting_input') stateStore.getState().updateRun(event.sessionId, { status: 'running', waitingMessage: undefined })
-    const userInput = nativeUserMessage(event)
-    if (userInput && !queueSyncedSessions.has(event.sessionId)) stateStore.getState().consumePendingInput(event.sessionId, userInput)
+    if (signal?.kind === 'waiting_for_input') stateStore.getState().updateRun(event.sessionId, { status: 'awaiting_input', waitingMessage: undefined })
+    if (signal?.kind === 'input_resolved' && store.runs[event.sessionId]?.status === 'awaiting_input') stateStore.getState().updateRun(event.sessionId, { status: 'running', waitingMessage: undefined })
+    if (signal?.kind === 'input_echo' && !queueSyncedSessions.has(event.sessionId)) stateStore.getState().consumePendingInput(event.sessionId, signal.message)
     stateStore.getState().appendRunEvent(event.sessionId, event)
-    activeRun.stopReason = piAssistantStopReason(event.event) ?? activeRun.stopReason
-    if (event.event.type !== 'agent_settled') return
-    if (event.event.aborted === true) activeRun.stopReason = 'aborted'
+    if (signal?.kind === 'stop_reason_observed') activeRun.stopReason = signal.reason
+    if (signal?.kind !== 'run_settled') return
+    if (signal.aborted) activeRun.stopReason = 'aborted'
 
     finishRun(event.sessionId, activeRun.runId, activeRun.stopReason ?? (store.runs[event.sessionId]?.status === 'aborting' ? 'aborted' : 'stop'))
   }
@@ -296,7 +278,7 @@ export function createSessionRunController({ invalidateHistory, replaceHistory, 
   runtime.onPiEvent((event) => {
     streamEvents.push(event)
     // Keep every delta, but render at most once per 32 ms burst; boundaries flush immediately.
-    if (event.event.type !== 'message_update') flushStreamEvents()
+    if (!isStreamingUpdate(event)) flushStreamEvents()
     else streamTimer ??= setTimeout(flushStreamEvents, 32)
   })
 
@@ -475,10 +457,11 @@ export function createSessionRunController({ invalidateHistory, replaceHistory, 
       let aborted = false
       let completed = false
       const unsubscribe = runtime.onPiEvent((event) => {
-        if (event.sessionId !== sessionId || event.event.type !== 'compaction_end' || !runtime.shouldApplyExtensionUi(event)) return
-        if (event.event.aborted === true) aborted = true
-        const result = event.event.result
-        if (event.event.reason === 'manual' && event.event.aborted === false && result && typeof result === 'object' && !Array.isArray(result) && !event.event.errorMessage) completed = true
+        if (event.sessionId !== sessionId) return
+        const result = readManualCompaction(event)
+        if (!result || !runtime.shouldApplyExtensionUi(event)) return
+        if (result === 'aborted') aborted = true
+        if (result === 'completed') completed = true
       })
       try {
         await resumeRuntime(sessionId)

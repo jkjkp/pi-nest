@@ -88,28 +88,6 @@ export function shouldFollowLatest(scrollHeight: number, scrollTop: number, clie
   return !navigationInProgress && scrollHeight - scrollTop - clientHeight <= 80
 }
 
-export function extensionStatusLine(statuses: Record<string, string> | undefined) {
-  return Object.keys(statuses ?? {})
-    .filter((key) => key !== 'plan-mode')
-    .sort()
-    .map((key) => stripAnsiLine(statuses?.[key] ?? '').trim())
-    .filter(Boolean)
-    .join(' ')
-}
-
-export function extensionWidgetText(widgets: Record<string, string[]> | undefined) {
-  return Object.keys(widgets ?? {})
-    .filter((key) => key !== 'plan-mode-plan')
-    .sort()
-    .map((key) => (widgets?.[key] ?? []).map(stripAnsiLine).join('\n').trim())
-    .filter(Boolean)
-    .join('\n\n')
-}
-
-export function planModePolicy(widgets: Record<string, string[]> | undefined) {
-  return widgets?.['plan-mode-plan']?.map(stripAnsiLine).find((line) => line.startsWith('Plan policy allows:'))?.replace(' Model-visible tools stay unchanged.', '').trim()
-}
-
 export function runtimeStatusLabel(runtime: Omit<RuntimeStatus, 'sessionId'> | undefined, localRunActive: boolean) {
   if (!runtime || localRunActive) return undefined
   if (runtime.lifecycle === 'active') return 'Pi 正在运行'

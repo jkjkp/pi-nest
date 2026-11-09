@@ -1,7 +1,6 @@
-import { messageAttachments } from './session-run-model.js'
-import { fileChangeStatistics } from './file-change-statistics.js'
 import type { AttachmentRef, PiFileChange } from '@pi-nest/contracts'
-import { modelCallError, type ModelCallError } from './model-call-error.js'
+import type { ModelCallError } from './model-call-error.js'
+import { historyTimelineEvent, runtimeTimelineEvent, type HistoryFileStatistics, type TimelineEvent } from './timeline-event.js'
 import type { RuntimeTurn } from './session-run-model.js'
 import type { PiSessionHistoryEntry } from './history.js'
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
@@ -13,12 +12,7 @@ export type TurnTiming = {
   startedAt: string
 }
 
-export type TimelineEvent = {
-  event: Record<string, unknown>
-  id: string
-  observedAt: string
-  raw: Record<string, unknown>
-}
+export type { TimelineEvent } from './timeline-event.js'
 
 export type TimelineDiagnostic = {
   event: TimelineEvent
@@ -64,37 +58,11 @@ export type TimelineNavigationEntry = {
 
 const emptyHistory: PiSessionHistoryEntry[] = []
 const emptyTimeline: TimelineItem[] = []
-const runtimeItemCache = new WeakMap<RuntimeTurn, { item: TimelineItem; userMessages: Record<string, unknown>[] }>()
+const runtimeItemCache = new WeakMap<RuntimeTurn, { item: TimelineItem; userMessages: NonNullable<TimelineEvent['user']>[] }>()
 const historyItemCache = new WeakMap<PiSessionHistoryEntry[], TimelineItem[]>()
 const timelineItemCache = new WeakMap<PiSessionHistoryEntry[], WeakMap<RuntimeTurn[], TimelineItem[]>>()
 const navigationCache = new WeakMap<TimelineItem[], TimelineNavigationEntry[]>()
 let previousNavigation: { entries: TimelineNavigationEntry[]; items: TimelineItem[] } | undefined
-
-function record(value: unknown) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
-}
-
-function textContent(content: unknown) {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return undefined
-  const text = content.flatMap((block) => {
-    const candidate = record(block)
-    return candidate?.type === 'text' && typeof candidate.text === 'string' ? [candidate.text] : []
-  }).join('')
-  return text || undefined
-}
-
-function eventType(event: TimelineEvent) {
-  return typeof event.event.type === 'string' ? event.event.type : 'unknown'
-}
-
-function message(event: TimelineEvent) {
-  return record(event.event.message)
-}
-
-function update(event: TimelineEvent) {
-  return record(event.event.assistantMessageEvent)
-}
 
 const messageProjection = new WeakMap<TimelineItem, { index: number; started: boolean; blocks: Map<string, TimelinePart> }>()
 
@@ -152,7 +120,7 @@ function pushThinkingMessage(parts: TimelinePart[], event: TimelineEvent, text: 
   } else parts.push({ events: [event], kind: 'thinking', text })
 }
 
-function pushTool(parts: TimelinePart[], event: TimelineEvent, toolCallId = typeof event.event.toolCallId === 'string' ? event.event.toolCallId : undefined, toolName = typeof event.event.toolName === 'string' ? event.event.toolName : '未知工具', arguments_: Record<string, unknown> | undefined = undefined) {
+function pushTool(parts: TimelinePart[], event: TimelineEvent, { id: toolCallId, name: toolName = '未知工具', arguments: arguments_ }: { id?: string; name?: string; arguments?: Record<string, unknown> }) {
   const previous = [...parts].reverse().find((part) => part.kind === 'tool' && toolCallId !== undefined && part.toolCallId === toolCallId)
   if (previous?.kind === 'tool') {
     previous.events.push(event)
@@ -161,34 +129,6 @@ function pushTool(parts: TimelinePart[], event: TimelineEvent, toolCallId = type
     return
   }
   parts.push({ ...(arguments_ ? { arguments: arguments_ } : {}), events: [event], kind: 'tool', toolCallId, toolName })
-}
-
-function projectAssistantContent(item: TimelineItem, event: TimelineEvent, content: unknown) {
-  if (typeof content === 'string') {
-    if (!content) return false
-    projectTextBlock(item, 'assistant_text', event, content, 0, false)
-    return true
-  }
-  if (!Array.isArray(content)) return false
-  let projected = false
-  for (const [contentIndex, block] of content.entries()) {
-    const candidate = record(block)
-    if (candidate?.type === 'text' && typeof candidate.text === 'string') {
-      projectTextBlock(item, 'assistant_text', event, candidate.text, contentIndex, false)
-      projected = true
-      continue
-    }
-    if (candidate?.type === 'thinking' && typeof candidate.thinking === 'string') {
-      projectTextBlock(item, 'thinking', event, candidate.thinking, contentIndex, false)
-      projected = true
-      continue
-    }
-    if (candidate?.type === 'toolCall' && typeof candidate.id === 'string' && typeof candidate.name === 'string') {
-      pushTool(item.parts, event, candidate.id, candidate.name, record(candidate.arguments))
-      projected = true
-    }
-  }
-  return projected
 }
 
 function pushActivity(parts: TimelinePart[], kind: 'bash' | 'file_change' | 'retry', event: TimelineEvent) {
@@ -200,87 +140,54 @@ function pushActivity(parts: TimelinePart[], kind: 'bash' | 'file_change' | 'ret
   parts.push({ events: [event], kind })
 }
 
-function historyEvent(entry: PiSessionHistoryEntry): TimelineEvent {
-  return { event: entry.raw, id: entry.id, observedAt: entry.timestamp, raw: entry.raw }
-}
-
-function runtimeEvent(event: PiRuntimeEvent): TimelineEvent {
-  return { event: event.event, id: `${event.sessionId}:${event.sequence}`, observedAt: event.observedAt, raw: event.event }
-}
-
 function diagnostic(item: TimelineItem, event: TimelineEvent, reason: TimelineDiagnostic['reason']) {
   item.diagnostics.push({ event, reason })
 }
 
-function isMetadata(type: string) {
-  return type === 'context_edit' || type === 'model_change' || type === 'thinking_level_change' || type === 'thinking_level_changed' || type.startsWith('compaction') || type === 'turn_start' || type === 'turn_end' || type === 'agent_start' || type === 'agent_end' || type === 'agent_settled' || type === 'aborted'
-}
-
-function projectUserAttachments(item: TimelineItem, nativeMessage: Record<string, unknown>) {
-  if (typeof nativeMessage.piNestAttachmentWarning === 'string') item.attachmentWarning = nativeMessage.piNestAttachmentWarning
-  const attachments = messageAttachments(nativeMessage)
+function projectUserAttachments(item: TimelineItem, { attachments, warning }: NonNullable<TimelineEvent['user']>) {
+  if (warning !== undefined) item.attachmentWarning = warning
   if (item.attachments?.length && attachments.length !== item.attachments.length) item.attachmentWarning = 'Pi 实际记录的附件与提交不一致，请检查模型或扩展。'
   if (attachments.length || item.attachments) item.attachments = attachments
 }
 
 function projectEvent(item: TimelineItem, event: TimelineEvent) {
   item.events.push(event)
-  const type = eventType(event)
-  const native = message(event)
-  const result = native?.role === 'toolResult' ? native : type === 'tool_execution_end' ? record(event.event.result) : undefined
-  const details = record(result?.details)
-  if (event.event.isError !== true && result?.isError !== true && details?.source === 'plan_mode_complete' && details.version === 1 && typeof details.plan === 'string' && details.plan.trim()) {
-    item.plan = { text: details.plan, source: 'completion', id: typeof native?.toolCallId === 'string' ? native.toolCallId : typeof event.event.toolCallId === 'string' ? event.event.toolCallId : event.id }
-  }
-  const custom = type === 'custom_message' ? event.event : native?.role === 'custom' ? native : undefined
-  if (custom?.customType === 'proposed-plan' && custom.display !== false && item.plan?.source !== 'completion') {
-    const plan = textContent(custom.content)
-    if (plan?.trim()) item.plan = { text: plan, source: 'custom', id: event.id }
+  if (event.planCompletion) item.plan = { ...event.planCompletion, source: 'completion' }
+  if (event.proposedPlan && item.plan?.source !== 'completion') {
+    if (event.proposedPlan.text?.trim()) item.plan = { text: event.proposedPlan.text, source: 'custom', id: event.id }
     return
   }
-  const assistantUpdate = update(event)
-  if (type === 'message_start' && message(event)?.role === 'assistant') {
-    const previous = messageProjection.get(item)
-    messageProjection.set(item, { blocks: previous?.blocks ?? new Map(), index: (previous?.index ?? -1) + 1, started: true })
-    return
+  const view = event.reading
+  switch (view.kind) {
+    case 'assistant_started': {
+      const previous = messageProjection.get(item)
+      messageProjection.set(item, { blocks: previous?.blocks ?? new Map(), index: (previous?.index ?? -1) + 1, started: true })
+      break
+    }
+    case 'assistant_message': {
+      const previous = messageProjection.get(item)
+      if (view.reset && previous?.started) previous.started = false
+      const error = view.error
+      if (error && !item.modelErrors?.some((saved) => saved.message === error.message && saved.model === error.model && saved.provider === error.provider)) (item.modelErrors ??= []).push(error)
+      for (const block of view.blocks) {
+        if (block.kind === 'tool') pushTool(item.parts, event, block)
+        else projectTextBlock(item, block.kind, event, block.text, block.index, false)
+      }
+      if (!view.blocks.length && !error) diagnostic(item, event, 'unrenderable_message')
+      break
+    }
+    case 'text_delta': {
+      const { kind, text, index } = view.block
+      projectTextBlock(item, kind, event, text, index, true)
+      break
+    }
+    case 'user': projectUserAttachments(item, view.message); break
+    case 'tool': pushTool(item.parts, event, view.call); break
+    case 'bash':
+    case 'retry':
+    case 'file_change': pushActivity(item.parts, view.kind, event); break
+    case 'diagnostic': diagnostic(item, event, view.reason); break
   }
-  if (type === 'message' && message(event)?.role === 'assistant') {
-    const previous = messageProjection.get(item)
-    if (previous?.started) previous.started = false
-  }
-  if (type === 'message_update' && assistantUpdate?.type === 'text_delta' && typeof assistantUpdate.delta === 'string') {
-    projectTextBlock(item, 'assistant_text', event, assistantUpdate.delta, typeof assistantUpdate.contentIndex === 'number' ? assistantUpdate.contentIndex : 0, true)
-    return
-  }
-  if (type === 'message_update' && typeof assistantUpdate?.type === 'string' && assistantUpdate.type.includes('thinking') && typeof assistantUpdate.delta === 'string') {
-    projectTextBlock(item, 'thinking', event, assistantUpdate.delta, typeof assistantUpdate.contentIndex === 'number' ? assistantUpdate.contentIndex : 0, true)
-    return
-  }
-  if (type === 'message_update') return diagnostic(item, event, 'unrenderable_message')
-
-  const nativeMessage = message(event)
-  if ((type === 'message' || type === 'message_end') && nativeMessage?.role === 'assistant') {
-    const error = modelCallError(nativeMessage)
-    if (error && !item.modelErrors?.some((saved) => saved.message === error.message && saved.model === error.model && saved.provider === error.provider)) (item.modelErrors ??= []).push(error)
-    if (projectAssistantContent(item, event, nativeMessage.content) || error) return
-    return diagnostic(item, event, 'unrenderable_message')
-  }
-  if ((type === 'message' || type === 'message_start' || type === 'message_end') && nativeMessage?.role === 'user') {
-    projectUserAttachments(item, nativeMessage)
-    return
-  }
-  if ((type === 'message' || type === 'message_end') && nativeMessage?.role === 'toolResult') {
-    const toolCallId = typeof nativeMessage.toolCallId === 'string' ? nativeMessage.toolCallId : undefined
-    const toolName = typeof nativeMessage.toolName === 'string' ? nativeMessage.toolName : '未知工具'
-    return pushTool(item.parts, event, toolCallId, toolName)
-  }
-  if (type === 'message' || type === 'message_end') return diagnostic(item, event, 'unrenderable_message')
-  if (type.startsWith('tool_execution_')) return pushTool(item.parts, event, undefined, undefined, record(event.event.args) ?? record(event.event.arguments))
-  if (type.startsWith('bash_execution_')) return pushActivity(item.parts, 'bash', event)
-  if (type === 'auto_retry_start' || type === 'auto_retry_end') return pushActivity(item.parts, 'retry', event)
-  if (type === 'file_change' || type === 'file_changes' || Array.isArray(event.event.changes)) return pushActivity(item.parts, 'file_change', event)
-  if (isMetadata(type)) return diagnostic(item, event, 'metadata')
-  diagnostic(item, event, 'unknown')
 }
 
 function newTurn(id: string, prompt: string | undefined, startedAt: string, runtimeTiming?: TurnTiming): TimelineItem {
@@ -290,29 +197,29 @@ function newTurn(id: string, prompt: string | undefined, startedAt: string, runt
 function historyItems(entries: PiSessionHistoryEntry[]): TimelineItem[] {
   const items: TimelineItem[] = []
   let active: TimelineItem | undefined
+  const fileStatistics: HistoryFileStatistics[] = []
   for (const entry of entries) {
-    const event = historyEvent(entry)
-    const nativeMessage = message(event)
-    if (entry.type === 'message' && nativeMessage?.role === 'user') {
-      if (active) items.push(active)
-      active = newTurn(entry.id, textContent(nativeMessage.content) ?? (messageAttachments(nativeMessage).length ? '图片附件' : undefined), entry.timestamp)
-      active.runId = entry.runId
-      active.runIndex = entry.runIndex
-      projectEvent(active, event)
+    const decoded = historyTimelineEvent(entry)
+    if (decoded.kind === 'statistics') {
+      if (decoded.statistics) fileStatistics.push(decoded.statistics)
       continue
     }
-    if (entry.type === 'custom' && entry.raw.customType === 'pi-nest-file-changes') continue
+    const { event } = decoded
+    if (decoded.startsTurn && event.user) {
+      if (active) items.push(active)
+      active = newTurn(entry.id, event.user.text ?? (event.user.attachments.length ? '图片附件' : undefined), entry.timestamp)
+      active.runId = entry.runId
+      active.runIndex = entry.runIndex
+    }
     if (active) projectEvent(active, event)
   }
   if (active) items.push(active)
   const byId = new Map(items.map((item) => [item.id, item]))
-  for (const entry of entries) {
-    if (entry.type !== 'custom' || entry.raw.customType !== 'pi-nest-file-changes') continue
-    const data = record(entry.raw.data)
-    const target = data?.version === 1 && typeof data.turnId === 'string' && byId.get(data.turnId)
-    if (target && Array.isArray(data?.files)) {
-      target.fileChanges = data.files.flatMap((value) => { const stats = fileChangeStatistics(value); return stats ? [stats] : [] })
-      target.fileChangesIncomplete = data.incomplete === true
+  for (const data of fileStatistics) {
+    const target = byId.get(data.turnId)
+    if (target) {
+      target.fileChanges = data.files
+      target.fileChangesIncomplete = data.incomplete
     }
   }
   return items
@@ -329,15 +236,12 @@ function memoizedHistoryItems(entries: PiSessionHistoryEntry[]) {
 function runtimeItem(turn: RuntimeTurn) {
   const cached = runtimeItemCache.get(turn)
   if (cached) return cached
-  const item = newTurn(turn.id, turn.prompt ?? promptFrom(turn.events), turn.startedAt)
-  const userMessages: Record<string, unknown>[] = []
-  for (const saved of turn.events) {
-    const event = runtimeEvent(saved)
+  const events = turn.events.map(runtimeTimelineEvent)
+  const item = newTurn(turn.id, turn.prompt ?? events.find((event) => event.user)?.user?.text, turn.startedAt)
+  const userMessages: NonNullable<TimelineEvent['user']>[] = []
+  for (const event of events) {
     projectEvent(item, event)
-    if (event.event.type === 'message' || event.event.type === 'message_start' || event.event.type === 'message_end') {
-      const native = message(event)
-      if (native?.role === 'user') userMessages.push(native)
-    }
+    if (event.reading.kind === 'user') userMessages.push(event.reading.message)
   }
   const projection = { item, userMessages }
   runtimeItemCache.set(turn, projection)
@@ -362,9 +266,10 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
     // Runtime events may enrich it, but cannot create another conversation node.
     if (!turn.prompt?.trim() && !turn.attachments?.length) continue
     const runtimeTiming = { ...(turn.completedAt === undefined ? {} : { completedAt: turn.completedAt }), startedAt: turn.executionStartedAt ?? turn.startedAt }
-    const nativeUser = turn.events.find((event) => record(event.event.message)?.role === 'user')
-    const nativeId = record(nativeUser?.event.message)?.id
-    const nativePrompt = textContent(record(nativeUser?.event.message)?.content)
+    const projection = runtimeItem(turn)
+    const nativeUser = projection.item.events.find((event) => event.user)?.user
+    const nativeId = nativeUser?.id
+    const nativePrompt = nativeUser?.text
     const anchorIndex = historyProjection.findIndex((item) => item.id === turn.historyAnchorId)
     const runId = turn.runId ?? turn.events.find((event) => event.runId)?.runId
     const runIndex = turns.slice(0, turns.indexOf(turn)).filter((previous) => (previous.runId ?? previous.events.find((event) => event.runId)?.runId) === runId && (!previous.steering || previous.steering.status === 'applied')).length
@@ -378,7 +283,6 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
       if (turn.historyAnchorId && anchorIndex >= 0) return index > anchorIndex
       return Date.parse(item.startedAt) >= Date.parse(turn.submittedAt ?? turn.startedAt) - 2_000
     })
-    const projection = runtimeItem(turn)
     // History-dependent fields belong to this merge, not the shared event projection.
     const item: TimelineItem = { ...projection.item, id: persisted?.id ?? turn.id, startedAt: persisted?.startedAt ?? turn.startedAt, runtimeTiming, attachmentWarning: undefined }
     item.fileChanges = persisted?.fileChanges
@@ -391,6 +295,7 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
       matchedHistory.add(persisted.id)
       item.modelErrors ??= persisted.modelErrors
       item.plan ??= persisted.plan
+      if (persisted.diagnostics.length) item.diagnostics = item.diagnostics.length ? [...persisted.diagnostics, ...item.diagnostics] : persisted.diagnostics
       let savedIndex = 0
       const covered = (!item.plan || item.plan.text === persisted.plan?.text) && (item.modelErrors ?? []).every((error) => persisted.modelErrors?.some((saved) => saved.message === error.message && saved.model === error.model && saved.provider === error.provider)) && item.parts.every((part) => {
         const index = persisted.parts.findIndex((saved, index) => {
@@ -405,8 +310,8 @@ export function timelineItems(history: PiSessionHistoryEntry[] | undefined, turn
         return true
       })
       // A user entry or an intermediate message_end is not a completed response.
-      if (turn.completedAt && covered && (persisted.parts.length > 0 || (persisted.modelErrors?.length ?? 0) > 0 || persisted.events.some((event) => eventType(event) === 'agent_settled'))) {
-        items[items.indexOf(persisted)] = { ...persisted, displayId: item.displayId, steering: item.steering }
+      if (turn.completedAt && covered && (persisted.parts.length > 0 || (persisted.modelErrors?.length ?? 0) > 0 || persisted.events.some((event) => event.settledRun))) {
+        items[items.indexOf(persisted)] = { ...persisted, diagnostics: item.diagnostics, displayId: item.displayId, steering: item.steering }
       } else {
         if (item.parts.length === 0) item.parts = persisted.parts
         items[items.indexOf(persisted)] = item
@@ -449,34 +354,20 @@ function navigationPreview(prompt: string | undefined) {
   return (firstLine ?? prompt).replace(/\s+/g, ' ').trim().slice(0, 96) || '无用户正文'
 }
 
-function promptFrom(events: PiRuntimeEvent[]) {
-  for (const event of events) {
-    const candidate = record(event.event.message)
-    if (candidate?.role === 'user') return textContent(candidate.content)
-  }
-  return undefined
-}
-
 export function diagnosticLabel(diagnostic: TimelineDiagnostic) {
-  const type = eventType(diagnostic.event)
+  const type = diagnostic.event.nativeType
   if (diagnostic.reason === 'metadata') return `运行元数据：${type}`
   if (diagnostic.reason === 'unrenderable_message') return `未展示的消息记录：${type}`
   return `未识别的 Pi 事件：${type}`
 }
 
-export function rawJson(events: TimelineEvent[]) {
-  return JSON.stringify(events.map(({ raw }) => raw), null, 2)
-}
-
 export function toolStatus(events: TimelineEvent[]) {
-  const terminal = events.findLast((event) => eventType(event) === 'tool_execution_end' || record(event.event.message)?.role === 'toolResult')
-  if (!terminal) return '正在执行'
-  const result = record(terminal.event.message) ?? record(terminal.event.result)
-  return terminal.event.isError === true || result?.isError === true || terminal.event.error ? '失败' : '完成'
+  const terminal = events.findLast((event) => event.tool?.terminal)
+  return terminal ? terminal.tool!.failed ? '失败' : '完成' : '正在执行'
 }
 
 export function duration(events: TimelineEvent[]) {
-  if (events.some((event) => eventType(event) === 'message')) return undefined
+  if (events.some((event) => event.historyMessage)) return undefined
   if (events.length < 2) return undefined
   const start = Date.parse(events[0]!.observedAt)
   const end = Date.parse(events.at(-1)!.observedAt)

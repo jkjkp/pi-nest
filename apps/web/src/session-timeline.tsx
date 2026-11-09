@@ -1,3 +1,4 @@
+import { isHistoryUserEntry } from './pi-message-view.js'
 import { AnswerActions } from './answer-actions.js'
 import { Check, ChevronDown, Copy, Pencil } from 'lucide-react'
 import { MessageAttachments } from './attachment-ui.js'
@@ -63,7 +64,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   const stopJump = useRef<(() => void) | undefined>(undefined)
   const [canLoadEarlier, setCanLoadEarlier] = useState(false)
   const items = useMemo(() => timelineItems(history?.entries, turns, systemEvents), [history?.entries, systemEvents, turns])
-  const lastUserId = history?.entries.findLast((entry) => entry.type === 'message' && (entry.raw.message as { role?: string })?.role === 'user')?.id
+  const lastUserId = history?.entries.findLast(isHistoryUserEntry)?.id
   const currentItems = useRef(items)
   useLayoutEffect(() => { currentItems.current = items }, [items])
   const activeExecutionItem = items.findLast((item) => !item.steering || item.steering.status === 'applied')
@@ -260,7 +261,7 @@ function HistoryError({ onRetry }: { onRetry: () => void }) {
 const TurnItem = memo(function TurnItem({ messageEditor, onEdit, editDisabled, onBranchAnswer, branchAnswerLabel, branchDisabled, revision, sessionId, isRunning, item, cwd, hasFollowingTurn, onFinalAnswerStart, onFinalAnswerStream, onRetrySteering, canRetrySteering, runMessage, runStatus }: { messageEditor?: ReactNode; onEdit?: () => void; editDisabled: boolean; branchAnswerLabel?: string; onBranchAnswer?: (entryId: string, revision: string) => Promise<void>; branchDisabled: boolean; revision?: string; sessionId?: string; cwd?: string; hasFollowingTurn: boolean; onRetrySteering?: (turnId: string) => void; canRetrySteering: boolean; isRunning: boolean; item: TimelineItem; onFinalAnswerStart: ((turnId: string) => void) | undefined; onFinalAnswerStream: (() => void) | undefined; runMessage: string | undefined; runStatus: PromptStatus | undefined }) {
   const presentation = useMemo(() => projectTurnPresentation(item, isRunning), [item, isRunning])
   const files = useMemo(() => projectTurnFiles(presentation.activities, cwd, item.fileChanges), [presentation.activities, cwd, item.fileChanges])
-  const branchEntry = presentation.finalAnswer.flatMap((part) => part.events).findLast((event) => event.event.type === 'message' && (event.event.message as { role?: string } | undefined)?.role === 'assistant')
+  const branchEntry = presentation.finalAnswer.flatMap((part) => part.events).findLast((event) => event.branchable)
   const summaryState = turnFileSummaryState(item, isRunning, runStatus, hasFollowingTurn)
   return (
     <article className="space-y-3" data-turn-id={item.id}>

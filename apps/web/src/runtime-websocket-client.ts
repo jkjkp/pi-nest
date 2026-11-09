@@ -1,3 +1,4 @@
+import { isExtensionProjectionEvent } from './runtime-extension-event.js'
 import type { PiRuntimeCommand, PiRuntimeStatistics, PiRuntimeEvent, RuntimeError, RuntimeStatus, SessionSnapshot, RuntimePromptAck, ResyncRequired, PiRuntimeState, PiRuntimeModel, RuntimeMessage, RuntimeCommandPayload } from '@pi-nest/contracts'
 import { createRuntimeBootstrap, runtimeBootstrap } from './runtime-bootstrap.js'
 import type { PiEditLastInput, PiEditStatus, PiHistoryChange, PiRuntimeExtensionUi, PiQueuedInput } from '@pi-nest/contracts'
@@ -53,12 +54,6 @@ function editStatus(value: unknown, submissionId: string): PiEditStatus {
   if (!result || result.submissionId !== submissionId || !['pending', 'committed', 'rolled_back', 'superseded', 'unknown'].includes(result.status ?? '') ||
     (['committed', 'superseded'].includes(result.status ?? '') && (typeof result.userEntryId !== 'string' || !result.userEntryId))) throw new RuntimeConnectionError('编辑回执无效，请确认发送状态。')
   return { status: result.status!, submissionId, ...(typeof result.userEntryId === 'string' ? { userEntryId: result.userEntryId } : {}), ...(typeof result.runId === 'string' ? { runId: result.runId } : {}) }
-}
-
-function isProjectionEvent(event: Record<string, unknown>) {
-  const method = event.type === 'extension_ui_request' ? event.method : event.type
-  if (method === 'setStatus') return typeof event.statusKey === 'string' && event.statusKey.length > 0
-  return method === 'setWidget' && typeof event.widgetKey === 'string' && event.widgetKey.length > 0
 }
 
 function reconnectDelay(attempt: number) {
@@ -284,7 +279,7 @@ export class RuntimeWebSocketClient {
     watch.after = message.sequence
     this.saveWatches()
     const { type: _type, ...event } = message
-    if (this.shouldApplyExtensionUi(event) && isProjectionEvent(event.event)) this.uiFreshness.set(event.sessionId, 'known')
+    if (this.shouldApplyExtensionUi(event) && isExtensionProjectionEvent(event)) this.uiFreshness.set(event.sessionId, 'known')
     for (const listener of this.piEvents) listener(event)
   }
 

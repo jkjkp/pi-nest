@@ -1,91 +1,17 @@
-// oxlint-disable react/only-export-components -- protocol mapping helpers are tested with the inline bridge.
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 
-import { stripAnsiLine, stripAnsiText } from './ansi-text.js'
-import { RuntimeWebSocketClient, type PiRuntimeEvent } from './runtime-websocket-client.js'
+import { dialogFrom, isCustomAnswerEditor, isCustomAnswerSelection, isPlanImplementationOption, planActionOptions, planImplementationPrompt, readExtensionPresentation, selectResponse, type ExtensionDialog } from './runtime-extension-event.js'
+import type { RuntimeWebSocketClient } from './runtime-websocket-client.js'
 import type { SessionRunController } from './session-run-controller.js'
 
-type ExtensionOption = { displayLabel: string; rawValue: string }
-type DialogMethod = 'confirm' | 'editor' | 'input' | 'select'
-type Dialog = {
-  error?: string
-  editorId?: string
-  id: string
-  message?: string
-  method: DialogMethod
-  options?: ExtensionOption[]
-  placeholder?: string
-  prefill?: string
-  selectedValue?: string
-  runId?: string
-  sessionId: string
-  submitting?: boolean
-  title: string
-  value?: string
-}
+type Dialog = ExtensionDialog & { error?: string; editorId?: string; submitting?: boolean }
 type ExtensionUi = { statusNotice?: { sessionId: string; message: string }; dialogs: Dialog[]; reply: (dialog: Dialog, response: { cancelled?: boolean; confirmed?: boolean; value?: string }) => Promise<void>; setValue: (dialog: Dialog, value: string, customText?: boolean) => void }
 
 const ExtensionUiContext = createContext<ExtensionUi | undefined>(undefined)
-
-export function dialogFrom(event: PiRuntimeEvent): Dialog | undefined {
-  const value = event.event
-  if (value.type !== 'extension_ui_request' || typeof value.id !== 'string' || typeof value.method !== 'string') return undefined
-  if (value.method !== 'select' && value.method !== 'confirm' && value.method !== 'input' && value.method !== 'editor') return undefined
-  const options = value.method === 'select' && Array.isArray(value.options)
-    ? value.options.filter((item): item is string => typeof item === 'string').map((rawValue) => ({ displayLabel: stripAnsiText(rawValue), rawValue }))
-    : undefined
-  return {
-    id: value.id,
-    runId: event.runId,
-    message: typeof value.message === 'string' ? stripAnsiLine(value.message) : undefined,
-    method: value.method,
-    options,
-    placeholder: typeof value.placeholder === 'string' ? stripAnsiLine(value.placeholder) : undefined,
-    prefill: typeof value.prefill === 'string' ? stripAnsiText(value.prefill) : undefined,
-    selectedValue: options?.[0]?.rawValue,
-    sessionId: event.sessionId,
-    title: typeof value.title === 'string' ? stripAnsiLine(value.title) : 'Pi extension request',
-    value: typeof value.prefill === 'string' ? stripAnsiText(value.prefill) : '',
-  }
-}
-
-export function selectResponse(dialog: Pick<Dialog, 'selectedValue'> & Partial<Pick<Dialog, 'options' | 'value'>>) {
-  if (isCustomAnswerSelection(dialog) && !dialog.value?.trim()) return undefined
-  return dialog.selectedValue === undefined ? undefined : { value: dialog.selectedValue }
-}
-
-export function isCustomAnswerEditor(question: Pick<Dialog, 'sessionId' | 'runId' | 'title'>, editor: Pick<Dialog, 'sessionId' | 'runId' | 'title' | 'method'>) {
-  return editor.method === 'editor' && question.sessionId === editor.sessionId && question.runId === editor.runId && question.title.endsWith(`: ${editor.title}`)
-}
-
-// shortcut: RPC has no custom-answer flag; match pi-tui-kit's label until it exposes one.
-export function isCustomAnswerSelection(dialog: Pick<Dialog, 'options' | 'selectedValue'>) {
-  const selected = dialog.options?.find((option) => option.rawValue === dialog.selectedValue)
-  return selected !== undefined && /^\d+\. Other \(free-form\)$/.test(selected.displayLabel)
-}
-
-// ponytail: Pi's plan extension has no semantic action field; use one when Pi RPC exposes it.
-export function planImplementationPrompt(dialog: Pick<Dialog, 'method' | 'options' | 'title'>, response: { cancelled?: boolean; value?: string }) {
-  if (response.cancelled || dialog.method !== 'select' || response.value !== 'Implement here' || !dialog.title.startsWith('Proposed plan ready.')) return undefined
-  return dialog.options?.some((option) => option.rawValue === 'Start fresh and implement') ? 'Implement the plan.' : undefined
-}
-
-export function isQuestionnaireFailure(message: string) {
-  return /^Questionnaire failed:/i.test(message)
-}
-
-// pi-plan-mode mirrors this lifecycle state through setStatus beside the composer.
-export function isPlanModeLifecycleNotice(message: string) {
-  return message === 'Plan mode enabled. I will explore and plan, but not modify files.'
-}
-
-export function isPonytailLoadedNotice(message: string, type: string) {
-  return type === 'info' && /^Ponytail loaded: (lite|full|ultra)$/.test(message)
-}
 
 /** Native Pi RPC Extension UI bridge. It keeps protocol values untouched and lets workspace render dialogs inline. */
 export function RuntimeExtensionUi({ children, runtime, sessionRuns, activeSessionId }: { children: React.ReactNode; runtime: RuntimeWebSocketClient; sessionRuns: SessionRunController; activeSessionId?: string }) {
@@ -141,31 +67,24 @@ export function RuntimeExtensionUi({ children, runtime, sessionRuns, activeSessi
     const customAnswerMap = customAnswers.current
     const submissionSet = submissions.current
     const unsubscribeEvents = runtime.onPiEvent((event) => {
-      const dialog = dialogFrom(event)
-      if (dialog) {
-        if (!runtime.shouldApplyExtensionUi(event)) return
+      const presentation = readExtensionPresentation(event)
+      if (!presentation) return
+      if (presentation.kind === 'dialog_closed') {
+        const { dialogId } = presentation
+        setDialogs((current) => current.filter((item) => item.id !== dialogId || item.sessionId !== event.sessionId || customAnswers.current.get(item.sessionId)?.id === item.id))
+        return
+      }
+      if (!runtime.shouldApplyExtensionUi(event)) return
+      if (presentation.kind === 'dialog') {
+        const { dialog } = presentation
         if (acceptCustomEditor(dialog)) return
         setDialogs((current) => current.some((item) => item.id === dialog.id && item.sessionId === dialog.sessionId) ? current : [...current, dialog])
-        return
-      }
-      const raw = event.event
-      if (raw.type === 'extension_ui_resolved' && typeof raw.dialogId === 'string') {
-        setDialogs((current) => current.filter((item) => item.id !== raw.dialogId || item.sessionId !== event.sessionId || customAnswers.current.get(item.sessionId)?.id === item.id))
-        return
-      }
-      if (raw.type === 'extension_ui_request' && !runtime.shouldApplyExtensionUi(event)) return
-      if (raw.type === 'extension_ui_request' && raw.method === 'setTitle' && typeof raw.title === 'string') document.title = stripAnsiLine(raw.title)
-      if (raw.type === 'extension_ui_request' && raw.method === 'notify' && typeof raw.message === 'string') {
-        const message = stripAnsiLine(raw.message)
-        if (isQuestionnaireFailure(message)) {
-          setDialogs((current) => current.map((item) => {
-            if (item.sessionId !== event.sessionId) return item
-            return { ...item, error: message, submitting: false }
-          }))
-        } else if (!isPlanModeLifecycleNotice(message)) {
-          const type = raw.notifyType === 'error' || raw.notifyType === 'warning' ? raw.notifyType : 'info'
-          if (!isPonytailLoadedNotice(message, type)) setNotice({ sessionId: event.sessionId, message, type })
-        }
+      } else if (presentation.kind === 'title') {
+        document.title = presentation.title
+      } else if (presentation.kind === 'questionnaire_error') {
+        setDialogs((current) => current.map((item) => item.sessionId === event.sessionId ? { ...item, error: presentation.text, submitting: false } : item))
+      } else {
+        setNotice({ sessionId: event.sessionId, message: presentation.text, type: presentation.level })
       }
     })
     const unsubscribeSnapshots = runtime.onSessionSnapshot((snapshot) => {
@@ -227,33 +146,14 @@ function optionParts(label: string) {
 
 type PlanPreview = { planTurnId?: string; onViewPlan?: () => void; onRetryPlan?: () => void }
 
-export function planActionOptions(dialog: Pick<Dialog, 'method' | 'title' | 'options'>) {
-  if (dialog.method !== 'select' || !dialog.title.startsWith('Proposed plan ready.')) return undefined
-  const options = dialog.options ?? []
-  const primary = options.filter((option) => option.rawValue === 'Implement here' || option.rawValue === 'Start fresh and implement')
-  if (primary.length !== 2) return undefined
-  return { primary, more: options.filter((option) => !primary.includes(option)) }
-}
-
-const planActionLabels: Record<string, string> = {
-  'Implement here': '在当前会话执行',
-  'Start fresh and implement': '新建会话执行',
-  'Export plan…': '导出计划',
-  'Export plan...': '导出计划',
-  'Save for later': '稍后保存',
-  'Stay in Plan mode': '继续规划',
-  'Discard plan and exit': '放弃计划并退出',
-}
-
-function PlanActions({ dialog, reply, planTurnId, onViewPlan, onRetryPlan }: { dialog: Dialog; reply: ExtensionUi['reply'] } & PlanPreview) {
+function PlanActions({ actions, dialog, reply, planTurnId, onViewPlan, onRetryPlan }: { actions: NonNullable<ReturnType<typeof planActionOptions>>; dialog: Dialog; reply: ExtensionUi['reply'] } & PlanPreview) {
   const [reading, setReading] = useState(false)
-  const actions = planActionOptions(dialog)!
   return <section aria-label="计划操作" className="mx-auto w-full max-w-[640px] space-y-2 rounded-lg border bg-card p-2 text-sm shadow-sm">
     <div className="flex items-center justify-between gap-2"><span className="font-normal">{planTurnId ? '计划已就绪' : '计划内容待加载'}</span>{reading
       ? <Button size="sm" variant="ghost" type="button" onClick={() => setReading(false)}>返回操作</Button>
       : <Button size="sm" variant="ghost" type="button" onClick={() => { if (planTurnId) { setReading(true); onViewPlan?.() } else onRetryPlan?.() }}>{planTurnId ? '查看计划' : '加载计划'}</Button>}</div>
-    {!reading && <div className="flex flex-wrap items-center gap-2">{actions.primary.map((option) => <Button key={option.rawValue} disabled={dialog.submitting || !planTurnId} size="sm" type="button" variant={option.rawValue === 'Implement here' ? 'default' : 'outline'} onClick={() => void reply(dialog, { value: option.rawValue })}>{planActionLabels[option.rawValue]}</Button>)}
-      <DropdownMenu><DropdownMenuTrigger asChild><Button disabled={dialog.submitting} size="sm" type="button" variant="ghost">更多</Button></DropdownMenuTrigger><DropdownMenuContent side="top" align="end" className="max-h-[40dvh] max-w-xs overflow-y-auto">{actions.more.map((option) => <DropdownMenuItem key={option.rawValue} onSelect={() => void reply(dialog, { value: option.rawValue })}>{planActionLabels[option.displayLabel] ?? option.displayLabel}</DropdownMenuItem>)}<DropdownMenuItem onSelect={() => void reply(dialog, { cancelled: true })}>取消</DropdownMenuItem><div className="mt-1 border-t px-2 py-2 text-xs text-muted-foreground"><p className="mb-1 font-normal">操作说明</p><p className="whitespace-pre-wrap">{dialog.title}{dialog.message ? `\n${dialog.message}` : ''}</p></div></DropdownMenuContent></DropdownMenu>
+    {!reading && <div className="flex flex-wrap items-center gap-2">{actions.primary.map((option) => <Button key={option.rawValue} disabled={dialog.submitting || !planTurnId} size="sm" type="button" variant={option.kind === 'implement_here' ? 'default' : 'outline'} onClick={() => void reply(dialog, { value: option.rawValue })}>{option.displayLabel}</Button>)}
+      <DropdownMenu><DropdownMenuTrigger asChild><Button disabled={dialog.submitting} size="sm" type="button" variant="ghost">更多</Button></DropdownMenuTrigger><DropdownMenuContent side="top" align="end" className="max-h-[40dvh] max-w-xs overflow-y-auto">{actions.more.map((option) => <DropdownMenuItem key={option.rawValue} onSelect={() => void reply(dialog, { value: option.rawValue })}>{option.menuLabel ?? option.displayLabel}</DropdownMenuItem>)}<DropdownMenuItem onSelect={() => void reply(dialog, { cancelled: true })}>取消</DropdownMenuItem><div className="mt-1 border-t px-2 py-2 text-xs text-muted-foreground"><p className="mb-1 font-normal">操作说明</p><p className="whitespace-pre-wrap">{dialog.title}{dialog.message ? `\n${dialog.message}` : ''}</p></div></DropdownMenuContent></DropdownMenu>
       {dialog.submitting && <span className="text-xs text-muted-foreground" role="status">提交中…</span>}
     </div>}
     {dialog.error && <p className="max-h-12 overflow-auto text-xs text-destructive" role="alert">{dialog.error}</p>}
@@ -264,7 +164,7 @@ function ExtensionSelectCard({ dialog, reply, setValue, planTurnId }: { dialog: 
   const [collapsed, setCollapsed] = useState(false)
   const options = dialog.options ?? []
   const selectedIndex = options.findIndex((option) => option.rawValue === dialog.selectedValue)
-  const canSubmit = selectResponse(dialog) !== undefined && !(dialog.title.startsWith('Proposed plan ready.') && !planTurnId && (dialog.selectedValue === 'Implement here' || dialog.selectedValue === 'Start fresh and implement'))
+  const canSubmit = selectResponse(dialog) !== undefined && (!options[selectedIndex] || !isPlanImplementationOption(options[selectedIndex]) || !!planTurnId)
   function moveSelection(delta: number) {
     if (options.length === 0) return
     const next = (Math.max(selectedIndex, 0) + delta + options.length) % options.length
@@ -285,11 +185,10 @@ function ExtensionSelectCard({ dialog, reply, setValue, planTurnId }: { dialog: 
       {options.map((option, index) => {
         const { description, title } = optionParts(option.displayLabel)
         const selected = option.rawValue === dialog.selectedValue
-      const displayTitle = ({ 'Implement here': '在当前会话执行', 'Start fresh and implement': '新建会话执行' } as Record<string, string>)[title] ?? title
-        const customOption = isCustomAnswerSelection({ options: [option], selectedValue: option.rawValue })
+        const customOption = option.kind === 'custom_answer'
         return <div className={`rounded-lg border ${customOption ? 'flex items-center gap-2 pr-3' : ''} ${selected ? 'border-primary bg-primary/8' : 'border-transparent'}`} key={`${index}:${option.rawValue}`}>
           <button disabled={dialog.submitting || dialog.editorId !== undefined} aria-checked={selected} className={`block rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${customOption ? 'shrink-0' : 'w-full'}`} onClick={() => setValue(dialog, option.rawValue)} role="radio" type="button">
-            <span className="flex items-start gap-2"><span aria-hidden="true" className="mt-0.5 text-link">{selected ? '●' : '○'}</span><span className="min-w-0 whitespace-pre-wrap break-words"><span className="block font-normal">{customOption ? `${index + 1}.` : displayTitle}</span>{description && <span className="mt-0.5 block text-xs leading-[calc(20px*var(--font-scale))] text-muted-foreground">{description}</span>}</span></span>
+            <span className="flex items-start gap-2"><span aria-hidden="true" className="mt-0.5 text-link">{selected ? '●' : '○'}</span><span className="min-w-0 whitespace-pre-wrap break-words"><span className="block font-normal">{customOption ? `${index + 1}.` : title}</span>{description && <span className="mt-0.5 block text-xs leading-[calc(20px*var(--font-scale))] text-muted-foreground">{description}</span>}</span></span>
           </button>
           {customOption && <input aria-label="自定义回答" className="my-1 h-8 min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" disabled={dialog.submitting} placeholder="other" value={dialog.value ?? ''} onFocus={() => setValue(dialog, option.rawValue)} onChange={(event) => { setValue(dialog, option.rawValue); setValue(dialog, event.target.value, true) }} onKeyDown={(event) => {
             if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
@@ -317,7 +216,8 @@ export function ExtensionUiInline({ sessionId, ...planPreview }: { sessionId: st
   if (!extensionUi || !sessionId) return null
   const dialog = extensionUi.dialogs.find((item) => item.sessionId === sessionId)
   if (!dialog) return null
-  if (planActionOptions(dialog)) return <PlanActions dialog={dialog} reply={extensionUi.reply} key={dialog.id} {...planPreview} />
+  const actions = planActionOptions(dialog)
+  if (actions) return <PlanActions actions={actions} dialog={dialog} reply={extensionUi.reply} key={dialog.id} {...planPreview} />
   return dialog.method === 'select'
     ? <ExtensionSelectCard dialog={dialog} reply={extensionUi.reply} setValue={extensionUi.setValue} key={dialog.id} {...planPreview} />
     : <ExtensionTextCard dialog={dialog} reply={extensionUi.reply} setValue={extensionUi.setValue} key={dialog.id} />

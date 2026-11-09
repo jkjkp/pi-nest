@@ -1,9 +1,10 @@
+import { readTimelineEvent } from './timeline-event.js'
 import { describe, expect, it } from 'vitest'
 import { timelineItems, type TimelinePart } from './timeline-model.js'
 import { patchChanges, projectToolResult, searchMatches } from './tool-result-model.js'
 
 function part(events: Record<string, unknown>[], name = 'edit', args: Record<string, unknown> = { path: 'a.ts' }): Extract<TimelinePart, { kind: 'tool' }> {
-  return { kind: 'tool', toolName: name, toolCallId: 'one', arguments: args, events: events.map((event, index) => ({ event, raw: event, id: String(index), observedAt: '2026-10-18T00:00:00Z' })) }
+  return { kind: 'tool', toolName: name, toolCallId: 'one', arguments: args, events: events.map((event, index) => readTimelineEvent(event, String(index), '2026-10-18T00:00:00Z')) }
 }
 const patch = '--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,3 @@\n keep\n-old\n+new\n+extra\n'
 
@@ -23,6 +24,7 @@ describe('tool result projection', () => {
     const success = projectToolResult(part([{ type: 'tool_execution_end', result: { details: { patch, diff: 'display diff', firstChangedLine: 2 } } }]))
     expect(success.changes).toEqual({ added: 2, removed: 1 })
     expect(success.patch).toBe(patch)
+    expect(success.fileLine).toBe(2)
     const failure = projectToolResult(part([{ type: 'tool_execution_end', isError: true, result: { content: [{ type: 'text', text: 'not found' }], details: { patch } } }]))
     expect(failure.status).toBe('失败')
     expect(failure.patch).toBeUndefined()
@@ -68,10 +70,31 @@ it('only structures unambiguous native grep output without context or truncation
   const result = projectToolResult(part([{ type: 'tool_execution_end', result: { content: 'src/a.ts:4: hello\nsrc/a.ts:9: world' } }], 'grep', { pattern: 'hello' }))
   expect(searchMatches(result)).toEqual([{ path: 'src/a.ts', line: 4, text: 'hello' }, { path: 'src/a.ts', line: 9, text: 'world' }])
   expect(searchMatches({ ...result, output: 'file:4: value:12: ambiguous' })).toBeUndefined()
-  expect(searchMatches({ ...result, args: { context: 2 } })).toBeUndefined()
+  expect(searchMatches(projectToolResult(part([{ type: 'tool_execution_end', result: { content: result.output } }], 'grep', { context: 2 })))).toBeUndefined()
   expect(searchMatches({ ...result, view: 'generic' })).toBeUndefined()
 })
 
 it('does not leave a settled call without a result looking active', () => {
   expect(projectToolResult(part([{ type: 'tool_execution_start' }]), true).status).toBe('结果未记录')
+})
+
+it.each(['live or replayed', 'persisted'] as const)('rejoins %s tool results that carry call metadata outside the message', (source) => {
+  const observedAt = '2026-10-18T00:00:00Z'
+  const result = { toolCallId: 'call', toolName: 'read', message: { role: 'toolResult', content: 'file contents' } }
+  const live = [
+    { type: 'tool_execution_start', toolCallId: 'call', args: { path: 'a.ts' } },
+    { ...result, type: 'message_end' },
+  ].map((event, sequence) => ({ event, sequence, sessionId: 's', observedAt }))
+  const history = [
+    { type: 'message', message: { role: 'user', content: 'read a.ts' } },
+    { type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call', name: 'read', arguments: { path: 'a.ts' } }] } },
+    { ...result, type: 'message' },
+  ].map((raw, index) => ({ id: String(index), parentId: index ? String(index - 1) : null, timestamp: observedAt, type: raw.type, raw }))
+
+  const [turn] = source === 'persisted'
+    ? timelineItems(history, [], [])
+    : timelineItems(undefined, [{ id: 'turn', prompt: 'read a.ts', startedAt: observedAt, events: live }], [])
+  const tools = turn!.parts.filter((part) => part.kind === 'tool')
+  expect(tools).toHaveLength(1)
+  expect(projectToolResult(tools[0]!)).toMatchObject({ name: 'read', path: 'a.ts', status: '完成', output: 'file contents' })
 })

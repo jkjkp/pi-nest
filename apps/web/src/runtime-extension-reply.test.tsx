@@ -4,12 +4,15 @@ import { createRoot } from 'react-dom/client'
 import { expect, it, vi } from 'vitest'
 import { ExtensionStatusNotice, ExtensionUiInline, RuntimeExtensionUi } from './runtime-extension-ui.js'
 import { createSessionRunController } from './session-run-controller.js'
-import type { PiRuntimeEvent } from './runtime-websocket-client.js'
+import type { PiRuntimeEvent, SessionSnapshot } from './runtime-websocket-client.js'
 import { useWorkspaceStore } from './workspace-store.js'
 
-it.each(['accepted', 'rejected', 'not-pending'])('keeps the plan reply and queue consistent through the real UI and controller: %s', async (outcome) => {
+it.each([
+  ['accepted', 'live'], ['rejected', 'live'], ['not-pending', 'live'], ['accepted', 'snapshot'],
+])('keeps the plan reply and queue consistent through the real UI and controller: %s via %s', async (outcome, source) => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const listeners = new Set<(event: PiRuntimeEvent) => void>()
+  const snapshots = new Set<(snapshot: SessionSnapshot) => void>()
   const noopSubscription = () => () => undefined
   let resolve!: () => void
   let reject!: (cause: Error) => void
@@ -17,7 +20,7 @@ it.each(['accepted', 'rejected', 'not-pending'])('keeps the plan reply and queue
   const runtime = {
     onPiEvent: (listener: (event: PiRuntimeEvent) => void) => { listeners.add(listener); return () => listeners.delete(listener) },
     onError: noopSubscription, onRuntimeStatus: noopSubscription,
-    onSessionSnapshot: noopSubscription, onResyncRequired: noopSubscription,
+    onSessionSnapshot: (listener: (snapshot: SessionSnapshot) => void) => { snapshots.add(listener); return () => snapshots.delete(listener) }, onResyncRequired: noopSubscription,
     shouldApplyExtensionUi: () => true,
     extensionUiResponse: vi.fn(() => response),
   }
@@ -30,7 +33,9 @@ it.each(['accepted', 'rejected', 'not-pending'])('keeps the plan reply and queue
     await act(() => root.render(<RuntimeExtensionUi runtime={runtime as never} sessionRuns={controller}><ExtensionUiInline sessionId="session-a" planTurnId="plan-turn" /></RuntimeExtensionUi>))
     await act(() => {
       const event = { sessionId: 'session-a', runId: 'run-1', sequence: 1, observedAt: 'now', event: { type: 'extension_ui_request', method: 'select', id: 'plan', title: 'Proposed plan ready. What next?', options: ['Implement here', 'Start fresh and implement'] } }
-      for (const listener of listeners) listener(event)
+      if (source === 'snapshot') {
+        for (const listener of snapshots) listener({ sessionId: 'session-a', atSequence: 1, runtime: { lifecycle: 'notLoaded', revision: 1 }, extensionUi: { freshness: 'known', statuses: {}, widgets: {} }, pendingExtensionDialogs: [event] })
+      } else for (const listener of listeners) listener(event)
     })
     const implement = [...element.querySelectorAll('button')].find((button) => button.textContent === '在当前会话执行')!
     await act(() => { implement.click(); implement.click() })
@@ -138,6 +143,49 @@ it('anchors status feedback at the composer, replaces it, and expires 500ms afte
     await act(() => root.unmount())
     element.remove()
     vi.useRealTimers()
+    vi.unstubAllGlobals()
+  }
+})
+
+it('sends the exact free-form option and continues in a matching editor restored by snapshot', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  const listeners = new Set<(event: PiRuntimeEvent) => void>()
+  const snapshots = new Set<(snapshot: SessionSnapshot) => void>()
+  const runtime = {
+    onPiEvent: (listener: (event: PiRuntimeEvent) => void) => { listeners.add(listener); return () => listeners.delete(listener) },
+    onSessionSnapshot: (listener: (snapshot: SessionSnapshot) => void) => { snapshots.add(listener); return () => snapshots.delete(listener) },
+    onRuntimeStatus: () => () => undefined,
+    onResyncRequired: () => () => undefined,
+    shouldApplyExtensionUi: () => true,
+  }
+  const respondToExtension = vi.fn(async () => {})
+  const sessionId = 'session-a'
+  const envelope = { sessionId, runId: 'run', observedAt: 'now' }
+  const rawValue = '\u001b[36m2. Other (free-form)\u001b[0m'
+  const draft = '我的自定义回答'
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  try {
+    await act(() => root.render(<RuntimeExtensionUi runtime={runtime as never} sessionRuns={{ respondToExtension } as never}><ExtensionUiInline sessionId={sessionId} /></RuntimeExtensionUi>))
+    await act(() => {
+      for (const listener of listeners) listener({ ...envelope, sequence: 1, event: { type: 'extension_ui_request', method: 'select', id: 'question', title: '交付物: 最终要交付什么？', options: [rawValue], prefill: draft } })
+    })
+    expect(container.querySelector<HTMLInputElement>('[aria-label="自定义回答"]')?.value).toBe(draft)
+    await act(() => [...container.querySelectorAll('button')].find((button) => button.textContent === '继续')!.click())
+    expect(respondToExtension).toHaveBeenCalledExactlyOnceWith(sessionId, 'question', { value: rawValue }, undefined)
+    await act(() => {
+      for (const listener of snapshots) listener({
+        sessionId, atSequence: 2, runtime: { lifecycle: 'active', revision: 1 }, extensionUi: { freshness: 'known', statuses: {}, widgets: {} },
+        pendingExtensionDialogs: [{ ...envelope, sequence: 2, event: { type: 'extension_ui_request', method: 'editor', id: 'editor', title: '最终要交付什么？' } }],
+      })
+    })
+    expect(respondToExtension).toHaveBeenCalledTimes(2)
+    expect(respondToExtension).toHaveBeenLastCalledWith(sessionId, 'editor', { value: draft }, undefined)
+    expect(container.querySelector('[aria-label="自定义回答"]')).toBeNull()
+  } finally {
+    await act(() => root.unmount())
+    container.remove()
     vi.unstubAllGlobals()
   }
 })

@@ -1,3 +1,4 @@
+import { copyableHistoryText, copyableRuntimeText } from './pi-message-view.js'
 import type { PiSessionHistoryEntry } from './history.js'
 import type { RuntimeTurn } from './session-run-model.js'
 import type { PiRuntimeCommand } from '@pi-nest/contracts'
@@ -46,20 +47,16 @@ export function completeCommand(value: string, token: CommandToken, name: string
 }
 
 export function lastCompletedAssistantText(entries: PiSessionHistoryEntry[], turns: RuntimeTurn[]) {
-  const messages = entries.filter((entry) => entry.type === 'message').map((entry) => ({ message: entry.raw.message, timestamp: entry.timestamp }))
+  const candidates = entries.flatMap((entry) => {
+    const text = copyableHistoryText(entry)
+    return text === undefined ? [] : [{ text, timestamp: entry.timestamp }]
+  })
   for (const turn of turns) {
     if (!turn.completedAt) continue
-    for (const { event, observedAt } of turn.events) {
-      if (event.type === 'message_end' || event.type === 'message') messages.push({ message: event.message, timestamp: observedAt })
+    for (const event of turn.events) {
+      const text = copyableRuntimeText(event)
+      if (text !== undefined) candidates.push({ text, timestamp: event.observedAt })
     }
   }
-  const candidates = messages.flatMap(({ message, timestamp }) => {
-    if (!message || typeof message !== 'object' || Array.isArray(message)) return []
-    const value = message as Record<string, unknown>
-    if (value.role !== 'assistant' || value.stopReason === 'error' || value.stopReason === 'aborted') return []
-    const text = typeof value.content === 'string' ? value.content : Array.isArray(value.content)
-      ? value.content.flatMap((block) => block && typeof block === 'object' && block.type === 'text' && typeof block.text === 'string' ? [block.text] : []).join('\n') : ''
-    return text.trim() ? [{ text, timestamp }] : []
-  })
   return candidates.sort((left, right) => left.timestamp.localeCompare(right.timestamp)).at(-1)?.text
 }

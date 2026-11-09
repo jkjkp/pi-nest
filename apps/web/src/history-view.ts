@@ -1,3 +1,4 @@
+import { isHistoryUserEntry } from './pi-message-view.js'
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
 import type { PiHistoryChange } from '@pi-nest/contracts'
 import { fetchSessionHistory, fetchSessionTurnIndex } from './workspace-api.js'
@@ -51,7 +52,7 @@ export async function fetchHistoryView(sessionId: string, signal: AbortSignal, c
   // Recheck after each await: the reader may have loaded more of the old version meanwhile.
   while (pages[0]!.hasEarlier) {
     const previous = mergeSessionHistoryPages(client.getQueryData<HistoryPages>(sessionHistoryQueryKey(sessionId))?.pages)
-    const oldest = previous?.entries.find((entry) => entry.type === 'message' && (entry.raw.message as Record<string, unknown> | undefined)?.role === 'user')?.id
+    const oldest = previous?.entries.find(isHistoryUserEntry)?.id
     if (!oldest || pages.some((page) => page.entries.some((entry) => entry.id === oldest))) break
     index ??= await readCachedTurnIndex(sessionId, latest.revision, signal, client)
     if (!index.entries.some((entry) => entry.id === oldest)) break

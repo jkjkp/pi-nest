@@ -5,6 +5,9 @@ import { createSessionRunController } from './session-run-controller.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { createStore } from 'zustand/vanilla'
 import { createWorkspaceState } from './workspace-store.js'
+import { timelineItems } from './timeline-model.js'
+import { projectToolResult } from './tool-result-model.js'
+import recording from './test-fixtures/session-run-recording.json'
 
 class FakeSocket {
   readyState = 0
@@ -48,6 +51,139 @@ it('replays history without overwriting drafts and still accepts a newer live ed
     socket.receive({ type: 'pi_event', sessionId: 'session-a', sequence: 4, observedAt: 'now', event: { type: 'extension_ui_request', method: 'set_editor_text', text: '新的扩展内容' } })
     expect(state.getState().drafts['session-a']).toBe('新的扩展内容')
   } finally { vi.unstubAllGlobals() }
+})
+
+it.each(['live', 'reconnect', 'refresh'] as const)('preserves recorded run behavior with %s delivery', async (mode) => {
+  vi.stubGlobal('window', { location: { href: 'http://localhost:5173/' } })
+  vi.setSystemTime(new Date('2026-11-08T16:15:00Z'))
+  const uuid = vi.spyOn(crypto, 'randomUUID').mockReturnValue('00000000-0000-4000-8000-000000000001')
+  const first = new FakeSocket()
+  const second = new FakeSocket()
+  const socketFactory = vi.fn().mockReturnValueOnce(first as never).mockReturnValueOnce(second as never)
+  const runtime = new RuntimeWebSocketClient({
+    fetchFn: vi.fn(async () => new Response(JSON.stringify({ runtimeId: 'fixture', token: 'token', websocketPath: '/api/runtime' }))),
+    reconnectDelay: () => 0,
+    socketFactory,
+  })
+  const statistics = vi.spyOn(runtime, 'getSessionStatistics').mockResolvedValue({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, cost: 0 })
+  const unwatch = vi.spyOn(runtime, 'unwatch')
+  const invalidateHistory = vi.fn()
+  const state = createStore(createWorkspaceState)
+  const controller = createSessionRunController({ state, invalidateHistory, runtime })
+  const { sessionId, activeTurn, replayAfter, atSequence, inputQueue } = recording.replaySnapshot
+  const { runId, prompt, startedAt } = activeTurn
+  const run = () => state.getState().runs[sessionId]!
+  const draft = () => state.getState().drafts[sessionId]
+  const widget = () => state.getState().extensionWidgets[sessionId]?.fixture
+
+  // Exercise compatibility shapes at existing positions without changing the recorded cursor boundaries.
+  const unknown = { type: 'future_pi_event', payload: { retained: true } }
+  const injected: Record<number, Record<string, unknown>> = {
+    10: { type: 'tool_execution_start', toolCallId: 'legacy-read', args: { path: 'fixture.txt' } },
+    11: { type: 'message_end', toolCallId: 'legacy-read', toolName: 'read', message: { role: 'toolResult', content: 'tool output' } },
+    14: unknown,
+  }
+  const live = recording.live.map((frame) => {
+    const event = frame.sequence === undefined ? undefined : injected[frame.sequence]
+    return event ? { ...frame, event } : frame
+  })
+  const events = live.flatMap(({ type, ...event }) => type === 'pi_event' ? [event] : [])
+  const cut = recording.live.findIndex((frame) => frame.event?.method === 'confirm') + 1
+  const cutSequence = live[cut - 1]!.sequence!
+  const afterReplay = live.findIndex((frame) => frame.sequence === atSequence) + 1
+
+  async function connect(socket: FakeSocket, count: number) {
+    await vi.waitFor(() => expect(socketFactory).toHaveBeenCalledTimes(count))
+    socket.open()
+    await vi.waitFor(() => expect(socket.sent[0]?.type).toBe('watch'))
+  }
+
+  try {
+    if (mode === 'refresh') {
+      state.getState().setDraft(sessionId, 'draft after reload')
+      void runtime.watch(sessionId, 'background')
+      await connect(first, 1)
+    } else {
+      expect(controller.start({ sessionId, prompt, startedAt })).toBe(true)
+      await connect(first, 1)
+      for (const frame of live.slice(0, cut)) {
+        if (frame.type === 'ack') {
+          const command = () => first.sent.find((sent) => sent.type === frame.command)
+          await vi.waitFor(() => expect(command()).toBeDefined())
+          first.receive({ ...frame, id: command()!.id })
+          if (frame.command === 'prompt') await vi.waitFor(() => expect(run().status).toBe('awaiting_agent'))
+        } else first.receive(frame)
+      }
+      expect(run().status).toBe('awaiting_input')
+      expect(draft()).toBe('fixture editor text')
+      expect(widget()).toEqual(['Preparing'])
+      expect(invalidateHistory).not.toHaveBeenCalled()
+    }
+
+    let socket = first
+    if (mode === 'live') {
+      for (const frame of live.slice(cut, afterReplay)) socket.receive(frame)
+    } else {
+      if (mode === 'reconnect') {
+        state.getState().setDraft(sessionId, 'draft during disconnect')
+        first.close()
+        socket = second
+        await connect(socket, 2)
+        expect(socket.sent[0]?.resume).toEqual({ after: cutSequence })
+      }
+      socket.receive(recording.replaySnapshot)
+      for (const frame of live) {
+        if (frame.sequence !== undefined && frame.sequence > replayAfter && frame.sequence <= atSequence) socket.receive(frame)
+      }
+      socket.receive({ ...recording.replayAck, id: socket.sent[0]!.id })
+      socket.receive(live[afterReplay - 1]) // retransmission of the last delivered sequence
+      expect(draft()).toBe(mode === 'refresh' ? 'draft after reload' : 'draft during disconnect')
+    }
+
+    expect(run().status).toBe('running')
+    expect(run().pendingInputs).toEqual([{ ...inputQueue.inputs[0], mode: 'follow_up', submittedAt: '2026-11-08T16:15:00.000Z', submitting: false }])
+    expect(widget()).toEqual(['Streaming'])
+    expect(state.getState().sessionNotifications[sessionId]).toEqual({ pendingRunId: runId })
+    expect(invalidateHistory).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      const [item] = timelineItems(undefined, run().turns, run().systemEvents)
+      expect(item?.parts.map((part) => part.kind === 'assistant_text' ? part.text : part.kind)).toEqual(['tool', 'Fixture answer.'])
+    })
+
+    for (const frame of live.slice(afterReplay)) socket.receive(frame)
+    const idle = live.findLast((frame) => frame.type === 'runtime_status' && frame.lifecycle === 'idle')!
+    socket.receive({ ...idle, revision: idle.revision! + 1, completedRun: { runId, stopReason: 'stop' } })
+
+    expect(run()).toMatchObject({ status: 'complete', stopReason: 'stop', pendingInputs: [] })
+    const [turn] = run().turns
+    expect(run().turns).toHaveLength(1)
+    expect(turn).toMatchObject({ runId, prompt, completedAt: '2026-11-08T16:15:00.000Z' })
+    expect(run().executionStartedAt).toBe(events.find((event) => event.event?.type === 'agent_start')?.observedAt)
+    expect(turn?.events).toEqual(events.filter((event) => event.turnId && event.runId === runId))
+    const delivered = events.filter(({ sequence }) =>
+      mode === 'live' || sequence! > replayAfter || (mode === 'reconnect' && sequence! <= cutSequence))
+    expect(run().systemEvents).toEqual(delivered.filter((event) => !event.turnId && event.runId === runId))
+    const [item] = timelineItems(undefined, run().turns, run().systemEvents)
+    expect(item?.parts.map((part) => part.kind === 'assistant_text' ? part.text : part.kind)).toEqual(['tool', 'Fixture answer.'])
+    const tool = item?.parts.find((part) => part.kind === 'tool')
+    expect(projectToolResult(tool!)).toMatchObject({ name: 'read', path: 'fixture.txt', output: 'tool output', status: '完成' })
+    expect(item?.diagnostics).toContainEqual(expect.objectContaining({ reason: 'unknown', event: expect.objectContaining({ raw: unknown }) }))
+    expect(state.getState().sessionNotifications[sessionId]).toEqual({ pendingRunId: undefined, completedRunId: runId, readRunId: undefined })
+    expect(invalidateHistory.mock.calls).toEqual([[sessionId]])
+    expect(unwatch.mock.calls).toEqual(mode === 'refresh' ? [[sessionId]] : [])
+    await vi.waitFor(() => expect(statistics.mock.calls).toEqual(Array.from({ length: mode === 'reconnect' ? 4 : 3 }, () => [sessionId])))
+    if (mode === 'refresh') {
+      const command = socket.sent.find((sent) => sent.type === 'unwatch')
+      expect(command).toBeDefined()
+      socket.receive({ type: 'ack', command: 'unwatch', id: command!.id, sessionId })
+    }
+  } finally {
+    statistics.mockRestore()
+    unwatch.mockRestore()
+    uuid.mockRestore()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  }
 })
 
 describe('RuntimeWebSocketClient', () => {

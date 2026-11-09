@@ -1,10 +1,8 @@
+import { extensionStatusLine, extensionWidgetText, planModePolicy } from './runtime-extension-event.js'
 import { fixtureProject, groupFixtureSessions as groupSessionsByProject } from './test-fixtures/workspace.js'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  extensionStatusLine,
-  extensionWidgetText,
-  planModePolicy,
   filterProjectsByQuery,
   projectName,
   projectSessionGroupKey,

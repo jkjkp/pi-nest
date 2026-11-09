@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { readTimelineEvent } from './timeline-event.js'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -15,8 +16,8 @@ let root = createRoot(container)
 afterEach(async () => { await act(async () => root.unmount()); root = createRoot(container) })
 
 function tool(id: string, path: string, view: 'edit' | 'write' = 'edit', status = '完成'): Extract<TurnActivity, { kind: 'tool' }> {
-  const result: ToolResult = { name: view, view, path, status, args: { path, content: 'recorded file' }, output: 'operation failed', patch: view === 'edit' && status === '完成' ? '@@ -1 +1 @@\n-old\n+new\n' : undefined, changes: view === 'edit' && status === '完成' ? { added: 1, removed: 1 } : undefined, details: {}, notices: [] }
-  return { kind: 'tool', id, result, status, label: path, duration: undefined, events: [{ id, event: { toolCallId: id }, raw: {}, observedAt: '2026-10-18T00:00:00Z' }] }
+  const result: ToolResult = { name: view, view, path, status, args: { path, content: 'recorded file' }, output: 'operation failed', patch: view === 'edit' && status === '完成' ? '@@ -1 +1 @@\n-old\n+new\n' : undefined, changes: view === 'edit' && status === '完成' ? { added: 1, removed: 1 } : undefined, notices: [] }
+  return { kind: 'tool', id, result, status, label: path, duration: undefined, events: [readTimelineEvent({ toolCallId: id }, id, '2026-10-18T00:00:00Z')] }
 }
 const item: TimelineItem = { kind: 'turn', id: 'one', events: [], parts: [], diagnostics: [], startedAt: '2026-10-18T00:00:00Z', prompt: 'go' }
 
@@ -40,14 +41,14 @@ it('keeps successful writes followed by failures, excludes failure-only and read
 
 it('does not group different directories by basename and resolves operation-time cwd', () => {
   const first = tool('one', 'a.ts')
-  first.result!.args.cwd = '/project/src'
+  first.result!.cwd = '/project/src'
   const files = projectTurnFiles([first, tool('two', 'a.ts'), tool('three', '/project-other/a.ts')], '/project')
   expect(files.map((file) => file.path)).toEqual(['/project/src/a.ts', '/project/a.ts', '/project-other/a.ts'])
   expect(files[2]?.outsideProject).toBe(true)
 })
 
 it('waits for an actual run or persisted response boundary, including interrupted runs', () => {
-  const toolEnded = { ...item, events: [{ id: 'tool', event: { type: 'tool_execution_end' }, raw: {}, observedAt: item.startedAt }] }
+  const toolEnded = { ...item, events: [readTimelineEvent({ type: 'tool_execution_end' }, 'tool', item.startedAt)] }
   expect(turnFileSummaryState(toolEnded, false)).toBeUndefined()
   for (const status of ['submitted', 'awaiting_agent', 'awaiting_input', 'running', 'aborting'] as const) expect(turnFileSummaryState(item, false, status)).toBeUndefined()
   expect(turnFileSummaryState(item, true, 'complete')).toBeUndefined()
@@ -55,8 +56,8 @@ it('waits for an actual run or persisted response boundary, including interrupte
   expect(turnFileSummaryState(item, false, 'aborted')).toBe('aborted')
   expect(turnFileSummaryState(item, false, 'error')).toBe('error')
   expect(turnFileSummaryState({ ...item, runtimeTiming: { startedAt: item.startedAt, completedAt: item.startedAt } }, false)).toBe('complete')
-  expect(turnFileSummaryState({ ...item, events: [{ id: 'assistant', event: { message: { role: 'assistant', stopReason: 'toolUse' } }, raw: {}, observedAt: item.startedAt }] }, false)).toBeUndefined()
-  expect(turnFileSummaryState({ ...item, events: [{ id: 'assistant', event: { message: { role: 'assistant', stopReason: 'stop' } }, raw: {}, observedAt: item.startedAt }] }, false)).toBe('complete')
+  expect(turnFileSummaryState({ ...item, events: [readTimelineEvent({ message: { role: 'assistant', stopReason: 'toolUse' } }, 'assistant', item.startedAt)] }, false)).toBeUndefined()
+  expect(turnFileSummaryState({ ...item, events: [readTimelineEvent({ message: { role: 'assistant', stopReason: 'stop' } }, 'assistant', item.startedAt)] }, false)).toBe('complete')
   expect(turnFileSummaryState(item, false, undefined, true)).toBe('complete')
 })
 
@@ -92,14 +93,14 @@ it('keeps partial completion visible while moving per-file descriptions to hover
 })
 
 it('recognizes persisted abort flags and waits beyond an intermediate agent end', () => {
-  expect(turnFileSummaryState({ ...item, events: [{ id: 'settled', event: { type: 'agent_settled', aborted: true }, raw: {}, observedAt: item.startedAt }] }, false)).toBe('aborted')
-  expect(turnFileSummaryState({ ...item, events: [{ id: 'ended', event: { type: 'agent_end' }, raw: {}, observedAt: item.startedAt }] }, false)).toBeUndefined()
+  expect(turnFileSummaryState({ ...item, events: [readTimelineEvent({ type: 'agent_settled', aborted: true }, 'settled', item.startedAt)] }, false)).toBe('aborted')
+  expect(turnFileSummaryState({ ...item, events: [readTimelineEvent({ type: 'agent_end' }, 'ended', item.startedAt)] }, false)).toBeUndefined()
 })
 
 it('ignores failed structured file-change reports and keeps only successful reported paths', () => {
   const events = [
-    { id: 'bad', raw: {}, observedAt: item.startedAt, event: { type: 'file_changes', isError: true, changes: [{ path: 'bad.ts' }] } },
-    { id: 'mixed', raw: {}, observedAt: item.startedAt, event: { type: 'file_changes', changes: [{ path: 'also-bad.ts', isError: true }, { path: 'good.ts' }] } },
+    readTimelineEvent({ type: 'file_changes', isError: true, changes: [{ path: 'bad.ts' }] }, 'bad', item.startedAt),
+    readTimelineEvent({ type: 'file_changes', changes: [{ path: 'also-bad.ts', isError: true }, { path: 'good.ts' }] }, 'mixed', item.startedAt),
   ]
   const presentation = projectTurnPresentation({ ...item, parts: [{ kind: 'file_change', events }] }, false)
   expect(projectTurnFiles(presentation.activities, '/project').map((file) => file.path)).toEqual(['/project/good.ts'])

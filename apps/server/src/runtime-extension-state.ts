@@ -1,3 +1,4 @@
+import { piExtensionDialogId, piExtensionProjection } from '@pi-nest/contracts/pi-events'
 import type { PiRuntimeEvent, PiRuntimeExtensionUi } from '@pi-nest/contracts'
 import { ProjectionSidecarStore, type ExtensionUiProjectionData } from './projection-sidecar-store.js'
 
@@ -15,11 +16,10 @@ export class RuntimeExtensionState {
   }
 
   trackDialog(sessionId: string, dialog: PiRuntimeEvent) {
-    const event = dialog.event
-    if (event.type !== 'extension_ui_request' || typeof event.id !== 'string') return false
-    if (event.method !== 'select' && event.method !== 'confirm' && event.method !== 'input' && event.method !== 'editor') return false
+    const id = piExtensionDialogId(dialog.event)
+    if (id === undefined) return false
     const pending = this.dialogs.get(sessionId) ?? new Map<string, PiRuntimeEvent>()
-    pending.set(event.id, dialog)
+    pending.set(id, dialog)
     this.dialogs.set(sessionId, pending)
     return true
   }
@@ -80,28 +80,17 @@ export class RuntimeExtensionState {
   }
 
   async trackProjection(sessionId: string, event: Record<string, unknown>) {
-    const type = event.type === 'extension_ui_request' ? event.method : event.type
-    if (type === 'setStatus') {
-      const key = event.statusKey
-      if (typeof key !== 'string' || !key) return
-      const projection = this.projections.get(sessionId) ?? { freshness: 'known' as const, statuses: new Map(), widgets: new Map() }
-      if (projection.freshness === 'restored') { projection.statuses.clear(); projection.widgets.clear() }
-      this.projections.set(sessionId, projection)
-      projection.freshness = 'known'
-      if (typeof event.statusText === 'string') projection.statuses.set(key, event.statusText)
-      else projection.statuses.delete(key)
-      await this.persistExtensionUi(sessionId, projection)
-      return
-    }
-    if (type !== 'setWidget') return
-    const key = event.widgetKey
-    if (typeof key !== 'string' || !key) return
+    const update = piExtensionProjection(event)
+    if (!update) return
     const projection = this.projections.get(sessionId) ?? { freshness: 'known' as const, statuses: new Map(), widgets: new Map() }
     if (projection.freshness === 'restored') { projection.statuses.clear(); projection.widgets.clear() }
     this.projections.set(sessionId, projection)
     projection.freshness = 'known'
-    if (Array.isArray(event.widgetLines) && event.widgetLines.every((line) => typeof line === 'string')) projection.widgets.set(key, [...event.widgetLines])
-    else projection.widgets.delete(key)
+    if (update.kind === 'status') {
+      if (update.text !== undefined) projection.statuses.set(update.key, update.text)
+      else projection.statuses.delete(update.key)
+    } else if (update.lines !== undefined) projection.widgets.set(update.key, [...update.lines])
+    else projection.widgets.delete(update.key)
     await this.persistExtensionUi(sessionId, projection)
   }
 

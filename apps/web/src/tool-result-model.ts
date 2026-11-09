@@ -1,5 +1,4 @@
 import type { PiFileChange } from '@pi-nest/contracts'
-import { fileChangeStatistics } from './file-change-statistics.js'
 import { toolStatus, type TimelinePart } from './timeline-model.js'
 
 export type ToolResult = {
@@ -8,26 +7,22 @@ export type ToolResult = {
   args: Record<string, unknown>
   status: string
   output: string
-  details: Record<string, unknown>
+  command?: string
+  cwd?: string
+  written?: string
+  readOffset?: number
+  readLimit?: number
+  searchPattern?: string
+  searchGlob?: string
+  searchIncludesContext?: boolean
+  exitCode?: number
+  fileLine?: number
   path?: string
   diff?: string
   patch?: string
   changes?: { added: number; removed: number }
   fileChange?: PiFileChange
   notices: string[]
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
-}
-
-export function resultText(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content.flatMap((block) => {
-    const value = record(block)
-    return value?.type === 'text' && typeof value.text === 'string' ? [value.text] : []
-  }).join('\n')
 }
 
 // Only complete, single-file unified patches can establish change totals.
@@ -63,30 +58,34 @@ export function projectToolResult(part: Extract<TimelinePart, { kind: 'tool' }>,
   const args = part.arguments ?? {}
   const recordedStatus = toolStatus(part.events)
   const status = settled && recordedStatus === '正在执行' ? '结果未记录' : recordedStatus
-  const final = part.events.findLast((event) => event.event.type === 'tool_execution_end' || record(event.event.message)?.role === 'toolResult')
-  const latest = final ?? part.events.findLast((event) => record(event.event.partialResult))
-  const payload = record(latest?.event.message) ?? record(latest?.event.result) ?? record(latest?.event.partialResult)
-  const details = record(payload?.details) ?? {}
+  const final = part.events.findLast((event) => event.tool?.terminal)
+  const latest = final ?? part.events.findLast((event) => event.tool?.partial)
+  const payload = latest?.tool?.output
   const name = part.toolName
   const view = ['read', 'edit', 'write', 'grep', 'bash'].includes(name) ? name as ToolResult['view'] : 'generic'
-  let output = resultText(payload?.content)
-  if (!output && latest?.event.error) output = typeof latest.event.error === 'string' ? latest.event.error : JSON.stringify(latest.event.error)
-  const notices: string[] = []
-  if (record(details.truncation)?.truncated === true) notices.push('工具返回的内容已截断')
-  if (typeof details.matchLimitReached === 'number') notices.push(`已达到 ${details.matchLimitReached} 条匹配上限，并非全部结果`)
-  if (details.linesTruncated === true) notices.push('部分匹配行已截断')
-  if (typeof details.fullOutputPath === 'string') notices.push(`完整输出保存在 ${details.fullOutputPath}`)
-  if (Array.isArray(payload?.content) && payload.content.some((block) => record(block)?.type !== 'text')) notices.push('结果包含非文本内容，此处仅展示文本')
   const successfulEdit = view === 'edit' && status === '完成'
-  const patch = successfulEdit && typeof details.patch === 'string' ? details.patch : undefined
-  const diff = successfulEdit && typeof details.diff === 'string' ? details.diff : undefined
-  return { name, view, args, status, output, details, notices, path: typeof args.path === 'string' ? args.path : undefined, patch, diff, fileChange: fileChangeStatistics(details.piNestFileChange), changes: patch ? patchChanges(patch) : undefined }
+  const patch = successfulEdit ? payload?.patch : undefined
+  const diff = successfulEdit ? payload?.diff : undefined
+  const readOffset = typeof args.offset === 'number' ? args.offset : undefined
+  return {
+    name, view, args, status, output: payload?.output ?? '', notices: payload?.notices ?? [],
+    path: typeof args.path === 'string' ? args.path : undefined,
+    command: typeof args.command === 'string' ? args.command : undefined,
+    cwd: typeof args.cwd === 'string' ? args.cwd : undefined,
+    written: typeof args.content === 'string' ? args.content : undefined,
+    readOffset, readLimit: typeof args.limit === 'number' ? args.limit : undefined,
+    searchPattern: typeof args.pattern === 'string' ? args.pattern : undefined,
+    searchGlob: typeof args.glob === 'string' ? args.glob : undefined,
+    searchIncludesContext: Boolean(args.context && args.context !== 0),
+    exitCode: payload?.exitCode, fileLine: payload?.firstChangedLine ?? (view === 'read' ? readOffset : undefined),
+    patch, diff, fileChange: payload?.fileChange, changes: patch ? patchChanges(patch) : undefined,
+  }
 }
 
 export type SearchMatch = { path: string; line: number; text: string }
 
 export function searchMatches(result: ToolResult): SearchMatch[] | undefined {
-  if (result.view !== 'grep' || result.status !== '完成' || result.args.context && result.args.context !== 0 || result.notices.length || !result.output) return undefined
+  if (result.view !== 'grep' || result.status !== '完成' || result.searchIncludesContext || result.notices.length || !result.output) return undefined
   const rows = result.output.trimEnd().split('\n')
   const matches: SearchMatch[] = []
   for (const row of rows) {

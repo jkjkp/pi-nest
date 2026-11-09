@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { dialogFrom, isCustomAnswerEditor, isCustomAnswerSelection, isPlanModeLifecycleNotice, isPonytailLoadedNotice, isQuestionnaireFailure, planImplementationPrompt, planActionOptions, selectResponse } from './runtime-extension-ui.js'
+import { dialogFrom, isCustomAnswerEditor, isCustomAnswerSelection, planImplementationPrompt, planActionOptions, readExtensionPresentation, selectResponse } from './runtime-extension-event.js'
+
+function notice(message: string, notifyType = 'info') {
+  return readExtensionPresentation({ sessionId: 'session-1', sequence: 1, observedAt: 'now', event: { type: 'extension_ui_request', method: 'notify', message, notifyType } })
+}
 
 function selectEvent(options: string[]) {
   return {
@@ -51,24 +55,24 @@ describe('RuntimeExtensionUi select mapping', () => {
   })
 
   it('keeps Questionnaire protocol failures out of the generic notification path', () => {
-    expect(isQuestionnaireFailure('Questionnaire failed: option that was not offered')).toBe(true)
-    expect(isQuestionnaireFailure('Plan ready')).toBe(false)
+    expect(notice('Questionnaire failed: option that was not offered')).toEqual({ kind: 'questionnaire_error', text: 'Questionnaire failed: option that was not offered' })
+    expect(notice('Plan ready')).toEqual({ kind: 'notice', level: 'info', text: 'Plan ready' })
   })
 
   it('suppresses only the duplicated Plan-mode lifecycle notice', () => {
-    expect(isPlanModeLifecycleNotice('Plan mode enabled. I will explore and plan, but not modify files.')).toBe(true)
-    expect(isPlanModeLifecycleNotice('Plan mode is already active.')).toBe(false)
+    expect(notice('Plan mode enabled. I will explore and plan, but not modify files.')).toBeUndefined()
+    expect(notice('Plan mode is already active.')).toMatchObject({ kind: 'notice' })
   })
 
   it('suppresses Ponytail loading success while preserving warnings, errors, and other notices', () => {
     for (const level of ['lite', 'full', 'ultra']) {
-      expect(isPonytailLoadedNotice(`Ponytail loaded: ${level}`, 'info')).toBe(true)
+      expect(notice(`Ponytail loaded: ${level}`)).toBeUndefined()
     }
-    expect(isPonytailLoadedNotice('Ponytail loaded: full', 'warning')).toBe(false)
-    expect(isPonytailLoadedNotice('Ponytail loaded: full', 'error')).toBe(false)
-    expect(isPonytailLoadedNotice('Ponytail failed to load', 'error')).toBe(false)
-    expect(isPonytailLoadedNotice('Another plugin loaded: full', 'info')).toBe(false)
-    expect(isPonytailLoadedNotice('Ponytail level changed: lite', 'info')).toBe(false)
+    expect(notice('Ponytail loaded: full', 'warning')).toMatchObject({ kind: 'notice' })
+    expect(notice('Ponytail loaded: full', 'error')).toMatchObject({ kind: 'notice' })
+    expect(notice('Ponytail failed to load', 'error')).toMatchObject({ kind: 'notice' })
+    expect(notice('Another plugin loaded: full', 'info')).toMatchObject({ kind: 'notice' })
+    expect(notice('Ponytail level changed: lite', 'info')).toMatchObject({ kind: 'notice' })
   })
 })
 
@@ -115,8 +119,11 @@ it('only replaces the known plan action menu and preserves every exact RPC optio
   const options = ['Implement here', 'Start fresh and implement', 'Export plan…', 'Save for later', 'Stay in Plan mode', 'Discard plan and exit', 'Plugin-specific action']
   const plan = dialogFrom({ ...selectEvent(options), event: { ...selectEvent(options).event, title: 'Proposed plan ready. What next? Long explanation.' } })!
   const actions = planActionOptions(plan)!
-  expect(actions.primary.map((option) => option.rawValue)).toEqual(options.slice(0, 2))
+  expect(actions.primary.map(({ kind, rawValue, displayLabel }) => [kind, rawValue, displayLabel])).toEqual([
+    ['implement_here', options[0], '在当前会话执行'], ['implement_fresh', options[1], '新建会话执行'],
+  ])
   expect(actions.more.map((option) => option.rawValue)).toEqual(options.slice(2))
+  expect(actions.more[0]?.menuLabel).toBe('导出计划')
   expect(planActionOptions(dialogFrom(selectEvent(options))!)).toBeUndefined()
   expect(planActionOptions({ ...plan, options: plan.options!.slice(0, 1) })).toBeUndefined()
 })

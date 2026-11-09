@@ -14,7 +14,7 @@ document.body.append(container)
 let root = createRoot(container)
 afterEach(async () => { await act(async () => root.unmount()); root = createRoot(container); vi.unstubAllGlobals() })
 
-const result: ToolResult = { name: 'edit', view: 'edit', status: '完成', args: { path: 'a.ts' }, path: 'a.ts', output: 'edited', details: {}, notices: [], patch: '@@ -1 +1 @@\n-old\n+new', changes: { added: 1, removed: 1 } }
+const result: ToolResult = { name: 'edit', view: 'edit', status: '完成', args: { path: 'a.ts' }, path: 'a.ts', output: 'edited', notices: [], patch: '@@ -1 +1 @@\n-old\n+new', changes: { added: 1, removed: 1 } }
 async function expand() {
   const details = container.querySelector<HTMLDetailsElement>('[data-tool-result]')!
   await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')) })
@@ -42,7 +42,7 @@ it('shows only a lightweight file count during execution, without the old result
 })
 
 it.each<ToolResult['view']>(['read', 'edit', 'write', 'grep', 'bash', 'generic'])('keeps %s results readable without copy buttons', async (view) => {
-  const tool = { ...result, name: view, view, args: { path: 'a.ts', content: 'written text', command: 'echo test', pattern: 'test' }, output: view === 'grep' ? 'a.ts:1: test' : 'tool output' }
+  const tool = { ...result, name: view, view, args: { path: 'a.ts', content: 'written text', command: 'echo test', pattern: 'test' }, written: 'written text', command: 'echo test', searchPattern: 'test', output: view === 'grep' ? 'a.ts:1: test' : 'tool output' }
   await act(async () => root.render(<ToolResultCard result={tool} label="工具结果" />))
   await expand()
   expect(container.textContent).toContain(view === 'grep' ? 'test' : 'tool output')
@@ -51,7 +51,7 @@ it.each<ToolResult['view']>(['read', 'edit', 'write', 'grep', 'bash', 'generic']
 
 it.each([['正在执行', '正在运行'], ['完成', '已运行'], ['失败', '运行失败'], ['结果未记录', '结果未记录']])('renders %s commands as compact summaries and preserves full details across updates', async (status, prefix) => {
   const command = "python3 - <<'PY'\n" + 'print("hello")\n'.repeat(40) + 'PY'
-  const tool: ToolResult = { name: 'bash', view: 'bash', status, args: { command, cwd: '/workspace' }, output: 'hello', details: { exitCode: 1 }, notices: [] }
+  const tool: ToolResult = { name: 'bash', view: 'bash', status, args: { command, cwd: '/workspace' }, output: 'hello', command, cwd: '/workspace', exitCode: 1, notices: [] }
   await act(async () => root.render(<ToolResultCard result={tool} label={`运行 ${command}`} duration="2秒" />))
   const details = container.querySelector<HTMLDetailsElement>('[data-tool-result]')!
   const summary = details.querySelector('summary')!
@@ -90,7 +90,7 @@ it('removes the latest hint while preserving pause and resume of execution scrol
 })
 
 it.each<ToolResult['view']>(['read', 'edit', 'write', 'grep', 'bash', 'generic'])('animates only running %s summary text and stops when the tool settles', async (view) => {
-  const tool: ToolResult = { name: view, view, status: '正在执行', args: { command: 'echo hello' }, output: '', details: {}, notices: [] }
+  const tool: ToolResult = { name: view, view, status: '正在执行', args: { command: 'echo hello' }, output: '', notices: [] }
   await act(async () => root.render(<ToolResultCard result={tool} label={view === 'bash' ? '运行 echo hello' : '工具调用'} />))
   const summary = container.querySelector('summary')!
   expect(summary.querySelector('.command-running')?.textContent).toContain('正在')
@@ -114,7 +114,7 @@ const toolSummaries: [ToolResult['view'], string, string, string, string][] = [
 ]
 
 it.each(toolSummaries)('renders %s %s as a compact summary through every status', async (view, label, running, complete, failed) => {
-  const tool: ToolResult = { name: view === 'generic' ? 'custom_tool' : view, view, status: '正在执行', args: { path: '/workspace/a.ts' }, path: '/workspace/a.ts', output: 'original output', details: {}, notices: ['工具返回的内容已截断'] }
+  const tool: ToolResult = { name: view === 'generic' ? 'custom_tool' : view, view, status: '正在执行', args: { path: '/workspace/a.ts' }, path: '/workspace/a.ts', output: 'original output', notices: ['工具返回的内容已截断'] }
   for (const [status, title] of [['正在执行', running], ['完成', complete], ['失败', failed], ['结果未记录', '结果未记录 ' + (view === 'write' ? tool.path : label.replace(/^(读取|搜索|编辑)\s*/, ''))]]) {
     await act(async () => root.render(<ToolResultCard result={{ ...tool, status }} label={label} duration="11秒" />))
     const details = container.querySelector<HTMLDetailsElement>('[data-tool-result]')!

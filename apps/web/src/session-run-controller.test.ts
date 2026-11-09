@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import nativeEvents from '../../../packages/contracts/test-fixtures/native-pi-events.json'
 
 import type { PiRuntimeEvent } from './runtime-websocket-client.js'
 import { createSessionRunController } from './session-run-controller.js'
@@ -202,6 +203,36 @@ describe('session run controller', () => {
     expect(workspace.getState().sessionNotifications['session-b']?.completedRunId).toBe('new')
     expect(workspace.getState().runs).toBe(runs)
     expect(invalidateHistory).not.toHaveBeenCalled()
+  })
+
+  it('keeps recorded tool results and the final assistant reply in the same turn', () => {
+    const runtime = runtimeMock()
+    const invalidateHistory = vi.fn()
+    createSessionRunController({ state: workspace, invalidateHistory, runtime: runtime as never })
+    const sessionId = 'session-a'
+    const runId = 'run-1'
+    const startedAt = '2026-10-28T00:00:00Z'
+    const prompt = 'Read fixture.txt, then reply done.'
+    runtime.snapshot({ sessionId, runtime: { lifecycle: 'active', revision: 1 }, activeTurn: { runId, prompt, startedAt } })
+    const events = nativeEvents.map((event, index) => ({ sessionId, runId, turnId: 'native-turn', event, observedAt: startedAt, sequence: index + 1 }))
+    for (const event of events) runtime.emit(event)
+
+    const run = workspace.getState().runs[sessionId]!
+    expect(run).toMatchObject({ status: 'complete', stopReason: 'stop' })
+    expect(run.turns).toHaveLength(1)
+    expect(run.turns[0]?.events).toEqual(events)
+    const [item] = timelineItems(undefined, run.turns, run.systemEvents)
+    expect(item?.parts).toEqual([
+      expect.objectContaining({
+        kind: 'tool',
+        toolCallId: 'read-fixture',
+        events: expect.arrayContaining([
+          expect.objectContaining({ raw: nativeEvents.find((event) => event.type === 'tool_execution_end') }),
+        ]),
+      }),
+      expect.objectContaining({ kind: 'assistant_text', text: 'Fixture read successfully.' }),
+    ])
+    expect(invalidateHistory.mock.calls).toEqual([[sessionId]])
   })
 
   it('preserves queue, notification and history results across completion, replay and resync', async () => {

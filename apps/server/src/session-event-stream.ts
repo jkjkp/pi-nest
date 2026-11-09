@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { open, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { readNativeTurnBoundary } from './pi-runtime-event.js'
 import type { PiRuntimeEvent, PiRuntimeHostEvent } from './pi-runtime-host.js'
 
 export type PiRuntimeStreamError = {
@@ -39,7 +40,8 @@ export class SessionEventStream {
     return this.serial(async () => {
       if (this.unavailable) return
       const sequence = ++this.sequence
-      if (raw.event.type === 'turn_start') this.turnId = `${this.sessionId}:turn:${sequence}`
+      const boundary = readNativeTurnBoundary(raw.event)
+      if (boundary === 'start') this.turnId = `${this.sessionId}:turn:${sequence}`
       const event: PiRuntimeEvent = { ...raw, sequence, ...(this.turnId ? { turnId: this.turnId } : {}) }
       try {
         await beforePublish?.(event)
@@ -50,7 +52,7 @@ export class SessionEventStream {
         return
       }
       for (const listener of this.listeners) listener.event(event)
-      if (raw.event.type === 'turn_end' || raw.event.type === 'agent_settled') this.turnId = undefined
+      if (boundary === 'end') this.turnId = undefined
     })
   }
 

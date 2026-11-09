@@ -1,3 +1,4 @@
+import { historyUserMessage, isHistoryUserEntry } from './pi-message-view.js'
 import type { PiSessionHistoryEntry, PiSessionHistoryResponse, PiSessionTurnIndexEntry as TurnIndexEntry } from '@pi-nest/contracts'
 export type { PiSessionHistoryEntry, PiSessionHistoryResponse, PiSessionTurnIndex, PiSessionTurnIndexEntry as TurnIndexEntry } from '@pi-nest/contracts'
 
@@ -34,7 +35,7 @@ export function mergeSessionHistoryPage(pages: PiSessionHistoryResponse[] | unde
 function orderSessionHistoryPages(pages: PiSessionHistoryResponse[] | undefined) {
   const unique = new Map<string, PiSessionHistoryResponse>()
   for (const page of pages ?? []) {
-    const key = page.entries.find((entry) => entry.type === 'message' && (entry.raw.message as Record<string, unknown> | undefined)?.role === 'user')?.id ?? page.entries[0]?.id
+    const key = page.entries.find(isHistoryUserEntry)?.id ?? page.entries[0]?.id
     if (key) unique.set(key, page)
   }
   return [...unique.values()].sort((left, right) => (left.entries[0]?.timestamp ?? '').localeCompare(right.entries[0]?.timestamp ?? ''))
@@ -42,8 +43,5 @@ function orderSessionHistoryPages(pages: PiSessionHistoryResponse[] | undefined)
 
 /** Counts only persisted user entries; runtime events never define conversation structure. */
 export function historyUserTurnCount(entries: PiSessionHistoryEntry[] | undefined) {
-  return entries?.filter((entry) => {
-    const message = entry.raw.message
-    return message && typeof message === 'object' && !Array.isArray(message) && (message as Record<string, unknown>).role === 'user'
-  }).length
+  return entries?.filter(historyUserMessage).length
 }

@@ -79,7 +79,8 @@ function ActivityLine({ icon, label, status }: { icon: ReactNode; label: string;
 function BashActivity({ activity }: { activity: Extract<TurnActivity, { kind: 'bash' }> }) {
   return <ToolResultCard label={activity.command ? `运行 ${activity.command}` : '运行命令'} duration={activity.duration === undefined ? undefined : formatActivityDuration(activity.duration)} result={{
     name: 'bash', view: 'bash', args: { command: activity.command, cwd: activity.cwd }, status: activity.status,
-    output: [activity.stdout, activity.stderr ? `stderr:\n${activity.stderr}` : undefined].filter(Boolean).join('\n'), details: { exitCode: activity.exitCode }, notices: [],
+    command: activity.command, cwd: activity.cwd, exitCode: activity.exitCode,
+    output: [activity.stdout, activity.stderr ? `stderr:\n${activity.stderr}` : undefined].filter(Boolean).join('\n'), notices: [],
   }} />
 }
 

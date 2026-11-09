@@ -38,9 +38,11 @@ it('reprojects a completed turn replaced after a legitimate late event', () => {
   const complete = { ...turn('saved', [saved.event]), completedAt: timestamp }
   timelineItems(undefined, [complete], [])
   saved.project.mockClear()
-  const updated = { ...complete, events: [...complete.events, event(2, { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'two' } })] }
+  const late = trackedDelta('two')
+  const updated = { ...complete, events: [...complete.events, { ...late.event, sequence: 2 }] }
   expect(timelineItems(undefined, [updated], [])[0]!.parts).toMatchObject([{ text: 'onetwo' }])
-  expect(saved.project).toHaveBeenCalledTimes(1)
+  expect(saved.project).not.toHaveBeenCalled()
+  expect(late.project).toHaveBeenCalledTimes(1)
 })
 
 it('rematches refreshed and prepended history without reprojecting the unchanged turn', () => {
@@ -104,4 +106,23 @@ it('rechecks attachment consistency against the current history without contamin
   const withoutHistory = timelineItems(undefined, [live], [])[0]!
   expect(withoutHistory.attachments).toBeUndefined()
   expect(withoutHistory.attachmentWarning).toBeUndefined()
+})
+
+it('keeps the original unknown payload and runtime identity in diagnostics', () => {
+  const raw = Object.freeze({ type: 'future_pi_event', payload: { retained: true } })
+  const envelope = { ...event(10, raw), runId: 'run', turnId: 'turn' }
+  const [item] = timelineItems(undefined, [turn('prompt', [envelope])], [])
+  const diagnostic = item?.diagnostics[0]
+  expect(diagnostic).toMatchObject({ reason: 'unknown', event: { runtime: { sessionId: 'session', runId: 'run', turnId: 'turn', sequence: 10, observedAt: timestamp } } })
+  expect(diagnostic?.event.raw).toBe(raw)
+})
+
+it('keeps unknown events after the persisted response replaces the completed runtime turn', () => {
+  const raw = { type: 'future_pi_event', payload: { preserved: true } }
+  const live = { ...turn('prompt', [event(1, raw), event(2, { type: 'message_end', message: { role: 'assistant', content: 'answer' } })]), completedAt: timestamp }
+  const persisted = history('native', 'prompt', 'answer')
+  const [item] = timelineItems(persisted, [live], [])
+  expect(item?.parts[0]?.events[0]?.id).toBe('native-answer')
+  expect(item?.diagnostics[0]?.event.raw).toBe(raw)
+  expect(timelineItems(persisted, [], [])[0]?.diagnostics).toEqual([])
 })

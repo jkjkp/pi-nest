@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { isPiMessage, piAssistantStopReason, piToolCallId } from './pi-events.js'
+import { isPiMessage, piAssistantStopReason, piExtensionDialogId, piExtensionProjection, piQueueSnapshot, piRunSettlement, piToolCallId } from './pi-events.js'
 import nativeEvents from '../test-fixtures/native-pi-events.json'
 
 // Captured from Pi CLI 1.2.0 with an isolated local response server and the real read tool.
@@ -53,4 +53,18 @@ it('preserves the caller-specific handling of unusual nested tool messages', () 
   const message = Object.assign([], { toolCallId: 'array-id' })
   expect(piToolCallId({}, message)).toBe('array-id')
   expect(piToolCallId({}, undefined)).toBeUndefined()
+})
+
+
+it('shares queue, settlement and extension decoding without rewriting native records', () => {
+  const queue = Object.freeze({ type: 'queue_update', steering: ['first'], followUp: ['next'], future: true })
+  expect(piQueueSnapshot(queue)).toEqual({ steering: ['first'], followUp: ['next'] })
+  expect(piQueueSnapshot({ ...queue, followUp: [42] })).toBeUndefined()
+  expect(queue.future).toBe(true)
+  expect(piRunSettlement({ type: 'agent_settled', aborted: true })).toEqual({ aborted: true })
+  expect(piRunSettlement({ type: 'agent_end', aborted: true })).toBeUndefined()
+  expect(piExtensionDialogId({ type: 'extension_ui_request', method: 'select', id: 'dialog' })).toBe('dialog')
+  expect(piExtensionDialogId({ type: 'extension_ui_request', method: 'setStatus', id: 'status' })).toBeUndefined()
+  expect(piExtensionProjection({ type: 'setStatus', statusKey: 'plan', statusText: '' })).toEqual({ kind: 'status', key: 'plan', text: '' })
+  expect(piExtensionProjection({ type: 'extension_ui_request', method: 'setWidget', widgetKey: 'plan', widgetLines: [42] })).toEqual({ kind: 'widget', key: 'plan', lines: undefined })
 })

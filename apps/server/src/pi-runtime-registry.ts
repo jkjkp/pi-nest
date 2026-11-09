@@ -1,4 +1,4 @@
-import { isPiMessage, piAssistantStopReason } from '@pi-nest/contracts/pi-events'
+import { readNativeRunEvent } from './pi-runtime-event.js'
 import { AttachmentStore, AttachmentError, type PreparedInput } from './attachment-store.js'
 import type { AttachmentInput, PiEditLastInput, PiEditStatus, PiHistoryChange, PiPromptDisposition, PiQueuedInput, PiSessionInitialSettings } from '@pi-nest/contracts'
 import type { RuntimeLifecycle as PiRuntimeLifecycle, RuntimeStatus as PiRuntimeStatus, PiRuntimeExtensionUi, PiRuntimeSessionSnapshot } from '@pi-nest/contracts'
@@ -724,8 +724,9 @@ export class PiRuntimeRegistry {
           let projectedEvent: PiRuntimeHostEvent
           try { this.attachments.observeNative(event.event, session); projectedEvent = this.attachments.project(event, session.id) }
           catch (cause) { this.fail(session.id, cause); return }
-          const runId = this.beginNativeTurn(session.id, projectedEvent)
-          if (event.event.type === 'queue_update') projectedEvent = { ...event, event: { type: 'queue_update', ...this.stateFor(session.id).queue.snapshot() } }
+          const signal = readNativeRunEvent(projectedEvent.event)
+          const runId = this.beginNativeTurn(session.id, event.observedAt, signal)
+          if (signal?.kind === 'queue') projectedEvent = { ...event, event: { type: 'queue_update', ...this.stateFor(session.id).queue.snapshot() } }
           void this.streamFor(session.id).stream.publish({ ...projectedEvent, ...(runId ? { runId } : {}) }, async (published) => {
             this.trackActiveTurn(session.id, published)
             this.trackExtensionDialog(session.id, published)
@@ -879,33 +880,30 @@ export class PiRuntimeRegistry {
   }
 
   /** Pi Extensions may start an agent through pi.sendUserMessage, bypassing beginPrompt. */
-  private beginNativeTurn(sessionId: string, event: PiRuntimeHostEvent) {
+  private beginNativeTurn(sessionId: string, observedAt: string, signal: ReturnType<typeof readNativeRunEvent>) {
     const state = this.stateFor(sessionId)
-    if (event.event.type === 'queue_update' && Array.isArray(event.event.steering) && event.event.steering.every((message) => typeof message === 'string') && Array.isArray(event.event.followUp) && event.event.followUp.every((message) => typeof message === 'string')) {
-      state.queue.setNativeQueue(event.event.steering, event.event.followUp)
+    if (signal?.kind === 'queue' && signal.snapshot) {
+      state.queue.setNativeQueue(signal.snapshot.steering, signal.snapshot.followUp)
     }
     const activeTurn = state.activeTurn
     if (activeTurn) {
-      if (event.event.type === 'agent_start') activeTurn.agentStarted = true
-      const stopReason = piAssistantStopReason(event.event)
-      if (stopReason !== undefined) activeTurn.stopReason = stopReason
-      if (event.event.type === 'agent_settled') {
-        if (event.event.aborted === true) activeTurn.stopReason = 'aborted'
+      if (signal?.kind === 'started') activeTurn.agentStarted = true
+      if (signal?.kind === 'stop_reason') activeTurn.stopReason = signal.reason
+      if (signal?.kind === 'settled') {
+        if (signal.aborted) activeTurn.stopReason = 'aborted'
         this.settleActiveTurn(sessionId, activeTurn)
-      }
-      else if (activeTurn.waitingForExtension && this.resumesStreaming(event.event)) {
+      } else if (activeTurn.waitingForExtension && (signal?.kind === 'started' || signal?.kind === 'streaming')) {
         activeTurn.firstSequence = undefined
         activeTurn.waitingForExtension = undefined
       }
       return activeTurn.runId
     }
-    const message = event.event.message
-    const isUserMessage = event.event.type === 'message' && isPiMessage(message, 'user')
-    if (event.event.type !== 'agent_start' && !isUserMessage) return undefined
+    const isUserMessage = signal?.kind === 'user_input'
+    if (signal?.kind !== 'started' && !isUserMessage) return undefined
     this.cancelUnload(sessionId)
     const session = this.entries.get(sessionId)?.session
-    state.activeTurn = { native: true, runId: randomUUID(), startedAt: event.observedAt }
-    if (session) this.history.pin(session, state.activeTurn.runId, Boolean(isUserMessage))
+    state.activeTurn = { native: true, runId: randomUUID(), startedAt: observedAt }
+    if (session) this.history.pin(session, state.activeTurn.runId, isUserMessage)
     this.locks.set(sessionId, 'prompt')
     this.transition(sessionId, 'active')
     return state.activeTurn.runId
@@ -1023,13 +1021,6 @@ export class PiRuntimeRegistry {
   private trackActiveTurn(sessionId: string, event: PiRuntimeEvent) {
     const activeTurn = this.stateFor(sessionId).activeTurn
     if (activeTurn && !activeTurn.waitingForExtension && activeTurn.runId === event.runId && activeTurn.firstSequence === undefined) activeTurn.firstSequence = event.sequence
-  }
-
-  private resumesStreaming(event: Record<string, unknown>) {
-    if (event.type === 'agent_start' || event.type === 'message_update') return true
-    if (event.type !== 'message') return false
-    const message = event.message
-    return Boolean(message && typeof message === 'object' && !Array.isArray(message) && (message as Record<string, unknown>).role === 'assistant')
   }
 
   private transition(sessionId: string, lifecycle: PiRuntimeLifecycle, error?: string, failureKind?: PiRuntimeFailureKind, force = false, completedRun?: PiRuntimeStatus['completedRun']) {

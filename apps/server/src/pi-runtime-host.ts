@@ -1,4 +1,4 @@
-import { piAssistantStopReason } from '@pi-nest/contracts/pi-events'
+import { piAssistantStopReason, piRunSettlement } from '@pi-nest/contracts/pi-events'
 import { cacheHitRateFromUsage, latestCacheHitRate } from './runtime-statistics.js'
 import type { PiRuntimeEvent, PiPromptDisposition, RuntimeFailureKind as PiRuntimeFailureKind } from '@pi-nest/contracts'
 import { PiRpcConnectionError, PiRpcProcess, type PiRpcProcessState, type PiInputImage } from '@pi-nest/pi-adapter'
@@ -187,8 +187,9 @@ export class PiRuntimeHost {
     })
     const unsubscribe = this.onEvent(({ event }) => {
       stopReason = piAssistantStopReason(event) ?? stopReason
-      if (event.type === 'agent_settled') {
-        if (event.aborted === true) stopReason = 'aborted'
+      const settlement = piRunSettlement(event)
+      if (settlement) {
+        if (settlement.aborted) stopReason = 'aborted'
         settle?.()
       }
     })

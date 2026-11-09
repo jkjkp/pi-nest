@@ -1,3 +1,4 @@
+import { runtimeInputEcho } from './session-run-event.js'
 import { clampSidebarWidth } from './sidebar-width.js'
 import { normalizeBodyFontSize } from './typography.js'
 import { create, type StateCreator } from 'zustand'
@@ -5,12 +6,12 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 
 import { emptyFilePanel, fileTabKey, filePreviewKey, restoreFilePanels, restoreFilePositions, type FilePreviewPanel, type FileReadingPosition } from './file-preview-state.js'
 import type { NavigationOrder } from './navigation-order.js'
-import { activeRuntimeTurn, isRunActive, nativeUserMessage, runtimeEventOwner, runtimeTurnAcceptsEvent, type PendingInput, type SessionRunSummary } from './session-run-model.js'
+import { activeRuntimeTurn, isRunActive, runtimeEventOwner, runtimeTurnAcceptsEvent, type PendingInput, type SessionRunSummary } from './session-run-model.js'
 import type { PiRuntimeStatistics, PiRuntimeExtensionUi, PiRuntimeEvent, PiRuntimeState, RuntimeStatus } from '@pi-nest/contracts'
 import type { PiEditLastInput } from '@pi-nest/contracts'
 export type MessageEditDraft = { entryId: string; revision: string; text: string; status: 'editing' | 'submitting' | 'unknown'; error?: string; input?: PiEditLastInput }
 
-export { isRunActive, nativeUserMessage } from './session-run-model.js'
+export { isRunActive } from './session-run-model.js'
 export type { PromptStatus, PendingInput, SessionRunSummary } from './session-run-model.js'
 
 const unavailableStorage = {
@@ -232,7 +233,7 @@ export const createWorkspaceState: StateCreator<WorkspaceState> = (set) => ({
       const run = state.runs[sessionId]
       if (!run) return state
 
-      const prompt = nativeUserMessage(event)
+      const prompt = runtimeInputEcho(event)
       const active = activeRuntimeTurn(run.turns)
       const owner = runtimeEventOwner(run.turns, event)
       const activeAccepts = active && !active.completedAt && runtimeTurnAcceptsEvent(active, event, run.turns)

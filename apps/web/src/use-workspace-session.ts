@@ -1,3 +1,4 @@
+import { isHistoryUserEntry, historyUserMessage } from './pi-message-view.js'
 import { setDraftAttachments, useAttachmentDraft, useAttachmentStore } from './attachment-draft.js'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -10,12 +11,12 @@ import { timelineItems } from './timeline-model.js'
 import { applyNavigationOrder, migrateProjectNavigation, navigationOrdersEqual, reconcileNavigationOrder } from './navigation-order.js'
 import type { PiProject } from '@pi-nest/contracts'
 import type { SessionRunController } from './session-run-controller.js'
-import { stripAnsiLine } from './ansi-text.js'
+import { extensionStatusLine, extensionWidgetText, planModePolicy, planModeStatus } from './runtime-extension-event.js'
 import { activeRuntimeTurn, isRunActive } from './session-run-model.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { fetchProjects, fetchSessionHistory, fetchSessions, removeProject as removeSavedProject, openProjectFolder } from './workspace-api.js'
 import { isRuntimeConnectionError } from './runtime-websocket-client.js'
-import { extensionStatusLine, extensionWidgetText, groupSessionsByProject, projectName, projectKey, projectSessionGroupKey, planModePolicy, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
+import { groupSessionsByProject, projectName, projectKey, projectSessionGroupKey, runtimeStatusLabel, type ProjectSessionGroup } from './workspace.js'
 
 const emptyProjects: PiProject[] = []
 const emptySessions: Awaited<ReturnType<typeof fetchSessions>> = []
@@ -76,7 +77,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
   const isActive = isRunActive(status)
   const isStreaming = status === 'running' || status === 'aborting'
   const extensionStatus = extensionStatusLine(extensionStatuses[selectedSessionId])
-  const planStatus = stripAnsiLine(extensionStatuses[selectedSessionId]?.['plan-mode'] ?? '').trim()
+  const planStatus = planModeStatus(extensionStatuses[selectedSessionId])
   const planPolicy = planModePolicy(extensionWidgets[selectedSessionId])
   const extensionWidget = extensionWidgetText(extensionWidgets[selectedSessionId])
   const runtimeStatus = runtimeStatusLabel(runtimeStates[selectedSessionId], isActive)
@@ -153,7 +154,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
       return undefined
     })
     if (!page || operation !== editRead.current || selectedSessionIdRef.current !== sessionId || useWorkspaceStore.getState().messageEdits[sessionId]) return
-    const last = page.entries.findLast((entry) => entry.type === 'message' && (entry.raw.message as { role?: string })?.role === 'user')
+    const last = page.entries.findLast(isHistoryUserEntry)
     if (last?.id !== entryId || page.revision !== history?.revision) throw new Error('会话历史已变化，请刷新后重新编辑。')
     const turn = timelineItems(page.entries, [], []).find((item) => item.id === entryId)
     if (!turn) throw new Error('无法读取完整用户消息。')
@@ -276,7 +277,7 @@ export function useWorkspaceSession(sessionRuns: SessionRunController) {
     const attachedItems = [...attachmentDraft.items]
     const acceptedAttachments = () => attachmentDraft.clear(attachedItems)
     if (!isActive) {
-      if (sessionRuns.start({ ...(input ? { attachments: input.attachments, submissionId: input.submissionId, onAccepted: () => { acceptedAttachments(); if (useWorkspaceStore.getState().drafts[selectedSessionId] === prompt) setDraft(selectedSessionId, '') } } : {}), historyAnchorId: history?.entries.filter((entry) => (entry.raw.message as { role?: string } | undefined)?.role === 'user').at(-1)?.id, historyTurnCount, prompt: prompt || '请查看附件。', sessionId: selectedSessionId }) && !input) setDraft(selectedSessionId, '')
+      if (sessionRuns.start({ ...(input ? { attachments: input.attachments, submissionId: input.submissionId, onAccepted: () => { acceptedAttachments(); if (useWorkspaceStore.getState().drafts[selectedSessionId] === prompt) setDraft(selectedSessionId, '') } } : {}), historyAnchorId: history?.entries.findLast(historyUserMessage)?.id, historyTurnCount, prompt: prompt || '请查看附件。', sessionId: selectedSessionId }) && !input) setDraft(selectedSessionId, '')
     }
     else if (status === 'running') {
       if (runningInputRequests.current.has(selectedSessionId)) return

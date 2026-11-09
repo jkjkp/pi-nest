@@ -1,10 +1,11 @@
+import { readTimelineEvent } from './timeline-event.js'
 import { describe, expect, it } from 'vitest'
 
 import { executionPhase, formatActivityDuration, formatElapsedTime, nextExecutionExpanded, projectTurnPresentation, turnCompletedAt, turnElapsed } from './turn-execution-model.js'
 import { timelineItems, type TimelineEvent, type TimelineItem, type TimelinePart } from './timeline-model.js'
 
 function event(type: string, second: number, fields: Record<string, unknown> = {}): TimelineEvent {
-  return { event: { type, ...fields }, id: `${type}-${second}`, observedAt: `2026-09-22T00:00:${String(second).padStart(2, '0')}.000Z`, raw: { type, ...fields } }
+  return readTimelineEvent({ type, ...fields }, `${type}-${second}`, `2026-09-22T00:00:${String(second).padStart(2, '0')}.000Z`)
 }
 
 function item(parts: TimelinePart[], events = parts.flatMap((part) => part.events)): TimelineItem {

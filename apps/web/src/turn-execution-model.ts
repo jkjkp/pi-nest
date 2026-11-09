@@ -1,4 +1,3 @@
-import { isPiMessage, piToolCallId } from '@pi-nest/contracts/pi-events'
 import type { PiFileChange } from '@pi-nest/contracts'
 import { projectToolResult, type ToolResult } from './tool-result-model.js'
 import { isRunActive, type PromptStatus } from './session-run-model.js'
@@ -21,29 +20,12 @@ export type TurnPresentation = {
 
 const presentationCache = new WeakMap<TimelineItem, { completed?: TurnPresentation; running?: TurnPresentation }>()
 
-function record(value: unknown) {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
-}
-
-function eventType(event: TimelineEvent) {
-  return typeof event.event.type === 'string' ? event.event.type : ''
-}
-
-function text(events: TimelineEvent[], ...keys: string[]) {
-  for (const event of [...events].reverse()) {
-    const values = [event.event, record(event.event.arguments), record(event.event.args), record(event.event.input), record(event.event.parameters)]
-    for (const value of values) for (const key of keys) if (typeof value?.[key] === 'string' && value[key]) return value[key] as string
-  }
-  return undefined
+function activityText(events: TimelineEvent[], key: keyof NonNullable<TimelineEvent['activityText']>) {
+  return events.findLast((event) => event.activityText?.[key])?.activityText?.[key]
 }
 
 function argument(part: Extract<TimelinePart, { kind: 'tool' }>, key: string) {
   return typeof part.arguments?.[key] === 'string' && part.arguments[key] ? part.arguments[key] : undefined
-}
-
-function number(events: TimelineEvent[], key: string) {
-  for (const event of [...events].reverse()) if (typeof event.event[key] === 'number') return event.event[key] as number
-  return undefined
 }
 
 function humanize(value: string) {
@@ -52,28 +34,14 @@ function humanize(value: string) {
 
 function toolLabel(part: Extract<TimelinePart, { kind: 'tool' }>) {
   const name = part.toolName.toLowerCase()
-  const path = argument(part, 'path') ?? argument(part, 'filePath') ?? argument(part, 'filename') ?? text(part.events, 'path', 'filePath', 'filename')
-  const query = argument(part, 'query') ?? argument(part, 'pattern') ?? text(part.events, 'query', 'pattern')
-  const command = argument(part, 'command') ?? text(part.events, 'command')
+  const path = argument(part, 'path') ?? argument(part, 'filePath') ?? argument(part, 'filename') ?? activityText(part.events, 'path')
+  const query = argument(part, 'query') ?? argument(part, 'pattern') ?? activityText(part.events, 'query')
+  const command = argument(part, 'command') ?? activityText(part.events, 'command')
   if (/(read|fetch|cat)/.test(name)) return path ? `读取 ${path}` : '读取文件'
   if (/(search|grep|find)/.test(name)) return query ? `搜索 ${query}` : '搜索内容'
   if (/(edit|write|patch|update)/.test(name)) return path ? `编辑 ${path}` : '编辑文件'
   if (/(bash|shell|exec|command)/.test(name)) return command ? `运行 ${command}` : '运行命令'
   return humanize(part.toolName)
-}
-
-function fileChanges(events: TimelineEvent[]) {
-  const changes: FileChange[] = []
-  for (const event of events) {
-    if (event.event.isError === true || event.event.error) continue
-    const candidates = Array.isArray(event.event.changes) ? event.event.changes : [event.event]
-    for (const candidate of candidates) {
-      const value = record(candidate)
-      const path = typeof value?.path === 'string' ? value.path : typeof value?.filePath === 'string' ? value.filePath : undefined
-      if (path && value && value.isError !== true && !value.error) changes.push({ added: typeof value.added === 'number' ? value.added : undefined, path, removed: typeof value.removed === 'number' ? value.removed : undefined })
-    }
-  }
-  return changes
 }
 
 function activity(part: TimelinePart, index: number, isRunning: boolean): TurnActivity {
@@ -85,11 +53,15 @@ function activity(part: TimelinePart, index: number, isRunning: boolean): TurnAc
     return { duration: duration(part.events), events: part.events, id, kind: 'tool', label: toolLabel(part), status: result.status, result }
   }
   if (part.kind === 'bash') {
-    const exitCode = number(part.events, 'exitCode')
-    return { command: text(part.events, 'command'), cwd: text(part.events, 'cwd'), duration: duration(part.events), events: part.events, exitCode, id, kind: 'bash', status: exitCode === undefined ? part.events.some((event) => eventType(event) === 'bash_execution_end') ? '已结束（退出码未记录）' : isRunning ? '正在执行' : '结果未记录' : exitCode === 0 ? '完成' : '失败', stderr: text(part.events, 'stderr'), stdout: text(part.events, 'stdout', 'output', 'delta') }
+    const bash = part.events.flatMap(({ reading }) => reading.kind === 'bash' ? [reading] : [])
+    const exitCode = bash.findLast((event) => event.exitCode !== undefined)?.exitCode
+    return { command: activityText(part.events, 'command'), cwd: activityText(part.events, 'cwd'), duration: duration(part.events), events: part.events, exitCode, id, kind: 'bash', status: exitCode === undefined ? bash.some((event) => event.ended) ? '已结束（退出码未记录）' : isRunning ? '正在执行' : '结果未记录' : exitCode === 0 ? '完成' : '失败', stderr: activityText(part.events, 'stderr'), stdout: activityText(part.events, 'stdout') }
   }
-  if (part.kind === 'retry') return { id, kind: 'retry', label: eventType(part.events.at(-1)!) === 'auto_retry_start' ? '连接异常，Pi 正在重试…' : '已结束重试' }
-  const changes = fileChanges(part.events)
+  if (part.kind === 'retry') {
+    const last = part.events.at(-1)?.reading
+    return { id, kind: 'retry', label: last?.kind === 'retry' && last.retrying ? '连接异常，Pi 正在重试…' : '已结束重试' }
+  }
+  const changes = part.events.flatMap(({ reading }) => reading.kind === 'file_change' ? reading.changes : [])
   return { changes, id, kind: 'file_change', label: changes.length ? `编辑 ${changes.length} 个文件` : '文件修改' }
 }
 
@@ -123,12 +95,7 @@ export function projectTurnPresentation(item: TimelineItem, isRunning: boolean):
 }
 
 export function turnCompletedAt(item: TimelineItem) {
-  const terminal = [...item.events].reverse().find((event) => {
-    if (['turn_end', 'agent_end', 'agent_settled', 'aborted'].includes(eventType(event))) return true
-    const message = event.event.message
-    return isPiMessage(message, 'assistant') && typeof message.stopReason === 'string'
-  })
-  return terminal?.observedAt
+  return item.events.findLast((event) => event.completesTurn)?.observedAt
 }
 
 export function turnElapsed(item: TimelineItem, isRunning: boolean, now = Date.now()) {
@@ -168,13 +135,9 @@ export function executionPhase(item: TimelineItem, presentation: TurnPresentatio
   const activeTool = [...presentation.activities].reverse().find((activity) => (activity.kind === 'tool' || activity.kind === 'bash') && activity.status === '正在执行')
   if (activeTool?.kind === 'tool') return activeTool.label
   if (activeTool?.kind === 'bash') return '运行命令'
-  const latest = [...item.events].reverse().find((event) => {
-    const update = record(event.event.assistantMessageEvent)
-    return typeof update?.type === 'string' && /^(thinking|text)_(start|delta|end)$/.test(update.type) || eventType(event) === 'tool_execution_end'
-  })
-  const type = record(latest?.event.assistantMessageEvent)?.type
-  if (typeof type === 'string' && type.startsWith('thinking_')) return type === 'thinking_end' ? '等待模型响应' : '思考中'
-  if (typeof type === 'string' && type.startsWith('text_')) return '正在回答'
+  const latest = item.events.findLast((event) => event.phase || event.endsTool)
+  if (latest?.phase === 'thinking') return '思考中'
+  if (latest?.phase === 'answering') return '正在回答'
   return '等待模型响应'
 }
 
@@ -225,16 +188,12 @@ export function projectTurnFiles(activities: TurnActivity[], cwd?: string, final
   }
   for (const activity of activities) {
     if (activity.kind === 'tool' && activity.result?.path && ['edit', 'write'].includes(activity.result.view)) {
-      const entry = file(activity.result.fileChange?.path ?? activity.result.path, typeof activity.result.args.cwd === 'string' ? activity.result.args.cwd : cwd)
+      const entry = file(activity.result.fileChange?.path ?? activity.result.path, activity.result.cwd ?? cwd)
       const stats = activity.result.fileChange
       if (stats && (!entry.statistics || stats.sequence >= entry.statistics.sequence)) entry.statistics = stats
       if (stats && 'changeType' in stats && stats.changeType !== 'unchanged') entry.reported = true
-      const callId = activity.events.flatMap((event) => {
-        const message = record(event.event.message)
-        const id = piToolCallId(event.event, message)
-        return id !== undefined ? [id] : []
-      })[0]
-      const duplicate = callId && entry.operations.some((operation) => operation.events.some((event) => event.event.toolCallId === callId || record(event.event.message)?.toolCallId === callId))
+      const callId = activity.events.find((event) => event.tool?.id !== undefined)?.tool?.id
+      const duplicate = callId && entry.operations.some((operation) => operation.events.some((event) => event.tool?.rootId === callId || event.tool?.messageId === callId))
       if (!duplicate) entry.operations.push(activity)
     } else if (activity.kind === 'file_change') {
       for (const change of activity.changes) file(change.path).reported = true
@@ -268,10 +227,9 @@ export type TurnFileSummaryState = 'complete' | 'aborted' | 'error'
 export function turnFileSummaryState(item: TimelineItem, isRunning: boolean, runStatus?: PromptStatus, hasFollowingTurn = false): TurnFileSummaryState | undefined {
   if (isRunning || runStatus && isRunActive(runStatus) || item.steering && item.steering.status !== 'applied') return undefined
   if (runStatus === 'aborted' || runStatus === 'error') return runStatus
-  const lastMessage = item.events.findLast((event) => record(event.event.message)?.role === 'assistant')
-  const stopReason = record(lastMessage?.event.message)?.stopReason
-  const terminal = item.events.findLast((event) => ['agent_settled', 'aborted'].includes(eventType(event)))
-  if (stopReason === 'aborted' || terminal?.event.type === 'aborted' || terminal?.event.aborted === true) return 'aborted'
+  const stopReason = item.events.findLast((event) => event.assistant)?.assistant?.stopReason
+  const terminal = item.events.findLast((event) => event.settlement)
+  if (stopReason === 'aborted' || terminal?.settlement === 'aborted') return 'aborted'
   if (stopReason === 'error') return 'error'
   if (runStatus === 'complete' || item.runtimeTiming?.completedAt || terminal || stopReason === 'stop' || stopReason === 'length' || hasFollowingTurn) return 'complete'
   return undefined
