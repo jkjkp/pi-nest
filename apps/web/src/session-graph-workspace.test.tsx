@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, useState } from 'react'
+import { act, useLayoutEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -7,6 +7,7 @@ import { SessionGraphWorkspace } from './session-graph-workspace.js'
 import type { GraphSelection } from './session-graph-preview.js'
 import { useWorkspaceStore } from './workspace-store.js'
 import { fetchSessionGraph, fetchSessionHistory, fetchSessionTurnIndex } from './workspace-api.js'
+import type { TimelineScrollController } from './timeline-pagination.js'
 const onRename = vi.fn(); const onClone = vi.fn(); const onDelete = vi.fn()
 const onSelect = vi.fn(); const onBranch = vi.fn(); const onCurrentNodeClick = vi.fn()
 const onRead = vi.fn((sessionId: string, runId: string) => useWorkspaceStore.getState().markSessionRead(sessionId, runId))
@@ -16,10 +17,23 @@ vi.mock('./workspace-api.js', () => ({
 }))
 vi.mock('./session-timeline.js', () => ({ SessionTimeline: (props: {
   onEditLast?: unknown; onRetrySteering?: unknown; sessionId: string; branchDisabled?: boolean; history?: { entries: unknown[] }
+  scrollViewport?: HTMLElement | null; registerTimelineScroll?: (controller: TimelineScrollController | null) => void
   onBranchAnswer?: (id: string, revision: string) => Promise<void>
-}) => <div data-preview-session={props.sessionId} data-mutable={Boolean(props.onEditLast || props.onRetrySteering)} data-entries={props.history?.entries.length}>
-  Read only<button disabled={props.branchDisabled} onClick={() => void props.onBranchAnswer?.('a', 'r').catch(() => {})}>从此轮后新建分支</button>
-</div> }))
+}) => {
+  const { scrollViewport, registerTimelineScroll, sessionId } = props
+  useLayoutEffect(() => {
+    if (!scrollViewport || !registerTimelineScroll) return
+    Object.defineProperties(scrollViewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 300 },
+    })
+    registerTimelineScroll({ sessionId, capture: () => undefined, restore: () => 'restored', isLayoutReady: () => true })
+    return () => registerTimelineScroll(null)
+  }, [scrollViewport, registerTimelineScroll, sessionId])
+  return <div data-preview-session={sessionId} data-mutable={Boolean(props.onEditLast || props.onRetrySteering)} data-entries={props.history?.entries.length}>
+    Read only<button disabled={props.branchDisabled} onClick={() => void props.onBranchAnswer?.('a', 'r').catch(() => {})}>从此轮后新建分支</button>
+  </div>
+} }))
 let root: Root; let container: HTMLDivElement; let client: QueryClient
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)

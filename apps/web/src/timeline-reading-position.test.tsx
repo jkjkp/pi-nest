@@ -5,15 +5,23 @@ import { expect, it, vi } from 'vitest'
 import { SessionTimeline } from './session-timeline.js'
 import { useTimelineViewport } from './use-timeline-viewport.js'
 
-const virtual = vi.hoisted(() => ({ hiddenIndex: -1, scrollToIndex: vi.fn() }))
+const virtual = vi.hoisted(() => ({ hiddenIndex: -1, measuredHeight: 240, scrollToIndex: vi.fn() }))
 vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: (options: { count: number; getItemKey: (index: number) => string }) => ({
-    getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, key: options.getItemKey(index), start: index * 240, size: 240 })).filter((item) => item.index !== virtual.hiddenIndex),
-    getVirtualItemForOffset: () => ({ index: 1 }),
-    getTotalSize: () => options.count * 240,
-    measureElement: () => {},
-    scrollToIndex: virtual.scrollToIndex,
-  }),
+  useVirtualizer: (options: { count: number; getItemKey: (index: number) => string }) => {
+    const elementsCache = new Map<string, HTMLElement>()
+    return {
+      getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, key: options.getItemKey(index), start: index * 240, size: virtual.measuredHeight })).filter((item) => item.index !== virtual.hiddenIndex),
+      getVirtualItemForOffset: () => ({ index: 1 }),
+      getTotalSize: () => options.count * 240,
+      elementsCache,
+      measureElement: (element: HTMLElement | null) => {
+        if (!element) return
+        Object.defineProperty(element, 'offsetHeight', { configurable: true, value: 240 })
+        elementsCache.set(options.getItemKey(Number(element.dataset.index)), element)
+      },
+      scrollToIndex: virtual.scrollToIndex,
+    }
+  },
 }))
 
 it('remembers independent reading anchors, restores after measurement, and yields to user input', async () => {
@@ -63,7 +71,7 @@ it('remembers independent reading anchors, restores after measurement, and yield
       }
       setMessageScrollArea(node)
     }, [setMessageScrollArea])
-    return <div ref={setArea}><div data-slot="scroll-area-viewport"><SessionTimeline key={sessionId} history={history} error={false} isLoading={!loaded} onRetry={() => {}} overlayRoot={null} scrollViewport={viewport.scrollViewport} registerTimelineScroll={viewport.registerTimelineScroll} /></div></div>
+    return <div ref={setArea}><div data-slot="scroll-area-viewport"><SessionTimeline key={sessionId} history={history} error={false} isLoading={!loaded} isPositioning={viewport.isPositioning} onRetry={() => {}} overlayRoot={null} scrollViewport={viewport.scrollViewport} registerTimelineScroll={viewport.registerTimelineScroll} /></div></div>
   }
   const flush = async () => {
     await act(() => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach((callback) => callback(0)) })
@@ -75,9 +83,17 @@ it('remembers independent reading anchors, restores after measurement, and yield
     await act(() => root.render(<View sessionId={id} loaded={loaded} />))
   }
   try {
+    virtual.measuredHeight = 200
     await render('A')
+    expect(hook!.isPositioning).toBe(true)
+    await flush()
     await flush()
     expect(top).toBe(2500)
+    expect(hook!.isPositioning).toBe(true)
+    virtual.measuredHeight = 240
+    await flush()
+    await flush()
+    expect(hook!.isPositioning).toBe(false)
     const element = container.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')!
     const read = async (position: number) => {
       await act(() => element.dispatchEvent(new Event('wheel')))
@@ -97,10 +113,14 @@ it('remembers independent reading anchors, restores after measurement, and yield
     await render('A')
     await flush()
     expect(virtual.scrollToIndex).toHaveBeenCalledWith(2, { align: 'start', behavior: 'auto' })
+    expect(hook!.isPositioning).toBe(true)
     virtual.hiddenIndex = -1
+    virtual.measuredHeight = 240
     await render('A')
     await flush()
+    await flush()
     expect(top).toBe(580)
+    expect(hook!.isPositioning).toBe(false)
     expect(hook!.followLatest).toBe(false)
     expect(hook!.showScrollToBottom).toBe(true)
 

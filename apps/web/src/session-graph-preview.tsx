@@ -18,9 +18,9 @@ export function SessionGraphPreview({ selection, cwd, branchDisabled, onBranch, 
   const run = useWorkspaceStore((state) => state.runs[selection.sessionId])
   const pendingRunId = useWorkspaceStore((state) => state.sessionNotifications[selection.sessionId]?.pendingRunId)
   const isRunning = isRunActive(run?.status ?? (pendingRunId ? 'running' : 'idle'))
-  useSessionRead(selection.sessionId, visible && !isRunning && view.history?.session.id === selection.sessionId && view.historyQuery.isSuccess && !view.historyQuery.isFetching && !view.historyError, onRead)
-  const { setMessageScrollArea, setFollowingLatest, scrollViewport, beginTurnNavigation, scrollToFinalAnswer, followFinalAnswer, registerTimelineScroll } = useTimelineViewport({ selectedSessionId: selection.sessionId, history: view.history,
+  const { setMessageScrollArea, setFollowingLatest, scrollViewport, beginTurnNavigation, scrollToFinalAnswer, followFinalAnswer, registerTimelineScroll, isPositioning } = useTimelineViewport({ selectedSessionId: selection.sessionId, history: view.history,
     activeTurn: activeRuntimeTurn(run?.turns ?? []), isActive: isRunning, pendingJump: view.pendingJump, onCancelTurnJump: view.cancelTurnJump })
+  useSessionRead(selection.sessionId, visible && (!isPositioning || !view.history?.entries.length) && !isRunning && view.history?.session.id === selection.sessionId && view.historyQuery.isSuccess && !view.historyQuery.isFetching && !view.historyError, onRead)
   useLayoutEffect(() => {
     setFollowingLatest(true)
     scrollViewport?.scrollTo({ top: scrollViewport.scrollHeight, behavior: 'instant' })
@@ -36,7 +36,7 @@ export function SessionGraphPreview({ selection, cwd, branchDisabled, onBranch, 
       branchDisabled={branchDisabled || isRunning} editDisabled branchAnswerLabel="从此轮后新建分支"
       onBranchAnswer={(entryId, revision) => onBranch({ kind: 'fork', mode: 'continue', entryId, revision })}
       onFinalAnswerStart={scrollToFinalAnswer} onFinalAnswerStream={followFinalAnswer}
-      registerTimelineScroll={registerTimelineScroll} onRetry={view.retryHistory} scrollViewport={scrollViewport} />
+      registerTimelineScroll={registerTimelineScroll} isPositioning={isPositioning} onRetry={view.retryHistory} scrollViewport={scrollViewport} />
     </div></ScrollArea>
   </div>
 }
