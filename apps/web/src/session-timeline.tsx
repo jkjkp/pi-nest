@@ -23,12 +23,13 @@ import { promptOverflows } from './user-prompt-state.js'
 import { formatUpdatedAt } from './workspace.js'
 import type { PendingInput, PromptStatus } from './session-run-model.js'
 
-export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onRetrySteering, onRequestTurnJump, onReadTurnPrompt, onLoadEarlier, onTurnJumpFinished, onRetry, onRetryNavigation, onBranchAnswer, branchAnswerLabel, onEditLast, messageEdit, editDisabled = false, branchDisabled = false, navigationNotice, overlayRoot, pendingInputs = [], pendingJump, jumpError, runMessage, runStatus, sessionId, sessionCwd, scrollViewport, registerTimelineScroll, systemEvents = [], turnIndex, turns = [] }: {
+export function SessionTimeline({ error, hasEarlier = false, history, isLoading, isLoadingEarlier = false, isPositioning = false, isRunning = false, onFinalAnswerStart, onFinalAnswerStream, onRetrySteering, onRequestTurnJump, onReadTurnPrompt, onLoadEarlier, onTurnJumpFinished, onRetry, onRetryNavigation, onBranchAnswer, branchAnswerLabel, onEditLast, messageEdit, editDisabled = false, branchDisabled = false, navigationNotice, overlayRoot, pendingInputs = [], pendingJump, jumpError, runMessage, runStatus, sessionId, sessionCwd, scrollViewport, registerTimelineScroll, systemEvents = [], turnIndex, turns = [] }: {
   error: boolean
   hasEarlier?: boolean
   history: PiSessionHistoryResponse | undefined
   isLoading: boolean
   isLoadingEarlier?: boolean
+  isPositioning?: boolean
   isRunning?: boolean
   onFinalAnswerStart?: (turnId: string) => void
   onRetrySteering?: (turnId: string) => void
@@ -80,7 +81,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
     return [...new Set([...indexes, ...Array.from({ length: end - start + 1 }, (_, offset) => start + offset)])].sort((a, b) => a - b)
   }, [jumpIndex])
   // oxlint-disable-next-line react/incompatible-library -- The virtualizer owns DOM measurement state outside React.
-  const virtualizer = useVirtualizer({
+  const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
     count: items.length,
     estimateSize: () => 240,
     getItemKey: (index) => items[index]!.displayId ?? items[index]!.id,
@@ -101,10 +102,21 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
   const virtualItems = virtualizer.getVirtualItems()
   const activeVirtualItem = virtualizer.getVirtualItemForOffset((virtualizer.scrollOffset ?? 0) + timelineReadingOffset)
   const activeTurnId = items[activeVirtualItem?.index ?? 0]?.id
+  const timelineSessionId = sessionId ?? history?.session.id
+  const hasHistory = history?.session.id === timelineSessionId
   useLayoutEffect(() => {
-    if (!registerTimelineScroll || !scrollViewport || !history) return
+    if (!registerTimelineScroll || !scrollViewport || !timelineSessionId) return
     registerTimelineScroll({
-      sessionId: history.session.id,
+      sessionId: timelineSessionId,
+      isLayoutReady: (atBottom) => {
+        const tail = items.at(-1)
+        if (atBottom && tail && !virtualizer.elementsCache.get(tail.displayId ?? tail.id)?.isConnected) return false
+        const rendered = virtualizer.getVirtualItems()
+        return (!items.length || rendered.length > 0) && rendered.every((item) => {
+          const element = virtualizer.elementsCache.get(item.key)
+          return element?.isConnected && Math.abs(element.offsetHeight - item.size) <= 1
+        })
+      },
       cancelJump: () => stopJump.current?.(),
       capture: () => {
         const top = scrollViewport.getBoundingClientRect().top
@@ -118,7 +130,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
           return 'restored'
         }
         const index = items.findIndex((item) => item.id === position.turnId)
-        if (index < 0) return 'missing'
+        if (index < 0) return hasHistory || error ? 'missing' : 'pending'
         const turn = [...scrollViewport.querySelectorAll<HTMLElement>('[data-turn-id]')].find((node) => node.dataset.turnId === position.turnId)
         if (!turn) {
           virtualizer.scrollToIndex(index, { align: 'start', behavior: 'auto' })
@@ -130,7 +142,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
       },
     })
     return () => registerTimelineScroll(null)
-  }, [history, items, registerTimelineScroll, scrollViewport, virtualizer])
+  }, [timelineSessionId, hasHistory, error, items, registerTimelineScroll, scrollViewport, virtualizer])
   useEffect(() => {
     setCanLoadEarlier(false)
     historyLoadRequested.current = false
@@ -224,7 +236,7 @@ export function SessionTimeline({ error, hasEarlier = false, history, isLoading,
 
 
   const jump = (turnId: string) => onRequestTurnJump?.(turnId, historyPageCursorForTurn(railEntries, turnId), items.some((item) => item.id === turnId))
-  return <section className="conversation-stage pb-6">{navigationNotice && <div className="conversation-stage-content mb-2 flex items-center justify-end gap-2 text-xs text-muted-foreground" role="status"><span>{navigationNotice}</span><Button onClick={onRetryNavigation} size="sm" variant="ghost" type="button">重试</Button></div>}{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail navigationError={jumpError} key={history?.session.id} onReadPrompt={readPrompt} activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} />}<div className="conversation-stage-content space-y-5"><div className="relative w-full" ref={virtualizer.containerRef}><div className="absolute left-0 top-0 w-full"><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>{virtualItems.map((virtualItem) => {
+  return <section className="conversation-stage pb-6">{navigationNotice && <div className="conversation-stage-content mb-2 flex items-center justify-end gap-2 text-xs text-muted-foreground" role="status"><span>{navigationNotice}</span><Button onClick={onRetryNavigation} size="sm" variant="ghost" type="button">重试</Button></div>}{error && <HistoryError onRetry={onRetry} />}{overlayRoot !== null && <TurnNavigationRail navigationError={jumpError} key={history?.session.id} onReadPrompt={readPrompt} activeTurnId={activeTurnId} entries={railEntries} onJump={jump} overlayRoot={overlayRoot} />}<div className="conversation-stage-content space-y-5"><div className={isPositioning ? "invisible relative w-full" : "relative w-full"} ref={virtualizer.containerRef}><div className="absolute left-0 top-0 w-full"><HistoryLoadSentinel canLoad={canLoadEarlier} hasEarlier={hasEarlier} isLoading={isLoadingEarlier} key={history?.session.id} onLoad={loadEarlier} requested={historyLoadRequested} scrollViewport={scrollViewport ?? null} /></div>{virtualItems.map((virtualItem) => {
     const item = items[virtualItem.index]!
     return <div className="absolute left-0 top-0 w-full pb-5" data-index={virtualItem.index} key={virtualItem.key} ref={virtualizer.measureElement}><RenderErrorBoundary scope="turn" sessionId={history?.session.id} turnId={item.id}><TurnItem messageEditor={messageEdit?.entryId === item.id ? messageEdit.editor : undefined} onEdit={onEditLast && item.id === lastUserId ? () => onEditLast(item.id) : undefined} editDisabled={editDisabled} onBranchAnswer={onBranchAnswer} branchAnswerLabel={branchAnswerLabel} branchDisabled={branchDisabled || isRunning} revision={history?.revision} sessionId={sessionId ?? history?.session.id} cwd={sessionCwd ?? history?.session.cwd} hasFollowingTurn={item !== activeExecutionItem} onRetrySteering={onRetrySteering} canRetrySteering={isRunning} isRunning={isRunning && item === activeExecutionItem} item={item} onFinalAnswerStart={onFinalAnswerStart} onFinalAnswerStream={onFinalAnswerStream} runMessage={item === activeExecutionItem ? runMessage : undefined} runStatus={item === activeExecutionItem ? runStatus : undefined} /></RenderErrorBoundary></div>
   })}</div>{messageEdit && !items.some((item) => item.id === messageEdit.entryId) && messageEdit.editor}{pendingImplementation.map((input) => <PendingUserInput input={input} key={input.id} />)}</div></section>

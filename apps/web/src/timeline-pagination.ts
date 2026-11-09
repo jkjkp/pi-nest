@@ -6,5 +6,6 @@ export type TimelineScrollController = {
   sessionId: string
   capture: () => Omit<TimelineReadingPosition, 'atBottom'> | undefined
   restore: (position: TimelineReadingPosition) => 'pending' | 'restored' | 'missing'
+  isLayoutReady?: (atBottom: boolean) => boolean
   cancelJump?: () => void
 }

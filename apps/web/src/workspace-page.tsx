@@ -1,4 +1,5 @@
 import { SessionGraphWorkspace } from './session-graph-workspace.js'
+import { flushSync } from 'react-dom'
 import type { GraphSelection } from './session-graph-preview.js'
 import { useWorkspaceFilePreview } from './use-workspace-file-preview.js'
 import { WorkspaceLayout } from './workspace-layout.js'
@@ -80,7 +81,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
   const {
     setComposer, showScrollToBottom, scrollToBottom, setFollowingLatest, railOverlay, scrollViewport, setMessageScrollArea, setRailOverlayRoot,
     scrollToFinalAnswer, followFinalAnswer, beginTurnNavigation, rememberLayoutPosition, restoreLayoutPosition,
-    rememberReadingPosition, registerTimelineScroll,
+    rememberReadingPosition, registerTimelineScroll, isPositioning, beginSessionSwitch,
   } = useTimelineViewport({ selectedSessionId, history, activeTurn, latestSteeringId: currentRun?.turns.findLast((turn) => turn.steering)?.id, isActive, pendingJump, onCancelTurnJump: cancelTurnJump })
   const navigateToTurn = useCallback((turnId: string, cursor?: string, loaded = false) => {
     beginTurnNavigation()
@@ -117,6 +118,8 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
 
   function selectSession(sessionId: string) {
     if (!graphSelection) rememberReadingPosition()
+    // Hide the previous timeline before the router starts changing sessions.
+    if (sessionId !== selectedSessionId || isPositioning) flushSync(() => beginSessionSwitch(sessionId))
     setGraphSelection(undefined)
     session.selectSession(sessionId)
   }
@@ -194,7 +197,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
           {!branchStorage.available && <p role="status" className="px-3 text-xs text-destructive">分支关系存储不可用，新建分支已禁用；普通对话可继续。</p>}
           {pendingBranch && mutatingSessionId !== selectedSessionId && <div className="flex items-center gap-2 px-3 text-xs" role="status">分支创建结果待确认。<Button size="sm" variant="ghost" onClick={() => { void session.checkBranch().then((result) => { if (result && currentSessionRef.current === selectedSessionId) { selectSession(result.session.id); if (result.draftRecoveryRequired) setAttachmentError('分支已创建，但来源消息不可读取，请自行恢复未发送草稿。') } }).catch((cause) => setAttachmentError(cause instanceof Error ? cause.message : '查询失败')) }}>查询分支结果</Button></div>}
           <SessionGraphWorkspace onRename={handleRename} onDelete={handleDelete} onClone={cloneSession} mutationSessionId={mutatingSessionId} enabled={workspaceView === 'tree' && Boolean(selectedSessionId)} sessionId={selectedSessionId}
-            onRead={sessionRuns.markSessionRead} readBlocked={preview.open && !preview.wide} currentReadReady={watchReady && !isActive && history?.session.id === selectedSessionId && historyQuery.isSuccess && !historyQuery.isFetching && !historyError}
+            onRead={sessionRuns.markSessionRead} readBlocked={preview.open && !preview.wide} currentReadReady={watchReady && !isPositioning && !isActive && history?.session.id === selectedSessionId && historyQuery.isSuccess && !historyQuery.isFetching && !historyError}
             selection={graphSelection} onPreview={showGraphPreview} onCurrentNodeClick={showCurrentGraphSession} onSelect={selectSession}
             onBranch={async (sourceId, request) => { const original = selectedSessionId; const previewIntent = graphIntentRef.current; const result = await session.createBranch(request, sourceId); if (useWorkspaceStore.getState().branchOperations[sourceId]) return; if (currentSessionRef.current === original && graphIntentRef.current === previewIntent) selectSession(result.session.id) }}>
           <div className="relative min-h-0 flex-1" ref={setMessageScrollArea}>
@@ -243,6 +246,7 @@ export function WorkspacePage({ sessionRuns }: { sessionRuns: SessionRunControll
                   pendingJump={pendingJump?.sessionId === selectedSessionId ? pendingJump : undefined}
                   jumpError={jumpError}
                   scrollViewport={scrollViewport}
+                  isPositioning={isPositioning}
                   registerTimelineScroll={registerTimelineScroll}
                   systemEvents={currentRun?.systemEvents}
                   runStatus={status}
